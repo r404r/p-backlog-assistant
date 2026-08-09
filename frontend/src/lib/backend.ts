@@ -254,20 +254,38 @@ function findWailsApp(): WailsApp | null {
 }
 
 function createWailsBackend(app: WailsApp): Backend {
+  // Go の nil スライス / nil マップは JSON null として届くため、配列・オブジェクトは
+  // ここで必ず正規化する(初回起動時の ListProfiles null で画面が真っ白になった実績あり)
   return {
-    listProfiles: () => app.ListProfiles(),
+    listProfiles: async () => (await app.ListProfiles()) ?? [],
     saveProfile: (input) => app.SaveProfile(input),
     deleteProfile: (id, deleteLocalData) => app.DeleteProfile(id, deleteLocalData),
     testConnection: (profileId, spaceUrl, apiKey) => app.TestConnection(profileId, spaceUrl, apiKey),
     getPermissionStatus: (profileId) => app.GetPermissionStatus(profileId),
-    getActiveProfile: () => app.GetActiveProfile(),
+    getActiveProfile: async () => (await app.GetActiveProfile()) ?? '',
     setActiveProfile: (id) => app.SetActiveProfile(id),
-    listProjects: (profileId) => app.ListProjects(profileId),
+    listProjects: async (profileId) => (await app.ListProjects(profileId)) ?? [],
     syncProjects: (profileId) => app.SyncProjects(profileId),
-    syncIssues: (profileId, projectId, mode) => app.SyncIssues(profileId, projectId, mode),
-    searchIssues: (profileId, query) => app.SearchIssues(profileId, query),
-    listFilterOptions: (profileId, projectId) => app.ListFilterOptions(profileId, projectId),
-    getSyncState: (profileId) => app.GetSyncState(profileId),
+    syncIssues: async (profileId, projectId, mode) => {
+      const r = await app.SyncIssues(profileId, projectId, mode)
+      return {
+        mode: r?.mode ?? mode,
+        fetched: r?.fetched ?? 0,
+        upserted: r?.upserted ?? 0,
+        deleted: r?.deleted ?? 0,
+        warnings: r?.warnings ?? [],
+        durationMs: r?.durationMs ?? 0,
+      }
+    },
+    searchIssues: async (profileId, query) => {
+      const r = await app.SearchIssues(profileId, query)
+      return { rows: r?.rows ?? [], total: r?.total ?? 0 }
+    },
+    listFilterOptions: async (profileId, projectId) => {
+      const r = await app.ListFilterOptions(profileId, projectId)
+      return { statuses: r?.statuses ?? [], assignees: r?.assignees ?? [] }
+    },
+    getSyncState: async (profileId) => (await app.GetSyncState(profileId)) ?? [],
     exportIssuesExcel: (profileId, query, columns) =>
       app.ExportIssuesExcel(profileId, query, columns),
   }

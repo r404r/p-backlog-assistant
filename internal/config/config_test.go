@@ -158,3 +158,20 @@ func TestManager_FileDoesNotContainAPIKeyField(t *testing.T) {
 		t.Error("config.json に apiKey らしきフィールドが含まれている")
 	}
 }
+
+// 初回起動(設定ファイル無し)でも List は nil でなく空スライスを返すこと。
+// nil のまま Wails バインディングを通ると JSON null になり、フロントエンドが
+// 配列前提でクラッシュして画面が真っ白になる(実 Windows Artifact で発生)。
+func TestListEmptyReturnsNonNil(t *testing.T) {
+	m := NewManagerAt(t.TempDir())
+	got, err := m.List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got == nil {
+		t.Fatal("List() = nil, want 空スライス(JSON null 化を防ぐ)")
+	}
+	if len(got) != 0 {
+		t.Fatalf("len = %d, want 0", len(got))
+	}
+}

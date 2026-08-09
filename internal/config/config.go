@@ -153,6 +153,11 @@ func (m *Manager) List() ([]Profile, error) {
 	if err != nil {
 		return nil, err
 	}
+	if cfg.Profiles == nil {
+		// nil のまま返すと Wails バインディング経由で JSON null になり、
+		// フロントエンドが配列前提でクラッシュする(初回起動の白画面バグ)
+		return []Profile{}, nil
+	}
 	return cfg.Profiles, nil
 }
 

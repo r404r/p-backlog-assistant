@@ -1,5 +1,5 @@
 <script lang="ts" setup>
-import { ref, type Component } from 'vue'
+import { onErrorCaptured, ref, type Component } from 'vue'
 import SettingsView from './views/SettingsView.vue'
 import IssuesView from './views/IssuesView.vue'
 import BulkUpdateView from './views/BulkUpdateView.vue'
@@ -26,6 +26,14 @@ const screens: Screen[] = [
 // ウィザード表示になる。他画面が未実装のため、プロファイル有無に関わらず
 // 接続設定を初期表示とする(マイルストーン 2 で見直す)。
 const current = ref<ScreenId>('settings')
+
+// 子コンポーネントの描画・ライフサイクル中の例外で画面全体が真っ白になるのを防ぐ
+// 最後の防衛線(初回起動時の JSON null クラッシュが白画面として現れた実績あり)。
+const fatalError = ref('')
+onErrorCaptured((err) => {
+  fatalError.value = err instanceof Error ? `${err.name}: ${err.message}` : String(err)
+  return false // これ以上伝播させない
+})
 </script>
 
 <template>
@@ -34,14 +42,23 @@ const current = ref<ScreenId>('settings')
       <div class="app-title">Backlog Assistant</div>
       <ul>
         <li v-for="s in screens" :key="s.id">
-          <button :class="{ active: current === s.id }" @click="current = s.id">
+          <button
+            :class="{ active: current === s.id }"
+            @click="((current = s.id), (fatalError = ''))"
+          >
             {{ s.label }}
           </button>
         </li>
       </ul>
     </nav>
     <main class="content">
-      <component :is="screens.find((s) => s.id === current)!.component" />
+      <div v-if="fatalError" class="fatal-error">
+        <h2>画面の表示中にエラーが発生しました</h2>
+        <p class="detail">{{ fatalError }}</p>
+        <p>他の画面に切り替えるか、アプリを再起動してください。解決しない場合はこのメッセージを開発者に連絡してください。</p>
+        <button @click="fatalError = ''">閉じる</button>
+      </div>
+      <component :is="screens.find((s) => s.id === current)!.component" v-else />
     </main>
   </div>
 </template>
@@ -103,5 +120,29 @@ const current = ref<ScreenId>('settings')
   padding: 1.5rem 2rem;
   box-sizing: border-box;
   background: #fff;
+}
+</style>
+
+<style scoped>
+.fatal-error {
+  margin: 24px;
+  padding: 16px 20px;
+  border: 1px solid #d1242f;
+  border-radius: 6px;
+  background: #fff5f5;
+  color: #24292f;
+}
+.fatal-error h2 {
+  margin-top: 0;
+  color: #d1242f;
+  font-size: 16px;
+}
+.fatal-error .detail {
+  font-family: monospace;
+  white-space: pre-wrap;
+  background: #fff;
+  border: 1px solid #d0d7de;
+  border-radius: 4px;
+  padding: 8px;
 }
 </style>
