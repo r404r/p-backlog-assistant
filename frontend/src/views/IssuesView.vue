@@ -75,8 +75,16 @@ const selectedProject = computed(
   () => projects.value.find((p) => p.id === selectedProjectId.value) ?? null,
 )
 
-/** 選択中プロジェクトが一度も同期されていないか */
-const neverSynced = computed(() => !!selectedProject.value && !selectedProject.value.lastSyncedAt)
+/** 選択中プロジェクトの同期状態(鮮度)を取得できなかったか(中 1) */
+const syncStateUnknown = computed(() => !!selectedProject.value?.syncStateUnknown)
+
+/**
+ * 選択中プロジェクトが一度も同期されていないか。
+ * 鮮度を取得できなかった場合は「未同期」と断定できないため false にする(中 1)。
+ */
+const neverSynced = computed(
+  () => !!selectedProject.value && !syncStateUnknown.value && !selectedProject.value.lastSyncedAt,
+)
 
 async function loadProjects() {
   if (!profileId.value) return
@@ -347,24 +355,35 @@ async function exportExcel() {
               {{ p.name }}({{ p.projectKey }})
             </option>
           </select>
-          <button :disabled="projectsSyncing || projectsLoading" @click="syncProjects">
-            {{ projectsSyncing ? 'プロジェクト同期中...' : 'プロジェクト同期' }}
+          <button
+            :disabled="projectsSyncing || projectsLoading"
+            title="プロジェクト一覧を最新化(課題は同期しません)"
+            @click="syncProjects"
+          >
+            {{ projectsSyncing ? 'プロジェクト同期中...' : 'プロジェクト一覧を同期' }}
           </button>
           <span v-if="projectsSyncing" class="spinner" aria-hidden="true"></span>
         </div>
+
+        <p class="hint">
+          「プロジェクト一覧を同期」はプロジェクト一覧を最新化(課題は同期しません)。
+          課題を取り込むには下の「同期」を実行してください。
+        </p>
 
         <p v-if="projectsWarning" class="notice warn">{{ projectsWarning }}</p>
 
         <p v-if="selectedProject" class="freshness">
           データ鮮度:
-          <template v-if="selectedProject.lastSyncedAt">
+          <template v-if="syncStateUnknown">鮮度を取得できませんでした(ログを確認してください)</template>
+          <template v-else-if="selectedProject.lastSyncedAt">
             最終同期 {{ formatDateTime(selectedProject.lastSyncedAt) }}
             ({{ formatElapsed(selectedProject.lastSyncedAt) }})
           </template>
           <template v-else>未同期</template>
         </p>
         <p v-if="neverSynced" class="notice warn">
-          このプロジェクトの課題はまだ同期されていません。検索の前に下の「同期」を実行してください。
+          このプロジェクトの課題はまだ同期されていません。下の「同期」ボタン(課題の同期)を実行してください
+          (「プロジェクト一覧を同期」はプロジェクト一覧の更新のみです)。
         </p>
       </section>
 

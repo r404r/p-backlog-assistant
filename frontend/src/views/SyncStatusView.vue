@@ -4,6 +4,7 @@ import { computed, onMounted, ref } from 'vue'
 import {
   getBackend,
   isMockBackend,
+  type LogInfo,
   type Project,
   type SyncMode,
   type SyncResult,
@@ -72,6 +73,9 @@ function projectLabel(projectId: number): string {
 }
 
 async function reload() {
+  // 動作ログのファイルは日付で切り替わる(ローテーション)ため、
+  // マウント時に取得した出力先を表示し続けないよう再読込のたびに取り直す(低 2)。
+  await loadLogInfo()
   if (!profileId.value) return
   loading.value = true
   globalError.value = ''
@@ -115,6 +119,21 @@ async function refreshProjects() {
   await reload()
 }
 
+// ---------------------------------------------------------------------------
+// 動作ログ
+// ---------------------------------------------------------------------------
+
+const logInfo = ref<LogInfo>({ path: '', enabled: false })
+
+async function loadLogInfo() {
+  try {
+    logInfo.value = await backend.getLogInfo()
+  } catch {
+    // 動作ログの案内表示は補助情報のため、失敗しても画面全体のエラーにはしない
+    logInfo.value = { path: '', enabled: false }
+  }
+}
+
 onMounted(async () => {
   try {
     profileId.value = await backend.getActiveProfile()
@@ -123,6 +142,7 @@ onMounted(async () => {
   } finally {
     initializing.value = false
   }
+  await loadLogInfo()
   if (profileId.value) await refreshProjects()
 })
 
@@ -274,6 +294,7 @@ async function runProjectSync() {
         <p class="hint">
           自動は同期状態から判定します(未同期・長期間未同期ならフル同期)。
           差分同期は前回同期以降の更新のみを取得します。不整合が疑われる場合はフル同期を選んでください。
+          「プロジェクト一覧を同期」はプロジェクト一覧を最新化するだけで、課題は同期しません。
         </p>
 
         <p v-if="syncError" class="error">{{ syncError }}</p>
@@ -299,6 +320,14 @@ async function runProjectSync() {
 
       <p class="hint">レート制限の残量表示は未実装です(今後のマイルストーンで対応予定)。</p>
     </template>
+
+    <!-- 動作ログの出力先(プロファイル未選択でも表示する) -->
+    <p class="log-info">
+      <template v-if="logInfo.enabled">
+        動作ログ: <span class="log-path">{{ logInfo.path }}</span>
+      </template>
+      <template v-else>ログ出力は無効です</template>
+    </p>
   </div>
 </template>
 
@@ -490,5 +519,16 @@ button.primary:hover:not(:disabled) {
 .warnings {
   margin-top: 0.5rem;
   color: #9a6700;
+}
+
+.log-info {
+  margin-top: 1.5rem;
+  font-size: 0.8rem;
+  color: #57606a;
+}
+
+.log-path {
+  font-family: monospace;
+  word-break: break-all;
 }
 </style>

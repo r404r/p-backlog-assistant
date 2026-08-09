@@ -74,6 +74,12 @@ export interface Project {
   name: string
   /** このプロジェクトの課題の最終同期時刻(RFC3339。未同期なら空文字) */
   lastSyncedAt: string
+  /**
+   * 同期状態(鮮度)の取得に失敗したかどうか。
+   * true のとき lastSyncedAt は「未同期」ではなく「不明」を意味するため、
+   * UI は未同期の警告を出さず、取得できなかった旨を表示する。
+   */
+  syncStateUnknown: boolean
 }
 
 /**
@@ -166,6 +172,14 @@ export interface ExportResult {
   rows: number
 }
 
+/** 動作ログの状態(Go 側 main.LogInfo と対) */
+export interface LogInfo {
+  /** ログファイルのパス(無効な場合は空文字) */
+  path: string
+  /** ログ出力が有効かどうか */
+  enabled: boolean
+}
+
 // ---------------------------------------------------------------------------
 // バックエンドインターフェース
 // ---------------------------------------------------------------------------
@@ -218,6 +232,11 @@ export interface Backend {
    * @param columns 出力する列キー(IssueRow のキー)を表示順で指定する
    */
   exportIssuesExcel(profileId: string, query: IssueQuery, columns: string[]): Promise<ExportResult>
+
+  // --- 動作ログ -------------------------------------------------------------
+
+  /** 動作ログの出力先パスと有効・無効を返す */
+  getLogInfo(): Promise<LogInfo>
 }
 
 // ---------------------------------------------------------------------------
@@ -240,6 +259,7 @@ interface WailsApp {
   ListFilterOptions(profileId: string, projectId: number): Promise<FilterOptions>
   GetSyncState(profileId: string): Promise<SyncStateRow[]>
   ExportIssuesExcel(profileId: string, query: IssueQuery, columns: string[]): Promise<ExportResult>
+  GetLogInfo(): Promise<LogInfo>
 }
 
 function findWailsApp(): WailsApp | null {
@@ -264,7 +284,12 @@ function createWailsBackend(app: WailsApp): Backend {
     getPermissionStatus: (profileId) => app.GetPermissionStatus(profileId),
     getActiveProfile: async () => (await app.GetActiveProfile()) ?? '',
     setActiveProfile: (id) => app.SetActiveProfile(id),
-    listProjects: async (profileId) => (await app.ListProjects(profileId)) ?? [],
+    listProjects: async (profileId) =>
+      ((await app.ListProjects(profileId)) ?? []).map((p) => ({
+        ...p,
+        // 旧バージョンのバインディング(フィールド未実装)では「不明ではない」扱いにする
+        syncStateUnknown: p.syncStateUnknown ?? false,
+      })),
     syncProjects: (profileId) => app.SyncProjects(profileId),
     syncIssues: async (profileId, projectId, mode) => {
       const r = await app.SyncIssues(profileId, projectId, mode)
@@ -288,6 +313,12 @@ function createWailsBackend(app: WailsApp): Backend {
     getSyncState: async (profileId) => (await app.GetSyncState(profileId)) ?? [],
     exportIssuesExcel: (profileId, query, columns) =>
       app.ExportIssuesExcel(profileId, query, columns),
+    getLogInfo: async () => {
+      // 旧バージョンのバインディング(GetLogInfo 未実装)でも画面を壊さない
+      if (typeof app.GetLogInfo !== 'function') return { path: '', enabled: false }
+      const r = await app.GetLogInfo()
+      return { path: r?.path ?? '', enabled: r?.enabled ?? false }
+    },
   }
 }
 
@@ -310,9 +341,9 @@ const MOCK_PRIORITIES = ['高', '中', '低']
 const MOCK_SUMMARY_WORDS = ['ログイン', '一覧表示', 'CSV 取り込み', '通知メール', '権限チェック']
 
 const MOCK_PROJECTS: Project[] = [
-  { id: 101, projectKey: 'SAMPLE', name: 'サンプル開発プロジェクト', lastSyncedAt: '' },
-  { id: 102, projectKey: 'DEMO', name: 'デモ運用プロジェクト', lastSyncedAt: '' },
-  { id: 103, projectKey: 'TRIAL', name: '検証用プロジェクト', lastSyncedAt: '' },
+  { id: 101, projectKey: 'SAMPLE', name: 'サンプル開発プロジェクト', lastSyncedAt: '', syncStateUnknown: false },
+  { id: 102, projectKey: 'DEMO', name: 'デモ運用プロジェクト', lastSyncedAt: '', syncStateUnknown: false },
+  { id: 103, projectKey: 'TRIAL', name: '検証用プロジェクト', lastSyncedAt: '', syncStateUnknown: false },
 ]
 
 /** 日付を YYYY-MM-DD 形式で返す */
@@ -551,6 +582,12 @@ function createMockBackend(): Backend {
       const matched = filterMockIssues(all, query)
       // モックでは保存ダイアログを出せないため、ダミーのパスを返す
       return { path: '(モック)保存ダイアログは Wails 実行時のみ表示されます', rows: matched.length }
+    },
+
+    async getLogInfo() {
+      await delay(50)
+      // モックでは実ファイルを作らないため、ダミーのパスを返す
+      return { path: '(モック)logs/backlog-assistant-YYYYMMDD.log', enabled: true }
     },
   }
 }
