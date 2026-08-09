@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/kenzo0107/backlog"
 
@@ -238,6 +239,21 @@ type SaveProfileResult struct {
 	Connection *backlogclient.ConnectionInfo `json:"connection"`
 }
 
+// validateAPIKey はトリム後の API キーの形式を検証する。
+// 公式仕様はキーの文字種を規定していないため、拒否するのは
+// 「どのような資格情報形式でもあり得ない」内部の空白・制御文字のみに限定する
+// (コピー範囲の誤り確実。それ以外はサーバの判定に委ねる)。
+func validateAPIKey(apiKey string) error {
+	for _, r := range apiKey {
+		// Unicode の空白(U+00A0 等)・制御文字(U+0085 等)も対象にする。
+		// それ以外の非 ASCII 文字は拒否しない(正当なキーを弾かない)
+		if unicode.IsSpace(r) || unicode.IsControl(r) {
+			return errors.New("API キーの途中に空白または改行が含まれています。コピー範囲を確認してください")
+		}
+	}
+	return nil
+}
+
 // dbReferencedByOthers は excludeID 以外のプロファイルに、同一 (host, userID) の
 // ローカル DB を参照するものがあるかを返す(中 2 の共有参照チェック)。
 func (s *ProfileService) dbReferencedByOthers(excludeID, host string, userID int) (bool, error) {
@@ -283,6 +299,13 @@ func (s *ProfileService) SaveProfile(ctx context.Context, id, name, spaceURL, ap
 	name = strings.TrimSpace(name)
 	if name == "" {
 		return nil, errors.New("プロファイル名が空です")
+	}
+	// コピー&ペースト由来の前後空白・改行を除去する(混入すると API が 401 を返す)
+	apiKey = strings.TrimSpace(apiKey)
+	if apiKey != "" { // 空は「既存キーを維持」の合図なので検証しない
+		if err := validateAPIKey(apiKey); err != nil {
+			return nil, err
+		}
 	}
 	canonical, err := backlogclient.ValidateSpaceURL(spaceURL)
 	if err != nil {
@@ -483,6 +506,13 @@ func (s *ProfileService) TestConnection(ctx context.Context, spaceURL, apiKey st
 // 旧キーで API を呼ばないための保証。SaveProfile(Lock 保持)からは
 // このメソッドを呼ばない(内部では s.newClient を直接使う)。
 func (s *ProfileService) TestConnectionForProfile(ctx context.Context, profileID, spaceURL, apiKey string) (*backlogclient.ConnectionInfo, error) {
+	// コピー&ペースト由来の前後空白・改行を除去する(混入すると API が 401 を返す)
+	apiKey = strings.TrimSpace(apiKey)
+	if apiKey != "" { // 空は「既存キーを使う」の合図なので形式検証しない
+		if err := validateAPIKey(apiKey); err != nil {
+			return nil, err
+		}
+	}
 	s.profileMu.RLock()
 	defer s.profileMu.RUnlock()
 

@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"sync"
 	"testing"
@@ -775,5 +776,72 @@ func TestSaveProfile_KeepsSharedDBOnUserChange(t *testing.T) {
 	}
 	if calls != 0 {
 		t.Errorf("共有 DB が削除された: removeDB %d 回, want 0", calls)
+	}
+}
+
+// コピー&ペースト由来の前後空白・改行が API キーに混入しても、送信・保存前に
+// トリムされること(実環境で「ブラウザでは成功するのにアプリでは 401」となった
+// 白 → 401 バグの原因)。
+func TestSaveProfile_TrimsAPIKey(t *testing.T) {
+	fake := &fakeConnector{info: testInfo()}
+	s, _, _ := newTestService(t, fake)
+	var gotKey string
+	inner := s.newClient
+	s.newClient = func(spaceURL, apiKey string) (connector, error) {
+		gotKey = apiKey
+		return inner(spaceURL, apiKey)
+	}
+
+	res, err := s.SaveProfile(context.Background(), "", "検証", "https://example.backlog.jp", "  secret-key\r\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotKey != "secret-key" {
+		t.Errorf("接続テストに渡ったキー = %q, want %q", gotKey, "secret-key")
+	}
+	stored, err := secret.Get(res.Profile.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored != "secret-key" {
+		t.Errorf("キーチェーン保存値 = %q, want %q", stored, "secret-key")
+	}
+}
+
+// TestConnectionForProfile も同様にトリムして送信すること。
+func TestTestConnectionForProfile_TrimsAPIKey(t *testing.T) {
+	fake := &fakeConnector{info: testInfo()}
+	s, _, _ := newTestService(t, fake)
+	var gotKey string
+	inner := s.newClient
+	s.newClient = func(spaceURL, apiKey string) (connector, error) {
+		gotKey = apiKey
+		return inner(spaceURL, apiKey)
+	}
+
+	if _, err := s.TestConnectionForProfile(context.Background(), "", "https://example.backlog.jp", "\tsecret-key \n"); err != nil {
+		t.Fatal(err)
+	}
+	if gotKey != "secret-key" {
+		t.Errorf("接続テストに渡ったキー = %q, want %q", gotKey, "secret-key")
+	}
+}
+
+// キー内部の空白・制御文字(コピー範囲の誤り確実)は送信前に明確なエラーに
+// すること(サーバの 401 より原因が分かりやすい)。公式仕様はキーの文字種を
+// 規定していないため、非 ASCII や記号は拒否しない(正当なキーを弾かない)。
+func TestSaveProfile_RejectsInvalidAPIKeyCharacters(t *testing.T) {
+	fake := &fakeConnector{info: testInfo()}
+	s, _, _ := newTestService(t, fake)
+	for _, key := range []string{"secret key", "secret\tkey", "secret\nkey", "secret\u00a0key", "secret\u0085key"} {
+		if _, err := s.SaveProfile(context.Background(), "", "検証", "https://example.backlog.jp", key); err == nil {
+			t.Errorf("key=%q: エラーになるべき", key)
+		}
+	}
+	// 正常キーおよび文字種を断定できないキー(記号・通常の非 ASCII)は通す(サーバの判定に委ねる)
+	for i, key := range []string{"abcDEF0123", "abc=def", "abc-def_ghi", "abcキー123"} {
+		if _, err := s.SaveProfile(context.Background(), "", fmt.Sprintf("検証%d", i), "https://example.backlog.jp", key); err != nil {
+			t.Errorf("key=%q: エラーになるべきでない: %v", key, err)
+		}
 	}
 }

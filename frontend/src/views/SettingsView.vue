@@ -150,7 +150,12 @@ async function runTest() {
   testing.value = true
   testResult.value = null
   try {
-    testResult.value = await backend.testConnection(form.id, form.spaceUrl.trim(), form.apiKey)
+    // apiKey もトリムする(コピー&ペーストの改行・空白混入で 401 になるため。Go 側でも同様にトリム)
+    testResult.value = await backend.testConnection(
+      form.id,
+      form.spaceUrl.trim(),
+      form.apiKey.trim(),
+    )
   } catch (e) {
     formError.value = `接続テストに失敗しました: ${errorMessage(e)}`
   } finally {
@@ -193,7 +198,7 @@ async function save() {
       id: form.id,
       name: form.name.trim(),
       spaceUrl: form.spaceUrl.trim(),
-      apiKey: form.apiKey,
+      apiKey: form.apiKey.trim(),
     })
     await reloadProfiles()
     activeProfileId.value = saved.id
