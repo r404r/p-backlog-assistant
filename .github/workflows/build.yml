@@ -1,0 +1,83 @@
+# Windows / macOS の配布ビルドと、テスト・型検査を行う CI。
+# 設計書 6 節: macOS ビルドは macOS ランナーが必要(Wails v2)。
+# 成果物は Actions の Artifacts からダウンロードする(マニュアル動作確認用)。
+name: build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# シークレット不要のビルド専用ワークフロー。トークン権限は読み取りに限定する
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version: stable
+          cache: true
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: フロントエンドの型検査とビルド
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run build
+      # main パッケージ(Wails 本体)は GUI 依存があるため、Linux では internal のみ検査する
+      - name: Go vet / テスト
+        run: |
+          go vet ./internal/...
+          go test -count=1 ./internal/...
+
+  build:
+    needs: test
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            platform: windows/amd64
+            artifact: backlog-assistant-windows
+          - os: macos-latest
+            platform: darwin/universal
+            artifact: backlog-assistant-macos
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version: stable
+          cache: true
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Wails CLI のインストール
+        run: go install github.com/wailsapp/wails/v2/cmd/wails@v2.13.0
+      - name: 配布ビルド
+        run: wails build -platform ${{ matrix.platform }} -clean
+      # .app はディレクトリのためそのままアップロードすると実行属性が失われる。zip 化する。
+      # .app 名は wails.json の name(スペース含む)から生成されるため glob で解決する
+      - name: macOS アプリの zip 化
+        if: runner.os == 'macOS'
+        working-directory: build/bin
+        run: |
+          app=$(ls -d *.app | head -1)
+          ditto -c -k --keepParent "$app" backlog-assistant-macos.zip
+      - uses: actions/upload-artifact@v5
+        with:
+          name: ${{ matrix.artifact }}
+          path: |
+            build/bin/*.exe
+            build/bin/*.zip
+          if-no-files-found: error
