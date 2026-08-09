@@ -5,15 +5,23 @@ package backlogclient
 import (
 	"context"
 	"fmt"
+	"net/http"
 
 	"github.com/kenzo0107/backlog"
 )
+
+// httpDoer は HTTP リクエストの送信口(実体は *interceptor)。
+type httpDoer interface {
+	Do(req *http.Request) (*http.Response, error)
+}
 
 // Client は Backlog API クライアント(レート制限・リトライ・エラー正規化込み)。
 type Client struct {
 	spaceURL string // 正規化済み(https://<host>)
 	host     string
+	apiKey   string // 自前 HTTP リクエスト(api.go)用。ログ・設定には出さない
 	api      *backlog.Client
+	httpDo   httpDoer // ライブラリと共用する transport(レート制限・リトライ・マスク)
 	limiter  *RateLimiter
 }
 
@@ -28,11 +36,16 @@ func New(spaceURL, apiKey string) (*Client, error) {
 		return nil, fmt.Errorf("API キーが空です")
 	}
 	limiter := NewRateLimiter()
-	api := backlog.New(apiKey, canonical, backlog.OptionHTTPClient(newInterceptor(limiter)))
+	// ライブラリ経由・自前 HTTP のどちらも同じ interceptor を通し、
+	// レート制限のトークンバケットを共有する。
+	ic := newInterceptor(limiter)
+	api := backlog.New(apiKey, canonical, backlog.OptionHTTPClient(ic))
 	return &Client{
 		spaceURL: canonical,
 		host:     canonical[len("https://"):],
+		apiKey:   apiKey,
 		api:      api,
+		httpDo:   ic,
 		limiter:  limiter,
 	}, nil
 }

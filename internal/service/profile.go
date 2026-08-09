@@ -19,15 +19,18 @@ import (
 	"backlog-assistant/internal/config"
 	"backlog-assistant/internal/secret"
 	"backlog-assistant/internal/store"
+	syncpkg "backlog-assistant/internal/sync"
 )
 
 // connector は service 層が Backlog クライアントに要求する操作の最小集合。
 // 実体は *backlogclient.Client(テストではフェイクに差し替える)。
+// 同期エンジンが使う取得系は syncpkg.API をそのまま埋め込む。
 type connector interface {
 	TestConnection(ctx context.Context) (*backlogclient.ConnectionInfo, error)
 	GetUsers(ctx context.Context) ([]*backlog.User, error)
 	GetTeams(ctx context.Context) ([]*backlog.Team, error)
 	InitRateLimit(ctx context.Context) error
+	syncpkg.API
 }
 
 // コンパイル時チェック: *backlogclient.Client が connector を満たすこと。
@@ -52,8 +55,30 @@ type ProfileService struct {
 	newClient func(spaceURL, apiKey string) (connector, error)
 	// removeDB はローカル DB 削除処理(テスト差し替え用)。
 	removeDB func(host string, userID int) error
+	// dbPathFor はローカル DB のパス解決(テスト差し替え用)。
+	dbPathFor func(host string, userID int) (string, error)
+	// openStore はローカル DB のオープン(テスト差し替え用)。
+	openStore func(path string) (*store.Store, error)
 	// now は現在時刻の取得(テスト差し替え用)。
 	now func() time.Time
+
+	// profileMu はプロファイルのライフサイクル(作成・更新・削除)と、
+	// そのプロファイルを使う操作(同期・store 参照)を排他する(高 2)。
+	//   - Lock  : SaveProfile / DeleteProfile
+	//   - RLock : SyncProjects / SyncIssues / SearchIssues / ListFilterOptions /
+	//             GetSyncState / ListSyncStates / ListProjects
+	//             (= storeForProfile を使う操作)
+	//             TestConnectionForProfile / GetPermissionStatus
+	//             (= 保存済み設定・キーチェーン・クライアントキャッシュを使う操作。中 1)
+	// これが無いと、削除直後に並行中の同期が古いプロファイル情報で
+	// ローカル DB を再作成しうる。
+	//
+	// ロック順序は必ず profileMu → opMu → (syncMu | clientsMu | storesMu)。
+	// 逆順取得は作らないこと。特に storeForProfile / clientForProfile /
+	// closeStore / invalidateClient は profileMu を取らない(RLock は
+	// 再入不可であり、待機中の Lock があると入れ子 RLock が自己デッドロック
+	// するため、profileMu の取得は必ず公開メソッドの入口 1 か所に限る)。
+	profileMu sync.RWMutex
 
 	// opMu は SaveProfile / DeleteProfile の全体を直列化する(高 3)。
 	// config・キーチェーン・DB を跨ぐ複合操作の交錯を防ぐ。
@@ -65,6 +90,28 @@ type ProfileService struct {
 	// プロファイル単位で使い回す。
 	clientsMu sync.Mutex
 	clients   map[string]*clientEntry
+
+	// stores は保存済みプロファイル ID → ローカル DB のキャッシュ。
+	// DB は「スペースホスト × 認証ユーザ ID」ごとに 1 ファイル(設計書 2 節)。
+	// ロック順序は opMu → clientsMu / storesMu(逆順取得を作らないこと)。
+	storesMu sync.Mutex
+	stores   map[string]*storeEntry
+
+	// syncMu は同期処理(API 取得 + DB 書き込み)を直列化する。
+	// SQLite の接続数を 1 に絞っているため、並行同期は待ちを生むだけで
+	// 利点が無く、進捗表示も分かりにくくなる。
+	syncMu sync.Mutex
+
+	// onProgress は同期進捗の通知先(app.go が設定する)。
+	progressMu sync.Mutex
+	onProgress SyncProgressFunc
+}
+
+// storeEntry はローカル DB キャッシュの 1 エントリ。
+// path を保持し、接続ユーザ変更で DB ファイルが変わったら開き直す。
+type storeEntry struct {
+	store *store.Store
+	path  string
 }
 
 // NewProfileService は既定の構成で ProfileService を生成する。
@@ -74,9 +121,12 @@ func NewProfileService(cfg *config.Manager) *ProfileService {
 		newClient: func(spaceURL, apiKey string) (connector, error) {
 			return backlogclient.New(spaceURL, apiKey)
 		},
-		removeDB: store.RemoveDatabase,
-		now:      time.Now,
-		clients:  map[string]*clientEntry{},
+		removeDB:  store.RemoveDatabase,
+		dbPathFor: store.DBPath,
+		openStore: store.Open,
+		now:       time.Now,
+		clients:   map[string]*clientEntry{},
+		stores:    map[string]*storeEntry{},
 	}
 }
 
@@ -157,10 +207,14 @@ func (s *ProfileService) retryInitLocked(ctx context.Context, e *clientEntry) {
 
 // invalidateClient はプロファイルのクライアントキャッシュを破棄する
 // (キー変更・URL 変更・プロファイル削除時)。
+// 接続ユーザが変われば参照する DB ファイルも変わるため、
+// キャッシュしているローカル DB 接続も閉じる。
+// ロックは入れ子にせず順に取得する(clientsMu → storesMu)。
 func (s *ProfileService) invalidateClient(profileID string) {
 	s.clientsMu.Lock()
-	defer s.clientsMu.Unlock()
 	delete(s.clients, profileID)
+	s.clientsMu.Unlock()
+	s.closeStore(profileID)
 }
 
 // ListProfiles は保存済みプロファイル一覧を返す。
@@ -219,6 +273,9 @@ func (s *ProfileService) dbReferencedByOthers(excludeID, host string, userID int
 // さらに config にはキーのフィンガープリントを保存し、キーチェーン保存後・
 // config 保存前のクラッシュで残る「新キー + 旧設定」を読み出し時に検知する(高 1)。
 func (s *ProfileService) SaveProfile(ctx context.Context, id, name, spaceURL, apiKey string) (*SaveProfileResult, error) {
+	// 実行中の同期・store 利用操作と排他する(高 2。ロック順序 profileMu → opMu)
+	s.profileMu.Lock()
+	defer s.profileMu.Unlock()
 	// SaveProfile / DeleteProfile を跨ぐ複合操作を直列化する(高 3)
 	s.opMu.Lock()
 	defer s.opMu.Unlock()
@@ -320,6 +377,8 @@ func (s *ProfileService) SaveProfile(ctx context.Context, id, name, spaceURL, ap
 	if existing != nil && existing.LastUserID != 0 && existing.LastUserID != info.UserID {
 		if oldHost, herr := backlogclient.SpaceHost(existing.SpaceURL); herr == nil {
 			if shared, serr := s.dbReferencedByOthers(id, oldHost, existing.LastUserID); serr == nil && !shared {
+				// 開いたままのファイルは削除できない(Windows)ため先に閉じる
+				s.closeStore(id)
 				_ = s.removeDB(oldHost, existing.LastUserID)
 			}
 		}
@@ -343,6 +402,10 @@ func (s *ProfileService) SaveProfile(ctx context.Context, id, name, spaceURL, ap
 // config 削除が失敗した場合は、先に消したキーチェーンのキーを復元する
 // (「設定は残っているのにキーだけ消えた」状態を作らないための補償。高 2)。
 func (s *ProfileService) DeleteProfile(id string, deleteDB bool) error {
+	// 実行中の同期・store 利用操作の完了を待ってから削除する(高 2)。
+	// これにより、削除後に同期が store キャッシュ・DB を再作成することはない。
+	s.profileMu.Lock()
+	defer s.profileMu.Unlock()
 	// SaveProfile / DeleteProfile を跨ぐ複合操作を直列化する(高 3)
 	s.opMu.Lock()
 	defer s.opMu.Unlock()
@@ -365,6 +428,8 @@ func (s *ProfileService) DeleteProfile(id string, deleteDB bool) error {
 				return err
 			}
 			if !shared {
+				// 開いたままのファイルは削除できない(Windows)ため先に閉じる
+				s.closeStore(id)
 				if err := s.removeDB(host, profile.LastUserID); err != nil {
 					return fmt.Errorf("ローカル DB の削除に失敗しました(プロファイルは削除していません。再試行してください): %w", err)
 				}
@@ -412,7 +477,15 @@ func (s *ProfileService) TestConnection(ctx context.Context, spaceURL, apiKey st
 
 // TestConnectionForProfile は接続テストを行う。apiKey が空で profileID が
 // 指定されている場合は、キーチェーンの既存キーを使う(SaveProfile と同じ規約)。
+//
+// 保存済み設定・キーチェーンを読むため、入口で profileMu.RLock を取り
+// SaveProfile / DeleteProfile と排他する(中 1)。削除中のプロファイルの
+// 旧キーで API を呼ばないための保証。SaveProfile(Lock 保持)からは
+// このメソッドを呼ばない(内部では s.newClient を直接使う)。
 func (s *ProfileService) TestConnectionForProfile(ctx context.Context, profileID, spaceURL, apiKey string) (*backlogclient.ConnectionInfo, error) {
+	s.profileMu.RLock()
+	defer s.profileMu.RUnlock()
+
 	if apiKey == "" {
 		if profileID == "" {
 			return nil, errors.New("API キーが入力されていません")
@@ -443,7 +516,14 @@ type PermissionStatus struct {
 // GetPermissionStatus は保存済みプロファイルで GET /users と GET /teams を
 // 各 1 回呼び、実権限を確認する。両方成功なら管理者機能利用可、
 // いずれかが 403 なら縮退状態(どちらが不可かをメッセージに含める)を返す。
+//
+// 保存済み設定・キーチェーン・クライアントキャッシュに触るため、入口で
+// profileMu.RLock を取り SaveProfile / DeleteProfile と排他する(中 1)。
+// ロック順序は profileMu → clientsMu(clientForProfile は profileMu を取らない)。
 func (s *ProfileService) GetPermissionStatus(ctx context.Context, profileID string) (*PermissionStatus, error) {
+	s.profileMu.RLock()
+	defer s.profileMu.RUnlock()
+
 	client, err := s.clientForProfile(ctx, profileID)
 	if err != nil {
 		return nil, err

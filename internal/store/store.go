@@ -143,6 +143,22 @@ func (s *Store) WithTx(ctx context.Context, fn func(tx *sql.Tx) error) error {
 	return nil
 }
 
+// WithReadTx は「複数クエリの結果を 1 つのスナップショットで揃える」ための
+// 読み取り専用トランザクションで fn を実行する(中 2)。
+// 接続数を 1 に制限しているため、トランザクション保持中は同期の書き込みが
+// 割り込めず、件数と行の取得結果が食い違わない。
+// 読み取り専用なので終了時は常にロールバックする(コミットは不要)。
+// fn の中では tx のみを使うこと(Store の別メソッドを呼ぶとデッドロックする)。
+func (s *Store) WithReadTx(ctx context.Context, fn func(tx *sql.Tx) error) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("トランザクションを開始できません: %w", err)
+	}
+	// 読み取りのみのため、ロールバック失敗は結果に影響しない(ベストエフォート)
+	defer func() { _ = tx.Rollback() }()
+	return fn(tx)
+}
+
 // RemoveDatabase は既定データディレクトリから、指定ホスト × ユーザ ID の
 // DB ファイル(と WAL/SHM)のみを削除する(プロファイル削除時)。
 // 同一ホストの別ユーザ(別プロファイル)の DB は削除しない。

@@ -1,0 +1,315 @@
+// Package export は抽出結果の Excel(xlsx)出力を担う。
+//
+// 設計書 5 節「Excel 入出力仕様」準拠:
+//   - excelize の StreamWriter を使用し、数万行の課題でもメモリを抑えて出力する。
+//   - 1 行目は日本語ヘッダ。オートフィルタを設定し、ヘッダ行を固定表示にする。
+//   - 出力列は呼び出し側が選択できる(列キー → 日本語ヘッダの対応表を本パッケージが持つ)。
+//
+// このパッケージは呼び出し側から渡された課題データのみを書き出す。
+// スペース名・プロジェクト名・接続先 URL 等の環境情報は書き出さない(設計書 7 節)。
+package export
+
+import (
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"strings"
+	"time"
+
+	"backlog-assistant/internal/store"
+
+	"github.com/xuri/excelize/v2"
+)
+
+// シート名。
+const (
+	// SheetIssues は課題データを書き出すシート。
+	SheetIssues = "課題"
+	// SheetInfo は生成メタ(件数)を書き出すシート。
+	SheetInfo = "情報"
+)
+
+// BaseUpdatedHeader は一括更新テンプレートの競合検知用列のヘッダ。
+// 機械可読な列のため日本語化せず、設計書 5 節の名称をそのまま使う。
+const BaseUpdatedHeader = "base_updated"
+
+// 出力する日時の書式。
+const (
+	dateTimeLayout = "2006-01-02 15:04"
+	dateLayout     = "2006-01-02"
+)
+
+// ErrUnknownColumn は未知の列キーが指定されたことを表す。
+var ErrUnknownColumn = errors.New("未知の列キーです")
+
+// localLocation は日時整形に使うタイムゾーン。テストから差し替える。
+var localLocation = time.Local
+
+// column は 1 出力列の定義。
+type column struct {
+	key    string                    // 呼び出し側が指定する列キー
+	header string                    // 1 行目に出力する日本語ヘッダ
+	value  func(*store.Issue) string // セル値の生成
+	width  float64                   // 列幅(文字数目安)
+}
+
+// columns は出力可能な列の定義(表示順の既定でもある)。
+var columns = []column{
+	{"issueKey", "キー", func(i *store.Issue) string { return i.IssueKey }, 14},
+	{"summary", "件名", func(i *store.Issue) string { return i.Summary }, 48},
+	{"statusName", "状態", func(i *store.Issue) string { return i.StatusName }, 12},
+	{"assigneeName", "担当者", func(i *store.Issue) string { return i.AssigneeName }, 16},
+	{"issueTypeName", "種別", func(i *store.Issue) string { return i.IssueTypeName }, 14},
+	{"priorityName", "優先度", func(i *store.Issue) string { return i.PriorityName }, 10},
+	{"created", "作成日時", func(i *store.Issue) string { return formatDateTime(i.Created) }, 18},
+	{"updated", "更新日時", func(i *store.Issue) string { return formatDateTime(i.Updated) }, 18},
+	{"dueDate", "期限", func(i *store.Issue) string { return formatDate(i.DueDate) }, 12},
+	{"description", "詳細", func(i *store.Issue) string { return i.Description }, 60},
+}
+
+// defaultColumnKeys は既定の出力列(詳細は本文が長いため既定では出さない)。
+var defaultColumnKeys = []string{
+	"issueKey", "summary", "statusName", "assigneeName",
+	"issueTypeName", "priorityName", "created", "updated", "dueDate",
+}
+
+// Options は課題 Excel 出力のオプション。
+type Options struct {
+	// Columns は出力する列キーを表示順に指定する。空なら DefaultColumns を使う。
+	Columns []string
+	// WithBaseUpdated が true のとき、末尾に base_updated 列(更新日時の RFC3339 生値)
+	// を追加する。一括更新テンプレートの競合検知(設計書 5 節)で使う。
+	WithBaseUpdated bool
+}
+
+// DefaultColumns は既定の出力列キーを返す(呼び出し側が書き換えても内部に影響しない)。
+func DefaultColumns() []string {
+	out := make([]string, len(defaultColumnKeys))
+	copy(out, defaultColumnKeys)
+	return out
+}
+
+// AvailableColumns は指定可能な列キーを定義順に返す。
+func AvailableColumns() []string {
+	out := make([]string, len(columns))
+	for i, c := range columns {
+		out[i] = c.key
+	}
+	return out
+}
+
+// ColumnHeader は列キーに対応する日本語ヘッダを返す。未知のキーなら ok=false。
+func ColumnHeader(key string) (string, bool) {
+	for _, c := range columns {
+		if c.key == key {
+			return c.header, true
+		}
+	}
+	return "", false
+}
+
+// resolveColumns は列キー列を定義に解決する。未知のキーは ErrUnknownColumn。
+func resolveColumns(keys []string) ([]column, error) {
+	if len(keys) == 0 {
+		keys = defaultColumnKeys
+	}
+	out := make([]column, 0, len(keys))
+	for _, k := range keys {
+		var found bool
+		for _, c := range columns {
+			if c.key == k {
+				out = append(out, c)
+				found = true
+				break
+			}
+		}
+		if !found {
+			return nil, fmt.Errorf("%w: %s", ErrUnknownColumn, k)
+		}
+	}
+	return out, nil
+}
+
+// ExportIssuesToFile は課題一覧を xlsx として path に書き出す。
+// 書き出しに失敗した場合、書きかけのファイルは残さない。
+func ExportIssuesToFile(path string, rows []store.Issue, opts Options) error {
+	// 列指定の検証はファイル生成前に済ませ、不正指定で空ファイルを作らない。
+	if _, err := resolveColumns(opts.Columns); err != nil {
+		return err
+	}
+	f, err := os.Create(path)
+	if err != nil {
+		return err
+	}
+	if err := ExportIssues(f, rows, opts); err != nil {
+		f.Close()
+		os.Remove(path)
+		return err
+	}
+	return f.Close()
+}
+
+// ExportIssues は課題一覧を xlsx として w に書き出す。
+// columns が空なら DefaultColumns を使う。未知の列キーは ErrUnknownColumn を返す。
+func ExportIssues(w io.Writer, rows []store.Issue, opts Options) error {
+	cols, err := resolveColumns(opts.Columns)
+	if err != nil {
+		return err
+	}
+
+	f := excelize.NewFile()
+	defer f.Close()
+
+	// 既定シートを課題シートにリネームし、情報シートを 2 枚目として追加する。
+	if err := f.SetSheetName(f.GetSheetName(0), SheetIssues); err != nil {
+		return err
+	}
+	if err := writeInfoSheet(f, len(rows)); err != nil {
+		return err
+	}
+
+	if err := writeIssueSheet(f, cols, rows, opts.WithBaseUpdated); err != nil {
+		return err
+	}
+	return f.Write(w)
+}
+
+// writeInfoSheet は生成メタを情報シートに書き出す。
+// 実データ(スペース名・プロジェクト名等)は書かない方針のため、件数のみを記載する。
+func writeInfoSheet(f *excelize.File, count int) error {
+	if _, err := f.NewSheet(SheetInfo); err != nil {
+		return err
+	}
+	if err := f.SetColWidth(SheetInfo, "A", "A", 16); err != nil {
+		return err
+	}
+	cells := []struct {
+		axis  string
+		value any
+	}{
+		{"A1", "項目"}, {"B1", "値"},
+		{"A2", "件数"}, {"B2", count},
+	}
+	for _, c := range cells {
+		if err := f.SetCellValue(SheetInfo, c.axis, c.value); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// writeIssueSheet は課題シートを StreamWriter で書き出す。
+func writeIssueSheet(f *excelize.File, cols []column, rows []store.Issue, withBaseUpdated bool) error {
+	sw, err := f.NewStreamWriter(SheetIssues)
+	if err != nil {
+		return err
+	}
+
+	colCount := len(cols)
+	if withBaseUpdated {
+		colCount++
+	}
+
+	// 列幅・固定行は最初の SetRow より前に設定する(StreamWriter の制約)。
+	for i, c := range cols {
+		if err := sw.SetColWidth(i+1, i+1, c.width); err != nil {
+			return err
+		}
+	}
+	if withBaseUpdated {
+		if err := sw.SetColWidth(colCount, colCount, 22); err != nil {
+			return err
+		}
+	}
+	// ヘッダ行(1 行目)を固定表示にする。
+	if err := sw.SetPanes(&excelize.Panes{
+		Freeze:      true,
+		YSplit:      1,
+		TopLeftCell: "A2",
+		ActivePane:  "bottomLeft",
+		Selection:   []excelize.Selection{{Pane: "bottomLeft", ActiveCell: "A2", SQRef: "A2"}},
+	}); err != nil {
+		return err
+	}
+
+	headerStyle, err := f.NewStyle(&excelize.Style{
+		Font: &excelize.Font{Bold: true},
+		Fill: excelize.Fill{Type: "pattern", Pattern: 1, Color: []string{"#DDEBF7"}},
+	})
+	if err != nil {
+		return err
+	}
+
+	// 1 行目: 日本語ヘッダ。
+	header := make([]any, 0, colCount)
+	for _, c := range cols {
+		header = append(header, excelize.Cell{StyleID: headerStyle, Value: c.header})
+	}
+	if withBaseUpdated {
+		header = append(header, excelize.Cell{StyleID: headerStyle, Value: BaseUpdatedHeader})
+	}
+	if err := sw.SetRow("A1", header); err != nil {
+		return err
+	}
+
+	// 2 行目以降: 課題データ。
+	values := make([]any, colCount)
+	for n := range rows {
+		issue := &rows[n]
+		for i, c := range cols {
+			values[i] = c.value(issue)
+		}
+		if withBaseUpdated {
+			// 競合検知の基準値は整形せず、取得時の生値をそのまま埋め込む。
+			values[colCount-1] = issue.Updated
+		}
+		cell, err := excelize.CoordinatesToCellName(1, n+2)
+		if err != nil {
+			return err
+		}
+		if err := sw.SetRow(cell, values); err != nil {
+			return err
+		}
+	}
+
+	// オートフィルタはヘッダ行に設定する(Flush 前に設定する必要がある)。
+	lastCol, err := excelize.ColumnNumberToName(colCount)
+	if err != nil {
+		return err
+	}
+	if err := f.AutoFilter(SheetIssues, fmt.Sprintf("A1:%s1", lastCol), nil); err != nil {
+		return err
+	}
+	return sw.Flush()
+}
+
+// formatDateTime は RFC3339 の日時をローカル時刻の "YYYY-MM-DD HH:MM" に整形する。
+// 空文字は空文字のまま、パースできない値はそのまま出力する(情報を失わせない)。
+func formatDateTime(s string) string {
+	if s == "" {
+		return ""
+	}
+	t, err := time.Parse(time.RFC3339, s)
+	if err != nil {
+		return s
+	}
+	return t.In(localLocation).Format(dateTimeLayout)
+}
+
+// formatDate は期限を "YYYY-MM-DD" に整形する。
+// 期限は時刻を持たない日付なので、タイムゾーン変換で日付がずれないよう UTC のまま扱う。
+func formatDate(s string) string {
+	if s == "" {
+		return ""
+	}
+	if t, err := time.Parse(time.RFC3339, s); err == nil {
+		return t.UTC().Format(dateLayout)
+	}
+	// "YYYY-MM-DD" 形式で渡された場合はそのまま使う。
+	if _, err := time.Parse(dateLayout, s); err == nil {
+		return s
+	}
+	// 想定外の形式は情報を落とさずそのまま出す。
+	return strings.TrimSpace(s)
+}

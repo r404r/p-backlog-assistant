@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"sync"
 	"testing"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 	"backlog-assistant/internal/backlogclient"
 	"backlog-assistant/internal/config"
 	"backlog-assistant/internal/secret"
+	"backlog-assistant/internal/store"
 )
 
 // fakeClock はテスト用の手動クロック。
@@ -29,6 +31,66 @@ type fakeConnector struct {
 	teamsErr  error
 	initErr   error
 	initCalls int
+
+	// 同期系(syncpkg.API)の応答
+	projects   []backlogclient.Project
+	issues     []backlogclient.Issue
+	activities []backlogclient.Activity
+
+	// 同期中の並行操作を検証するためのブロック機構(高 2)。
+	// issuesEntered が非 nil のとき、最初の GetIssues でそれを閉じてから
+	// issuesRelease が閉じられるまで待つ。
+	issuesEntered chan struct{}
+	issuesRelease chan struct{}
+	enterOnce     sync.Once
+
+	// usersEntered が非 nil のとき、最初の GetUsers でそれを閉じる。
+	// プロファイル削除中に旧クライアントで API が呼ばれないことの検証に使う(中 1)。
+	usersEntered chan struct{}
+	usersOnce    sync.Once
+}
+
+func (f *fakeConnector) GetProjects(ctx context.Context) ([]backlogclient.Project, error) {
+	return f.projects, nil
+}
+
+func (f *fakeConnector) GetIssues(ctx context.Context, q backlogclient.IssueQuery) ([]backlogclient.Issue, error) {
+	if f.issuesEntered != nil {
+		f.enterOnce.Do(func() { close(f.issuesEntered) })
+		<-f.issuesRelease
+	}
+	if q.Offset > 0 {
+		return nil, nil // 1 ページで終わり
+	}
+	var out []backlogclient.Issue
+	for _, i := range f.issues {
+		for _, pid := range q.ProjectIDs {
+			if i.ProjectID == pid {
+				out = append(out, i)
+				break
+			}
+		}
+	}
+	return out, nil
+}
+
+func (f *fakeConnector) GetIssuesCount(ctx context.Context, q backlogclient.IssueQuery) (int, error) {
+	issues, err := f.GetIssues(ctx, q)
+	return len(issues), err
+}
+
+func (f *fakeConnector) GetIssue(ctx context.Context, issueIDOrKey string) (*backlogclient.Issue, error) {
+	for _, i := range f.issues {
+		if i.IssueKey == issueIDOrKey {
+			issue := i
+			return &issue, nil
+		}
+	}
+	return nil, backlogclient.ErrNotFound
+}
+
+func (f *fakeConnector) GetSpaceActivities(ctx context.Context, q backlogclient.ActivityQuery) ([]backlogclient.Activity, error) {
+	return f.activities, nil
 }
 
 func (f *fakeConnector) TestConnection(ctx context.Context) (*backlogclient.ConnectionInfo, error) {
@@ -39,6 +101,9 @@ func (f *fakeConnector) TestConnection(ctx context.Context) (*backlogclient.Conn
 }
 
 func (f *fakeConnector) GetUsers(ctx context.Context) ([]*backlog.User, error) {
+	if f.usersEntered != nil {
+		f.usersOnce.Do(func() { close(f.usersEntered) })
+	}
 	return nil, f.usersErr
 }
 
@@ -64,6 +129,12 @@ func newTestService(t *testing.T, fake *fakeConnector) (*ProfileService, string,
 		return fake, nil
 	}
 	s.removeDB = func(host string, userID int) error { return nil }
+	// ローカル DB は一時ディレクトリに作る(既定の os.UserConfigDir を汚さない)
+	dataDir := t.TempDir()
+	s.dbPathFor = func(host string, userID int) (string, error) {
+		return store.DBPathIn(dataDir, host, userID), nil
+	}
+	t.Cleanup(func() { _ = s.Close() })
 	return s, dir, newClientCalls
 }
 
@@ -537,6 +608,72 @@ func TestClientForProfile_RetriesRateLimitInit(t *testing.T) {
 	}
 	if fake.initCalls != 3 {
 		t.Errorf("初期化完了後に再試行された: initCalls = %d, want 3", fake.initCalls)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// 中 1(2 回目レビュー): 読み取り系メソッドのライフサイクルロック
+// ---------------------------------------------------------------------------
+
+// TestGetPermissionStatus_WaitsForProfileDeletion は、DeleteProfile の実行中に
+// GetPermissionStatus が旧プロファイルのキー・キャッシュクライアントで API を
+// 呼ばないこと(= 入口で profileMu.RLock を取ること)を検証する。
+// 削除完了後は対象プロファイルが存在しないためエラーになる。
+func TestGetPermissionStatus_WaitsForProfileDeletion(t *testing.T) {
+	fake := &fakeConnector{info: testInfo()}
+	s, _, _ := newTestService(t, fake)
+	ctx := context.Background()
+
+	res, err := s.SaveProfile(ctx, "", "検証用", "https://example.backlog.jp", "KEY-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := res.Profile.ID
+
+	// 旧キーのクライアントをキャッシュへ載せておく(削除中に使い回せる状態を作る)
+	if _, err := s.GetPermissionStatus(ctx, id); err != nil {
+		t.Fatal(err)
+	}
+	// 以降の GetUsers 呼び出しを検知できるようにする
+	fake.usersEntered = make(chan struct{})
+
+	// DeleteProfile を profileMu.Lock 保持中(DB 削除中)で停止させる
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	s.removeDB = func(host string, userID int) error {
+		close(entered)
+		<-release
+		return nil
+	}
+	delDone := make(chan error, 1)
+	go func() { delDone <- s.DeleteProfile(id, true) }()
+	<-entered
+
+	permDone := make(chan error, 1)
+	go func() {
+		_, perr := s.GetPermissionStatus(ctx, id)
+		permDone <- perr
+	}()
+
+	select {
+	case <-fake.usersEntered:
+		t.Error("削除処理中に旧プロファイルのクライアントで API が呼ばれた")
+	case <-permDone:
+		t.Error("削除処理中に GetPermissionStatus が完了した(排他されていない)")
+	case <-time.After(200 * time.Millisecond):
+	}
+	close(release)
+
+	if err := <-delDone; err != nil {
+		t.Fatalf("DeleteProfile が失敗した: %v", err)
+	}
+	select {
+	case perr := <-permDone:
+		if perr == nil {
+			t.Error("削除完了後の GetPermissionStatus がエラーにならなかった")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("削除完了後も GetPermissionStatus が終わらない")
 	}
 }
 
