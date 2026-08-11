@@ -387,6 +387,52 @@ async function exportExcel() {
         </p>
       </section>
 
+      <!-- 同期(検索の前に実行する想定のため検索条件より上に配置) -->
+      <section class="panel">
+        <h2>同期</h2>
+        <div class="row">
+          <label>同期モード</label>
+          <label class="radio">
+            <input v-model="syncMode" type="radio" value="auto" :disabled="syncing" />
+            自動(初回はフル同期)
+          </label>
+          <label class="radio">
+            <input v-model="syncMode" type="radio" value="full" :disabled="syncing" />
+            フル同期
+          </label>
+          <label class="radio">
+            <input v-model="syncMode" type="radio" value="incremental" :disabled="syncing" />
+            差分同期
+          </label>
+          <button :disabled="syncing || !selectedProjectId" @click="runSync">
+            {{ syncing ? '同期中...' : '同期' }}
+          </button>
+          <span v-if="syncing" class="spinner" aria-hidden="true"></span>
+        </div>
+        <p class="hint">
+          自動は同期状態から判定します(未同期・長期間未同期ならフル同期)。
+          差分同期は前回同期以降の更新のみを取得します。不整合が疑われる場合はフル同期を選んでください。
+        </p>
+
+        <p v-if="syncError" class="error">{{ syncError }}</p>
+
+        <div v-if="syncResult" class="result ok">
+          <p class="result-title">{{ syncModeLabel(syncResult.mode) }}が完了しました</p>
+          <ul>
+            <li>取得: {{ syncResult.fetched }} 件</li>
+            <li>登録・更新: {{ syncResult.upserted }} 件</li>
+            <li>削除: {{ syncResult.deleted }} 件</li>
+            <li>所要時間: {{ (syncResult.durationMs / 1000).toFixed(1) }} 秒</li>
+          </ul>
+          <div v-if="syncResult.warnings.length > 0" class="warnings">
+            <p class="result-title">警告</p>
+            <ul>
+              <li v-for="(w, i) in syncResult.warnings" :key="i">{{ w }}</li>
+            </ul>
+          </div>
+        </div>
+      </section>
+
       <!-- 検索条件 -->
       <section class="panel">
         <h2>検索条件</h2>
@@ -443,52 +489,6 @@ async function exportExcel() {
           <span v-if="searching" class="spinner" aria-hidden="true"></span>
         </div>
         <p v-if="searchError" class="error">{{ searchError }}</p>
-      </section>
-
-      <!-- 同期 -->
-      <section class="panel">
-        <h2>同期</h2>
-        <div class="row">
-          <label>同期モード</label>
-          <label class="radio">
-            <input v-model="syncMode" type="radio" value="auto" :disabled="syncing" />
-            自動(初回はフル同期)
-          </label>
-          <label class="radio">
-            <input v-model="syncMode" type="radio" value="full" :disabled="syncing" />
-            フル同期
-          </label>
-          <label class="radio">
-            <input v-model="syncMode" type="radio" value="incremental" :disabled="syncing" />
-            差分同期
-          </label>
-          <button :disabled="syncing || !selectedProjectId" @click="runSync">
-            {{ syncing ? '同期中...' : '同期' }}
-          </button>
-          <span v-if="syncing" class="spinner" aria-hidden="true"></span>
-        </div>
-        <p class="hint">
-          自動は同期状態から判定します(未同期・長期間未同期ならフル同期)。
-          差分同期は前回同期以降の更新のみを取得します。不整合が疑われる場合はフル同期を選んでください。
-        </p>
-
-        <p v-if="syncError" class="error">{{ syncError }}</p>
-
-        <div v-if="syncResult" class="result ok">
-          <p class="result-title">{{ syncModeLabel(syncResult.mode) }}が完了しました</p>
-          <ul>
-            <li>取得: {{ syncResult.fetched }} 件</li>
-            <li>登録・更新: {{ syncResult.upserted }} 件</li>
-            <li>削除: {{ syncResult.deleted }} 件</li>
-            <li>所要時間: {{ (syncResult.durationMs / 1000).toFixed(1) }} 秒</li>
-          </ul>
-          <div v-if="syncResult.warnings.length > 0" class="warnings">
-            <p class="result-title">警告</p>
-            <ul>
-              <li v-for="(w, i) in syncResult.warnings" :key="i">{{ w }}</li>
-            </ul>
-          </div>
-        </div>
       </section>
 
       <!-- 検索結果 -->
