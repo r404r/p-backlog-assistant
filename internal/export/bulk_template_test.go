@@ -478,10 +478,11 @@ func TestExportBulkTemplate_WriterOutput(t *testing.T) {
 	}
 }
 
-// TestExportBulkTemplateToFile_NoPartialFile は書き出し失敗時に空ファイルを残さないことを確認する。
+// TestExportBulkTemplateToFile_InvalidPath は書き出せないパスでエラーになることを
+// 確認する(一時ファイルを残さないことは file_test.go で確認している)。
 func TestExportBulkTemplateToFile_InvalidPath(t *testing.T) {
 	dir := t.TempDir()
-	// ディレクトリをパスに指定すると os.Create が失敗する
+	// ディレクトリをパスに指定すると置換(リネーム)が失敗する
 	if err := ExportBulkTemplateToFile(dir, testTemplateProjectID, sampleBulkRows(), sampleBulkMasters()); err == nil {
 		t.Fatal("ディレクトリへの書き出しが成功してしまった")
 	}

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -311,12 +312,25 @@ func (s *Store) UpdateRowStatus(ctx context.Context, jobID int64, rowNo int, sta
 	})
 }
 
+// terminalJobStatuses は「実行が終わった」ジョブ状態(保持期限の起点)。
+// 再実行(running / pending)へ戻ると完了時刻は解除する。
+var terminalJobStatuses = map[string]bool{
+	JobStatusDone: true, JobStatusCanceled: true,
+}
+
 // SetJobStatus はジョブ状態を更新する。
+// 終端状態(done / canceled)への遷移では完了時刻(completed_at)を記録し、
+// 再実行で非終端状態へ戻ると解除する(保持期限の起点。R2)。
 func SetJobStatus(ctx context.Context, q dbtx, jobID int64, status string) error {
 	if !validJobStatuses[status] {
 		return fmt.Errorf("不明なジョブ状態です: %s", status)
 	}
-	res, err := q.ExecContext(ctx, `UPDATE jobs SET status = ? WHERE id = ?`, status, jobID)
+	var completedAt any // 非終端状態では NULL に戻す
+	if terminalJobStatuses[status] {
+		completedAt = time.Now().UTC().Format(time.RFC3339)
+	}
+	res, err := q.ExecContext(ctx,
+		`UPDATE jobs SET status = ?, completed_at = ? WHERE id = ?`, status, completedAt, jobID)
 	if err != nil {
 		return err
 	}
@@ -368,6 +382,75 @@ func ListJobs(ctx context.Context, q dbtx) ([]JobSummary, error) {
 // ListJobs は Store 直接実行版。
 func (s *Store) ListJobs(ctx context.Context) ([]JobSummary, error) {
 	return ListJobs(ctx, s.db)
+}
+
+// JobRetentionDays は完了ジョブ(jobs / job_rows)の保持日数(R2)。
+// job_rows の payload には件名・詳細・カスタム属性が入るため、実行が終わって
+// 参照されなくなったジョブを無期限に残さない。値は applog のアーカイブ保持
+// (archiveRetentionDays = 90 日)と揃えている。
+const JobRetentionDays = 90
+
+// unfinishedRowStatuses は「まだ結末が確定していない」行状態。
+// この行が 1 つでも残るジョブは保持期限を過ぎても削除しない
+// (pending は再開の対象、sending は送信済みか不明で突合に使うため。設計書 5 節)。
+var unfinishedRowStatuses = []string{RowStatusPending, RowStatusSending}
+
+// PurgeExpiredJobs は保持期限(JobRetentionDays)を過ぎた完了ジョブと
+// その行を削除し、削除したジョブ数を返す(R2)。Store.Open から呼ぶ。
+//
+// 削除するのは次をすべて満たすジョブだけ:
+//   - 状態が終端(done / canceled)であること。実行中・未実行のジョブは消さない。
+//   - 未完了の行(pending / sending)を 1 つも持たないこと。再開・突合に使う
+//     データを、期限だけを理由に失わせない。
+//   - 完了から JobRetentionDays を過ぎていること(ちょうど当日は保持する)。
+//
+// 完了時刻(completed_at)は v2 マイグレーション以降に記録される。それ以前に
+// 完了した旧ジョブは NULL なので created_at で代用する(作成は完了より前なので
+// 保持期間が短くなる側に倒れ、未完了ジョブを消す危険はない)。
+// 時刻は UTC の RFC3339 で保存しているため、辞書順比較で時系列比較になる。
+func PurgeExpiredJobs(ctx context.Context, q dbtx, now time.Time) (int, error) {
+	cutoff := now.UTC().AddDate(0, 0, -JobRetentionDays).Format(time.RFC3339)
+	args := []any{JobStatusDone, JobStatusCanceled, cutoff}
+	placeholders := make([]string, len(unfinishedRowStatuses))
+	for i, s := range unfinishedRowStatuses {
+		placeholders[i] = "?"
+		args = append(args, s)
+	}
+	// 期限切れジョブの ID を求める副問い合わせ(job_rows / jobs の両方で使う)
+	expired := `SELECT id FROM jobs
+		WHERE status IN (?, ?)
+		  AND COALESCE(NULLIF(completed_at, ''), created_at) < ?
+		  AND NOT EXISTS (
+			SELECT 1 FROM job_rows r WHERE r.job_id = jobs.id
+			 AND r.status IN (` + strings.Join(placeholders, ",") + `))`
+
+	if _, err := q.ExecContext(ctx,
+		`DELETE FROM job_rows WHERE job_id IN (`+expired+`)`, args...); err != nil {
+		return 0, err
+	}
+	res, err := q.ExecContext(ctx, `DELETE FROM jobs WHERE id IN (`+expired+`)`, args...)
+	if err != nil {
+		return 0, err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, err
+	}
+	return int(n), nil
+}
+
+// PurgeExpiredJobs は Store 直接実行版(行と親ジョブを同一トランザクションで消す)。
+func (s *Store) PurgeExpiredJobs(ctx context.Context, now time.Time) (int, error) {
+	var n int
+	err := s.WithTx(ctx, func(tx *sql.Tx) error {
+		var terr error
+		n, terr = PurgeExpiredJobs(ctx, tx, now)
+		return terr
+	})
+	if err != nil {
+		return 0, err
+	}
+	return n, nil
 }
 
 // GetJobSummary は 1 ジョブの集計を返す。

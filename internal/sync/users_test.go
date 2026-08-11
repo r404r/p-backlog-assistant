@@ -11,8 +11,10 @@ import (
 	"backlog-assistant/internal/store"
 )
 
-// seedProjects はローカル DB にプロジェクトを登録する
-// (ユーザ・チーム同期はローカル projects を対象に縮退・補完取得を行う)。
+// seedProjects はローカル DB にプロジェクトを登録し、プロジェクト同期が
+// 完了している状態(sync_state)にする
+// (ユーザ・チーム同期はローカル projects を対象に縮退・補完取得を行い、
+// その前提としてプロジェクト同期の完了を確認する。R1)。
 func seedProjects(t *testing.T, s *store.Store, projects ...store.Project) {
 	t.Helper()
 	ctx := context.Background()
@@ -21,6 +23,30 @@ func seedProjects(t *testing.T, s *store.Store, projects ...store.Project) {
 		if err := s.UpsertProject(ctx, &p); err != nil {
 			t.Fatal(err)
 		}
+	}
+	markProjectsSynced(t, s)
+}
+
+// seedProjectsOnly はプロジェクト行だけを登録する(同期状態は記録しない)。
+// 「前回の同期でプロジェクト行は残っているが、今回の起動ではまだ同期していない」
+// 状態の再現に使う(R1)。
+func seedProjectsOnly(t *testing.T, s *store.Store, projects ...store.Project) {
+	t.Helper()
+	ctx := context.Background()
+	for i := range projects {
+		p := projects[i]
+		if err := s.UpsertProject(ctx, &p); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// markProjectsSynced はプロジェクト同期が完了している状態を作る。
+func markProjectsSynced(t *testing.T, s *store.Store) {
+	t.Helper()
+	if err := s.SetSyncCompleted(context.Background(), store.DataKindProjects, store.ProjectScopeAll,
+		"2026-08-12T00:00:00Z", "2026-08-12"); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -646,6 +672,145 @@ func TestSyncUsers_AdminListFailureKeepsProjectUsers(t *testing.T) {
 	}
 	if strings.Join(general.AdminProjectKeys, ",") != "EXB" {
 		t.Errorf("一般ユーザの管理プロジェクト = %v, want [EXB]", general.AdminProjectKeys)
+	}
+}
+
+// --- プロジェクト未同期時の保護(R1)---------------------------------------
+
+// TestSyncUsers_DegradedPath_UnsyncedProjectsKeepsCache は GET /users が 403 で、
+// かつプロジェクトが未同期のときに、既存のユーザ・チームキャッシュを消さずに
+// エラーで失敗することを確認する(R1)。
+//
+// 縮退パスはローカル projects を唯一の入力にするため、未同期による「0 件」を
+// 「参加プロジェクトが 1 つも無い」と取り違えると、合成結果(空集合)で
+// キャッシュを全置換してしまう。
+func TestSyncUsers_DegradedPath_UnsyncedProjectsKeepsCache(t *testing.T) {
+	api := newFakeAPI()
+	api.usersErr = fmt.Errorf("%w: GET /api/v2/users", backlogclient.ErrPermissionDenied)
+	api.teamsErr = fmt.Errorf("%w: GET /api/v2/teams", backlogclient.ErrPermissionDenied)
+
+	s := openTempStore(t)
+	ctx := context.Background()
+	// 以前(権限があった頃・プロジェクト同期済みだった頃)のキャッシュ
+	if err := s.ReplaceUsers(ctx, []*store.User{{ID: 1, UserCode: "admin", Name: "あ 管理"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ReplaceTeams(ctx, []*store.Team{{ID: 10, Name: "開発チーム", MemberIDs: []int64{1}}}); err != nil {
+		t.Fatal(err)
+	}
+
+	e := newTestEngine(t, api, s)
+	if _, err := e.SyncUsers(ctx); err == nil {
+		t.Fatal("プロジェクト未同期でもエラーにならなかった")
+	} else if !strings.Contains(err.Error(), "プロジェクト") {
+		t.Errorf("エラー = %v, want プロジェクトの同期を促す内容", err)
+	}
+
+	rows := userRows(t, s)
+	if len(rows) != 1 {
+		t.Fatalf("ユーザ件数 = %d, want 1(既存キャッシュが破棄された)", len(rows))
+	}
+	if strings.Join(rows[0].TeamNames, ",") != "開発チーム" {
+		t.Errorf("所属チーム = %v, want [開発チーム](据え置き)", rows[0].TeamNames)
+	}
+}
+
+// TestSyncUsers_DegradedPath_SyncedProjectsWithNoProjects は
+// プロジェクト同期済みで参加プロジェクトが 0 件(= 正常応答)の場合は、
+// 従来どおり空集合で全置換する(閲覧できないユーザ情報を残さない)ことを
+// 確認する(R1 の境界)。
+func TestSyncUsers_DegradedPath_SyncedProjectsWithNoProjects(t *testing.T) {
+	api := newFakeAPI()
+	api.usersErr = fmt.Errorf("%w: GET /api/v2/users", backlogclient.ErrPermissionDenied)
+	api.teamsErr = fmt.Errorf("%w: GET /api/v2/teams", backlogclient.ErrPermissionDenied)
+
+	s := openTempStore(t)
+	ctx := context.Background()
+	if err := s.ReplaceUsers(ctx, []*store.User{{ID: 1, UserCode: "admin", Name: "あ 管理"}}); err != nil {
+		t.Fatal(err)
+	}
+	// プロジェクトは 0 件だが同期は完了している
+	markProjectsSynced(t, s)
+
+	e := newTestEngine(t, api, s)
+	if _, err := e.SyncUsers(ctx); err != nil {
+		t.Fatalf("プロジェクト 0 件(同期済み)でエラーになった: %v", err)
+	}
+	if rows := userRows(t, s); len(rows) != 0 {
+		t.Errorf("ユーザ件数 = %d, want 0(参加プロジェクトが無いので破棄)", len(rows))
+	}
+}
+
+// TestSyncUsers_SpaceTeamsDenied_UnsyncedProjectsKeepsTeams は
+// 「/users 成功・/teams 403」でプロジェクトが未同期のとき、チームキャッシュを
+// 空集合で破棄せず据え置くことを確認する(R1)。
+// プロジェクト経由の補完ができない状態では「チームが 0 件」を確認できない。
+func TestSyncUsers_SpaceTeamsDenied_UnsyncedProjectsKeepsTeams(t *testing.T) {
+	api := newFakeAPI()
+	api.users = []backlogclient.User{fakeUser(1, "admin", "あ 管理", 1)}
+	api.teamsErr = fmt.Errorf("%w: GET /api/v2/teams", backlogclient.ErrPermissionDenied)
+
+	s := openTempStore(t)
+	ctx := context.Background()
+	if err := s.ReplaceTeams(ctx, []*store.Team{{ID: 10, Name: "開発チーム", MemberIDs: []int64{1}}}); err != nil {
+		t.Fatal(err)
+	}
+
+	e := newTestEngine(t, api, s)
+	res, err := e.SyncUsers(ctx)
+	if err != nil {
+		t.Fatalf("ユーザ同期まで失敗した: %v", err)
+	}
+	rows := userRows(t, s)
+	if len(rows) != 1 {
+		t.Fatalf("ユーザ件数 = %d, want 1", len(rows))
+	}
+	if strings.Join(rows[0].TeamNames, ",") != "開発チーム" {
+		t.Errorf("所属チーム = %v, want [開発チーム](据え置き)", rows[0].TeamNames)
+	}
+	if !hasWarning(res, "未同期") {
+		t.Errorf("警告 = %v, want プロジェクトが未同期である旨", res.Warnings)
+	}
+}
+
+// TestSyncUsers_SpaceTeamsDenied_UnsyncedProjectsWithStaleRowsKeepsTeams は
+// 「プロジェクト行はローカルに残っているが sync_state は未同期」の状態で
+// /teams が 403 のとき、チーム情報を一切更新せず据え置くことを確認する(R1)。
+//
+// 残っているプロジェクト行が現在の参加状況を表している保証はないため、
+// そこから合成したチームを反映すると古い情報で上書きしてしまう。
+// 「据え置く」という警告どおり、teams / team_members は不変にする。
+func TestSyncUsers_SpaceTeamsDenied_UnsyncedProjectsWithStaleRowsKeepsTeams(t *testing.T) {
+	api := newFakeAPI()
+	api.users = []backlogclient.User{fakeUser(1, "admin", "あ 管理", 1)}
+	api.teamsErr = fmt.Errorf("%w: GET /api/v2/teams", backlogclient.ErrPermissionDenied)
+	api.projectUsers[1] = []backlogclient.User{fakeUser(1, "admin", "あ 管理", 1)}
+	// プロジェクト経由では取得できるが、未同期のため反映してはならない
+	api.projectTeams[1] = []backlogclient.Team{fakeTeam(10, "開発チーム", 1)}
+
+	s := openTempStore(t)
+	ctx := context.Background()
+	// 同期状態は記録しない(プロジェクト行だけが前回の同期から残っている)
+	seedProjectsOnly(t, s, store.Project{ID: 1, ProjectKey: "EXA", Name: "検証用 A"})
+	if err := s.ReplaceTeams(ctx, []*store.Team{{ID: 20, Name: "別部門チーム", MemberIDs: []int64{1}}}); err != nil {
+		t.Fatal(err)
+	}
+
+	e := newTestEngine(t, api, s)
+	res, err := e.SyncUsers(ctx)
+	if err != nil {
+		t.Fatalf("ユーザ同期まで失敗した: %v", err)
+	}
+	rows := userRows(t, s)
+	if len(rows) != 1 {
+		t.Fatalf("ユーザ件数 = %d, want 1", len(rows))
+	}
+	// teams / team_members とも不変(合成したチームを混ぜない)
+	if strings.Join(rows[0].TeamNames, ",") != "別部門チーム" {
+		t.Errorf("所属チーム = %v, want [別部門チーム](据え置き)", rows[0].TeamNames)
+	}
+	if !hasWarning(res, "未同期") {
+		t.Errorf("警告 = %v, want プロジェクトが未同期である旨", res.Warnings)
 	}
 }
 

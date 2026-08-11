@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	_ "modernc.org/sqlite" // driver name: "sqlite"
 )
@@ -109,6 +110,14 @@ func Open(path string) (*Store, error) {
 	if err := s.migrate(); err != nil {
 		db.Close()
 		return nil, err
+	}
+	// 保持期限を過ぎた完了ジョブの整理(R2)。DB を開くのはアプリ起動後の
+	// 初回アクセス時なので、ここが実質「起動時の 1 回」になる。
+	// 失敗は握りつぶさずエラーにする(マイグレーションと同じ書き込み権限しか
+	// 要らないため、ここで失敗する DB はそもそも使えない)。
+	if _, err := s.PurgeExpiredJobs(context.Background(), time.Now()); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("期限切れジョブの整理に失敗しました: %w", err)
 	}
 	return s, nil
 }

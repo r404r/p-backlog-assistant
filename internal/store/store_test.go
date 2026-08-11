@@ -1,6 +1,7 @@
 package store
 
 import (
+	"database/sql"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -83,6 +84,62 @@ func TestMigrate_ReopenIsIdempotent(t *testing.T) {
 	}
 	if marker != "keep" {
 		t.Errorf("再オープンで meta の値が失われた: %q", marker)
+	}
+}
+
+// TestMigrate_V1ToV2AddsCompletedAt は v1 で作られた既存 DB を開いたときに
+// v2(jobs.completed_at の追加)が適用され、既存データが保持されることを
+// 確認する(R2)。
+func TestMigrate_V1ToV2AddsCompletedAt(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "example.backlog.jp_1.db")
+
+	// v1 のスキーマだけを持つ DB を作る(旧バージョンで作られた DB の再現)
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)`); err != nil {
+		t.Fatal(err)
+	}
+	for _, stmt := range migrations[0] {
+		if _, err := db.Exec(stmt); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := db.Exec(`INSERT INTO meta(key, value) VALUES('schema_version', '1')`); err != nil {
+		t.Fatal(err)
+	}
+	// 実行中(pending)のジョブ。マイグレーションでも整理でも消えてはならない。
+	if _, err := db.Exec(`INSERT INTO jobs (id, kind, project_id, source_file, source_hash, created_at, status)
+		VALUES (1, 'update', 1, 'bulk.xlsx', 'h', '2020-01-01T00:00:00Z', 'pending')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO job_rows (job_id, row_no, issue_key, payload, base_updated, status, result_issue_id, error)
+		VALUES (1, 2, 'EXA-1', '{"summary":"件名"}', '', 'pending', 0, '')`); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	v, err := s.SchemaVersion()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v != LatestSchemaVersion() {
+		t.Errorf("移行後の schema_version = %d, want %d", v, LatestSchemaVersion())
+	}
+	if got := jobCompletedAt(t, s, 1); got != "" {
+		t.Errorf("既存ジョブの completed_at = %q, want 空(NULL)", got)
+	}
+	if !jobExists(t, s, 1) || jobRowCount(t, s, 1) != 1 {
+		t.Error("移行で既存ジョブが失われた")
 	}
 }
 

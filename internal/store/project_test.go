@@ -65,6 +65,44 @@ func TestDeleteProjectsNotIn(t *testing.T) {
 	}
 }
 
+// TestDeleteProjectsNotIn_DeletesJobsOfRemovedProjects はプロジェクトの
+// キャッシュ破棄と同時に、そのプロジェクトの一括更新ジョブ(jobs / job_rows)も
+// 削除することを確認する(R2)。
+// job_rows の payload には件名・詳細・カスタム属性が入るため、閲覧できなくなった
+// プロジェクトのデータをローカルに残さない(設計書 2 節・7 節)。
+func TestDeleteProjectsNotIn_DeletesJobsOfRemovedProjects(t *testing.T) {
+	s := openTempStore(t)
+	ctx := context.Background()
+	for _, id := range []int64{1, 2} {
+		if err := s.UpsertProject(ctx, &Project{ID: id, ProjectKey: "EX", Name: "p"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	keep, err := s.CreateJob(ctx, JobKindUpdate, 1, "keep.xlsx", "h1",
+		[]JobRow{{RowNo: 2, IssueKey: "EXA-1", Payload: `{"summary":"残す"}`}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	removed, err := s.CreateJob(ctx, JobKindUpdate, 2, "removed.xlsx", "h2",
+		[]JobRow{{RowNo: 2, IssueKey: "EXB-1", Payload: `{"summary":"消す"}`}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := s.DeleteProjectsNotIn(ctx, []int64{1}); err != nil {
+		t.Fatal(err)
+	}
+	if jobExists(t, s, removed) {
+		t.Error("削除したプロジェクトのジョブが残っている")
+	}
+	if jobRowCount(t, s, removed) != 0 {
+		t.Error("削除したプロジェクトの job_rows(payload)が残っている")
+	}
+	if !jobExists(t, s, keep) || jobRowCount(t, s, keep) != 1 {
+		t.Error("参加中プロジェクトのジョブまで削除された")
+	}
+}
+
 // TestDeleteProjectsNotIn_EmptyDeletesAll は keepIDs が空(= 参加プロジェクトが
 // 0 件という正常応答)のときに全キャッシュを破棄することを確認する。
 //
@@ -96,6 +134,12 @@ func TestDeleteProjectsNotIn_EmptyDeletesAll(t *testing.T) {
 	if err := s.UpsertSyncState(ctx, &SyncState{
 		DataKind: DataKindProjects, ProjectID: ProjectScopeAll, LastSyncedAt: "2026-08-09T00:00:00Z",
 	}); err != nil {
+		t.Fatal(err)
+	}
+	// 一括更新ジョブ(payload に件名・詳細が入る)も破棄対象(R2)
+	job, err := s.CreateJob(ctx, JobKindUpdate, 1, "bulk.xlsx", "h",
+		[]JobRow{{RowNo: 2, IssueKey: "EXA-1", Payload: `{"summary":"件名"}`}})
+	if err != nil {
 		t.Fatal(err)
 	}
 
@@ -140,5 +184,8 @@ func TestDeleteProjectsNotIn_EmptyDeletesAll(t *testing.T) {
 	}
 	if all == nil {
 		t.Error("スペース共通の sync_state(project_id = 0)まで削除された")
+	}
+	if jobExists(t, s, job) || jobRowCount(t, s, job) != 0 {
+		t.Error("全削除でジョブ(payload)が残っている")
 	}
 }

@@ -54,6 +54,12 @@ var migrations = [][]string{
 			result_issue_id INTEGER, error TEXT,
 			PRIMARY KEY(job_id, row_no))`,
 	},
+	// v2: 完了ジョブの保持期限(R2)のために完了時刻を持たせる。
+	// 既存行は NULL のままで、保持期限の判定は created_at で代用する
+	// (PurgeExpiredJobs のコメント参照)。
+	{
+		`ALTER TABLE jobs ADD COLUMN completed_at TEXT`,
+	},
 }
 
 // LatestSchemaVersion は最新スキーマバージョン。

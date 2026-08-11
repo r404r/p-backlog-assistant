@@ -2,8 +2,10 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 // newTestJob は検証用のジョブ(2 行)を作成し、ジョブ ID を返す。
@@ -225,5 +227,191 @@ func TestCreateJob_RejectsEmptyRows(t *testing.T) {
 	s := openTempStore(t)
 	if _, err := s.CreateJob(context.Background(), JobKindUpdate, 1, "a.xlsx", "h", nil); err == nil {
 		t.Fatal("空のジョブが作成された")
+	}
+}
+
+// --- 完了ジョブの保持期限(R2)---------------------------------------------
+
+// jobCompletedAt はジョブの完了時刻(未設定なら空文字)を返す(検証用)。
+func jobCompletedAt(t *testing.T, s *Store, jobID int64) string {
+	t.Helper()
+	var v sql.NullString
+	if err := s.DB().QueryRow(`SELECT completed_at FROM jobs WHERE id = ?`, jobID).Scan(&v); err != nil {
+		t.Fatal(err)
+	}
+	return v.String
+}
+
+// setJobTimes は保持期限の検証用に、ジョブの状態と時刻を直接書き換える。
+// completedAt に空文字を渡すと NULL(旧バージョンで作られたジョブ)にする。
+func setJobTimes(t *testing.T, s *Store, jobID int64, status, createdAt, completedAt string) {
+	t.Helper()
+	var completed any
+	if completedAt != "" {
+		completed = completedAt
+	}
+	if _, err := s.DB().Exec(
+		`UPDATE jobs SET status = ?, created_at = ?, completed_at = ? WHERE id = ?`,
+		status, createdAt, completed, jobID); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// setRowStatuses は保持期限の検証用に、ジョブの全行の状態を直接書き換える
+// (遷移規則を経由せずに任意の状態を作る)。
+func setRowStatuses(t *testing.T, s *Store, jobID int64, status string) {
+	t.Helper()
+	if _, err := s.DB().Exec(`UPDATE job_rows SET status = ? WHERE job_id = ?`, status, jobID); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func jobExists(t *testing.T, s *Store, jobID int64) bool {
+	t.Helper()
+	var n int
+	if err := s.DB().QueryRow(`SELECT COUNT(*) FROM jobs WHERE id = ?`, jobID).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	return n > 0
+}
+
+func jobRowCount(t *testing.T, s *Store, jobID int64) int {
+	t.Helper()
+	var n int
+	if err := s.DB().QueryRow(`SELECT COUNT(*) FROM job_rows WHERE job_id = ?`, jobID).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
+
+// TestSetJobStatus_RecordsCompletedAt は終端状態(done / canceled)への遷移で
+// 完了時刻を記録し、再実行(running / pending)で解除することを確認する(R2)。
+// 完了時刻は保持期限の起点になるため、再実行したジョブが古い完了時刻のまま
+// 消えないようにする。
+func TestSetJobStatus_RecordsCompletedAt(t *testing.T) {
+	s := openTempStore(t)
+	ctx := context.Background()
+	id := newTestJob(t, s)
+
+	if got := jobCompletedAt(t, s, id); got != "" {
+		t.Errorf("作成直後の completed_at = %q, want 空", got)
+	}
+	if err := s.SetJobStatus(ctx, id, JobStatusDone); err != nil {
+		t.Fatal(err)
+	}
+	done := jobCompletedAt(t, s, id)
+	if done == "" {
+		t.Fatal("done への遷移で completed_at が記録されない")
+	}
+	if _, err := time.Parse(time.RFC3339, done); err != nil {
+		t.Errorf("completed_at = %q, want RFC3339: %v", done, err)
+	}
+	// 再実行したら完了時刻は解除する
+	if err := s.SetJobStatus(ctx, id, JobStatusRunning); err != nil {
+		t.Fatal(err)
+	}
+	if got := jobCompletedAt(t, s, id); got != "" {
+		t.Errorf("再実行後の completed_at = %q, want 空", got)
+	}
+	// 中断も終端状態として記録する
+	if err := s.SetJobStatus(ctx, id, JobStatusCanceled); err != nil {
+		t.Fatal(err)
+	}
+	if jobCompletedAt(t, s, id) == "" {
+		t.Error("canceled への遷移で completed_at が記録されない")
+	}
+}
+
+// TestPurgeExpiredJobs は保持期限(完了から 90 日)を過ぎた完了ジョブだけを
+// 削除することを確認する(R2)。
+func TestPurgeExpiredJobs(t *testing.T) {
+	s := openTempStore(t)
+	ctx := context.Background()
+	now := time.Date(2026, 8, 12, 0, 0, 0, 0, time.UTC)
+	at := func(daysAgo int) string {
+		return now.AddDate(0, 0, -daysAgo).Format(time.RFC3339)
+	}
+
+	// 期限切れの完了ジョブ(削除対象)
+	expired := newTestJob(t, s)
+	setRowStatuses(t, s, expired, RowStatusDone)
+	setJobTimes(t, s, expired, JobStatusDone, at(120), at(91))
+
+	// 境界(完了からちょうど 90 日)は保持する
+	boundary := newTestJob(t, s)
+	setRowStatuses(t, s, boundary, RowStatusDone)
+	setJobTimes(t, s, boundary, JobStatusDone, at(120), at(90))
+
+	// 未完了(pending)のジョブは、どれだけ古くても消さない(再開データ)
+	pending := newTestJob(t, s)
+	setJobTimes(t, s, pending, JobStatusPending, at(400), "")
+
+	// 中断済みだが未送信の行が残るジョブも消さない(再開できる)
+	canceled := newTestJob(t, s)
+	setRowStatuses(t, s, canceled, RowStatusPending)
+	setJobTimes(t, s, canceled, JobStatusCanceled, at(400), at(300))
+
+	// 送信済みか不明な行(sending)が残るジョブも消さない(突合に使う)
+	sending := newTestJob(t, s)
+	setRowStatuses(t, s, sending, RowStatusSending)
+	setJobTimes(t, s, sending, JobStatusDone, at(400), at(300))
+
+	// 完了時刻を持たない旧バージョンのジョブは作成日時で判定する
+	legacy := newTestJob(t, s)
+	setRowStatuses(t, s, legacy, RowStatusError)
+	setJobTimes(t, s, legacy, JobStatusDone, at(200), "")
+
+	n, err := s.PurgeExpiredJobs(ctx, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 2 {
+		t.Errorf("削除件数 = %d, want 2", n)
+	}
+	for _, tc := range []struct {
+		name string
+		id   int64
+		want bool
+	}{
+		{"期限切れの完了ジョブ", expired, false},
+		{"境界(ちょうど 90 日)", boundary, true},
+		{"未完了ジョブ", pending, true},
+		{"未送信行が残る中断ジョブ", canceled, true},
+		{"sending 行が残るジョブ", sending, true},
+		{"完了時刻の無い旧ジョブ", legacy, false},
+	} {
+		if got := jobExists(t, s, tc.id); got != tc.want {
+			t.Errorf("%s の残存 = %v, want %v", tc.name, got, tc.want)
+		}
+		if !tc.want && jobRowCount(t, s, tc.id) != 0 {
+			t.Errorf("%s の job_rows が残っている", tc.name)
+		}
+	}
+}
+
+// TestOpen_PurgesExpiredJobs は DB オープン時(アプリ起動時)に
+// 期限切れの完了ジョブが整理されることを確認する(R2)。
+func TestOpen_PurgesExpiredJobs(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "example.backlog.jp_1.db")
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := newTestJob(t, s)
+	setRowStatuses(t, s, id, RowStatusDone)
+	old := time.Now().UTC().AddDate(0, 0, -200).Format(time.RFC3339)
+	setJobTimes(t, s, id, JobStatusDone, old, old)
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	s2, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s2.Close()
+	if jobExists(t, s2, id) {
+		t.Error("オープン時に期限切れの完了ジョブが整理されていない")
 	}
 }

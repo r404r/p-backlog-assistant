@@ -85,6 +85,20 @@ func (e *Engine) SyncUsers(ctx context.Context) (*Result, error) {
 		res.warn("ユーザ一覧(スペース全体)の取得権限がありません。プロジェクト単位の参加者からユーザ情報を合成します")
 	}
 
+	// 1-2. 縮退パス(プロジェクト単位取得)の前提確認(R1)。
+	//      縮退パスはローカル projects を唯一の入力にするため、プロジェクト同期が
+	//      未完了だと「まだ何も取得していない」状態を「参加プロジェクトが 0 件」と
+	//      取り違え、合成結果(空集合)で既存キャッシュを全置換してしまう。
+	//      ユーザ側は情報源そのものを失うため、明確なエラーで失敗させる
+	//      (この時点では DB を一切書き換えていないのでキャッシュは不変)。
+	projectsSynced, err := e.projectsSynced(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if degraded && !projectsSynced {
+		return nil, errors.New("ユーザ一覧(スペース全体)の取得権限がないため、プロジェクトの参加者からユーザ情報を合成する必要があります。プロジェクトを先に同期してください")
+	}
+
 	// 2. スペース全体のチーム一覧。チームの取得元は /users の成否ではなく
 	//    この結果で決める(高 1)。成功していれば完全な一覧が得られるため
 	//    プロジェクト単位の取得は不要、失敗していれば(403・一時エラーとも)
@@ -128,7 +142,7 @@ func (e *Engine) SyncUsers(ctx context.Context) (*Result, error) {
 	res.Upserted = len(rows)
 
 	// 6. teams / team_members の反映。判定基準はスペース /teams の結果(中 1)。
-	if err := e.applyTeams(ctx, spaceTeams, spaceTeamsErr, fetched, stats.teamFailed, res, fetchedAt); err != nil {
+	if err := e.applyTeams(ctx, spaceTeams, spaceTeamsErr, fetched, stats.teamFailed, projectsSynced, res, fetchedAt); err != nil {
 		return nil, err
 	}
 
@@ -151,6 +165,19 @@ func (e *Engine) SyncUsers(ctx context.Context) (*Result, error) {
 	}
 	res.DurationMs = e.now().Sub(start).Milliseconds()
 	return res, nil
+}
+
+// projectsSynced はプロジェクト同期が 1 度でも完了しているかを返す(R1)。
+//
+// ローカル projects が空であることには「参加プロジェクトが 0 件」と
+// 「まだ同期していない」の 2 つの意味があり、前者だけがキャッシュの全置換を
+// 正当化する。両者は sync_state(projects / project_id = 0)の有無で区別する。
+func (e *Engine) projectsSynced(ctx context.Context) (bool, error) {
+	st, err := e.st.GetSyncState(ctx, store.DataKindProjects, store.ProjectScopeAll)
+	if err != nil {
+		return false, err
+	}
+	return st != nil && st.LastSyncedAt != "", nil
 }
 
 // projectFetchConcurrency はプロジェクト単位取得の並列度。
@@ -305,12 +332,14 @@ func (e *Engine) fillProjectMembers(ctx context.Context, pm *projectMembers, use
 //   - 403: プロジェクト経由で合成した一覧を使う。全プロジェクトで取得できていれば
 //     全置換し(合成が空なら管理者由来キャッシュを破棄)、
 //     取りこぼしがあれば MergeTeams(削除なし)+ 警告に留める。
+//     ただしプロジェクトが未同期の場合は取りこぼしと同じ扱いにする(R1)。
 //   - 403 以外の一時エラー: キャッシュは破棄しない。プロジェクト経由で取得できた分が
 //     あれば MergeTeams で反映し、無ければ据え置く。いずれも警告を付ける。
 //
 // teamFailed はプロジェクト単位のチーム取得に失敗した件数。
+// projectsSynced はプロジェクト同期が完了しているか(R1)。
 func (e *Engine) applyTeams(ctx context.Context, spaceTeams []backlogclient.Team, spaceErr error,
-	fetched []projectMembers, teamFailed int, res *Result, fetchedAt string) error {
+	fetched []projectMembers, teamFailed int, projectsSynced bool, res *Result, fetchedAt string) error {
 	if spaceErr == nil {
 		return e.st.ReplaceTeams(ctx, toStoreTeams(spaceTeams, fetchedAt))
 	}
@@ -333,6 +362,18 @@ func (e *Engine) applyTeams(ctx context.Context, spaceTeams []backlogclient.Team
 			return err
 		}
 		res.warn("チーム一覧(スペース全体)を取得できませんでした。参加プロジェクト経由で取得できた分のみ反映しました(削除反映は行っていません): %v", spaceErr)
+		return nil
+	}
+
+	if !projectsSynced {
+		// プロジェクトが未同期では補完取得の対象自体が未確定で、「チームが 0 件」を
+		// 確認できない。既存キャッシュを空集合で破棄しないよう据え置く(R1)。
+		//
+		// 取得できた分のマージも行わない。ローカルに残っているプロジェクト行は
+		// 前回の同期時点のものでしかなく(現在も参加しているとは限らない)、
+		// そこから合成したチームを反映すると古い情報で上書きしてしまう。
+		// 警告どおり teams / team_members は完全に不変にする。
+		res.warn("チーム一覧(スペース全体)の取得権限がありません。プロジェクトが未同期のためチーム情報を補完できず、既存のチーム情報を据え置きます(プロジェクトを先に同期してください)")
 		return nil
 	}
 

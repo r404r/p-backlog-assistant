@@ -29,7 +29,6 @@ package export
 import (
 	"fmt"
 	"io"
-	"os"
 	"regexp"
 	"strconv"
 	"strings"
@@ -389,16 +388,9 @@ func ExportBulkTemplateToFile(path string, projectID int64, rows []BulkTemplateR
 	if err := validateBulkCustomFields(masters.CustomFields); err != nil {
 		return err
 	}
-	f, err := os.Create(path)
-	if err != nil {
-		return err
-	}
-	if err := ExportBulkTemplate(f, projectID, rows, masters); err != nil {
-		f.Close()
-		os.Remove(path)
-		return err
-	}
-	return f.Close()
+	return writeFileAtomic(path, func(w io.Writer) error {
+		return ExportBulkTemplate(w, projectID, rows, masters)
+	})
 }
 
 // ExportBulkTemplate は一括更新テンプレートを xlsx として w に書き出す。

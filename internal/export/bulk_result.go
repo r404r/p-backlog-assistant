@@ -12,7 +12,6 @@ package export
 import (
 	"fmt"
 	"io"
-	"os"
 
 	"github.com/xuri/excelize/v2"
 )
@@ -67,18 +66,12 @@ func BulkResultHeaders() []string {
 }
 
 // ExportBulkResultToFile は実行結果を xlsx として path に書き出す。
-// 書き出しに失敗した場合、書きかけのファイルは残さない。
+// 一時ファイルへ書き切ってから置換するため、失敗しても出力先の既存ファイルは
+// そのまま残り、書きかけのファイルも残らない(writeFileAtomic。R5)。
 func ExportBulkResultToFile(path string, rows []BulkResultRow) error {
-	f, err := os.Create(path)
-	if err != nil {
-		return err
-	}
-	if err := ExportBulkResult(f, rows); err != nil {
-		f.Close()
-		os.Remove(path)
-		return err
-	}
-	return f.Close()
+	return writeFileAtomic(path, func(w io.Writer) error {
+		return ExportBulkResult(w, rows)
+	})
 }
 
 // ExportBulkResult は実行結果を xlsx として w に書き出す。

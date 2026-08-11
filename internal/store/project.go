@@ -62,9 +62,14 @@ func (s *Store) ListProjects(ctx context.Context) ([]Project, error) {
 }
 
 // DeleteProjectsNotIn は keepIDs に含まれないプロジェクト行と、
-// その課題・プロジェクトユーザ・プロジェクト別同期状態のキャッシュを破棄する
+// その課題・プロジェクトユーザ・プロジェクト別同期状態・一括更新ジョブ
+// (jobs / job_rows)のキャッシュを破棄する
 // (設計書 2 節: プロジェクトから除外された場合に旧データをローカル検索から
 // 閲覧できる状態を残さない)。
+//
+// 呼び出し元は全削除を 1 つのトランザクションで実行すること(SyncProjects は
+// そうしている)。部分的に消えると、プロジェクトは消えたのにジョブの payload
+// だけ残る、といった状態になりうる。
 //
 // keepIDs が空の場合は「参加プロジェクトが 0 件」という正常応答を意味するため、
 // 全プロジェクトのキャッシュを破棄する(高 1)。呼び出し元(internal/sync の
@@ -101,6 +106,16 @@ func DeleteProjectsNotIn(ctx context.Context, q dbtx, keepIDs []int64) (int, err
 		return 0, err
 	}
 	if _, err := q.ExecContext(ctx, `DELETE FROM project_users`+byProject, args...); err != nil {
+		return 0, err
+	}
+	// 一括更新ジョブ(R2)。job_rows の payload には件名・詳細・カスタム属性が
+	// 入るため、閲覧できなくなったプロジェクトのものは課題と同じ扱いで破棄する。
+	// 行を先に消してから親ジョブを消す(親を先に消すと対象を特定できない)。
+	if _, err := q.ExecContext(ctx,
+		`DELETE FROM job_rows WHERE job_id IN (SELECT id FROM jobs`+byProject+`)`, args...); err != nil {
+		return 0, err
+	}
+	if _, err := q.ExecContext(ctx, `DELETE FROM jobs`+byProject, args...); err != nil {
 		return 0, err
 	}
 	// project_id = 0 はスペース共通(projects / users / teams)の同期状態なので残す

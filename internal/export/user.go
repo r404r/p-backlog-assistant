@@ -13,7 +13,6 @@ package export
 import (
 	"fmt"
 	"io"
-	"os"
 	"strconv"
 	"strings"
 
@@ -152,22 +151,16 @@ func resolveUserColumns(keys []string) ([]userColumn, error) {
 }
 
 // ExportUsersToFile はユーザ一覧を xlsx として path に書き出す。
-// 書き出しに失敗した場合、書きかけのファイルは残さない。
+// 一時ファイルへ書き切ってから置換するため、失敗しても出力先の既存ファイルは
+// そのまま残り、書きかけのファイルも残らない(writeFileAtomic。R5)。
 func ExportUsersToFile(path string, rows []UserExportRow, opts UserOptions) error {
 	// 列指定の検証はファイル生成前に済ませ、不正指定で空ファイルを作らない。
 	if _, err := resolveUserColumns(opts.Columns); err != nil {
 		return err
 	}
-	f, err := os.Create(path)
-	if err != nil {
-		return err
-	}
-	if err := ExportUsers(f, rows, opts); err != nil {
-		f.Close()
-		os.Remove(path)
-		return err
-	}
-	return f.Close()
+	return writeFileAtomic(path, func(w io.Writer) error {
+		return ExportUsers(w, rows, opts)
+	})
 }
 
 // ExportUsers はユーザ一覧を xlsx として w に書き出す。
