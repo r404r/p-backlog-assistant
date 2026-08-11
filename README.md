@@ -1,6 +1,6 @@
 # backlog-assistant
 
-Nulab [Backlog](https://backlog.com/ja/) の課題とユーザ情報を、ローカルにキャッシュしながら安全に抽出・一括更新するデスクトップアプリです。
+Nulab [Backlog](https://backlog.com/ja/) の課題とユーザ情報を、ローカルにキャッシュしながら安全に抽出・一括更新するデスクトップアプリです。MIT License のオープンソースソフトウェアです。
 
 - 技術スタック: [Wails v2](https://wails.io/) + Vue 3 + TypeScript / Go
 - ローカルキャッシュ: SQLite([modernc.org/sqlite](https://pkg.go.dev/modernc.org/sqlite)、純 Go)
@@ -86,3 +86,10 @@ wails build
 - TDD(Red → Green → Refactor)で進める
 - コミット前に Codex Review を 2 回実施する
 - 課題データ・実スペース情報などの実データをリポジトリ・ログに含めない
+
+## ライセンス
+
+MIT License です。全文は [LICENSE](LICENSE) を参照してください。
+
+- 作者: r404r
+- リポジトリ・不具合報告: <https://github.com/r404r/p-backlog-assistant>

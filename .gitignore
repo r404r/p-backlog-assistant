@@ -1,3 +1,24 @@
 build/bin
 node_modules
 frontend/dist
+
+# 注意: 以下のパターンは全階層に適用される。将来、匿名化済みの
+# テストフィクスチャ等を追跡したい場合は !testdata/**/*.xlsx のような
+# 明示的な例外を追加すること。
+
+# ローカル DB(取得した課題・ユーザデータを含む。WAL モードの副産物も対象)
+*.db
+*.db-wal
+*.db-shm
+*.db-journal
+# 動作ログ(パスや操作内容を含む)
+logs/
+# シークレット(スペース URL・API キー等)
+.env
+.env.*
+# 変数名とダミー値のみの雛形は追跡する
+!.env.example
+# Excel の入出力ファイル(実案件のデータを含む)
+*.xlsx
+# 接続プロファイル設定(スペース URL 等の実値を含む)
+config.json

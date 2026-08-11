@@ -8,8 +8,9 @@ import IssuesView from './views/IssuesView.vue'
 import BulkUpdateView from './views/BulkUpdateView.vue'
 import UsersView from './views/UsersView.vue'
 import SyncStatusView from './views/SyncStatusView.vue'
+import AboutView from './views/AboutView.vue'
 
-type ScreenId = 'settings' | 'issues' | 'bulkUpdate' | 'users' | 'syncStatus'
+type ScreenId = 'settings' | 'issues' | 'bulkUpdate' | 'users' | 'syncStatus' | 'about'
 
 interface Screen {
   id: ScreenId
@@ -25,6 +26,7 @@ const screens: Screen[] = [
   { id: 'bulkUpdate', label: '一括更新・追加', short: '一', component: BulkUpdateView },
   { id: 'users', label: 'ユーザ抽出', short: 'ユ', component: UsersView },
   { id: 'syncStatus', label: '同期状態', short: '同', component: SyncStatusView },
+  { id: 'about', label: 'アプリ情報', short: '情', component: AboutView },
 ]
 
 /** サイドバーの折りたたみ状態の保存先(次回起動時も維持する) */

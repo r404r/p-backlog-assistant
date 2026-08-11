@@ -90,18 +90,19 @@ jobs:
       - name: リリースビルド(バージョン埋め込み)
         shell: bash
         run: wails build -platform ${{ matrix.platform }} -clean -ldflags "-X main.version=$TAG"
-      - name: Windows 成果物の zip 化
+      - name: Windows 成果物の zip 化(LICENSE 同梱)
         if: runner.os == 'Windows'
         working-directory: build/bin
         shell: pwsh
-        run: Compress-Archive -Path backlog-assistant.exe -DestinationPath "backlog-assistant-$env:TAG-windows.zip"
-      - name: macOS 成果物の zip 化
+        run: Compress-Archive -Path backlog-assistant.exe, ..\..\LICENSE -DestinationPath "backlog-assistant-$env:TAG-windows.zip"
+      - name: macOS 成果物の zip 化(LICENSE 同梱)
         if: runner.os == 'macOS'
         working-directory: build/bin
         shell: bash
         run: |
           app=$(ls -d *.app | head -1)
           ditto -c -k --keepParent "$app" "backlog-assistant-$TAG-macos.zip"
+          zip -j "backlog-assistant-$TAG-macos.zip" ../../LICENSE
       - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
         with:
           name: ${{ matrix.artifact }}

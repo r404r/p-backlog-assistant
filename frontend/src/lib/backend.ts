@@ -614,14 +614,25 @@ interface WailsApp {
   GetAppVersion(): Promise<AppVersion>
 }
 
-/** Wails ランタイム(window.runtime)のうち本アプリが使うイベント購読 API */
+/** Wails ランタイム(window.runtime)のうち本アプリが使う API */
 interface WailsRuntime {
   EventsOn(name: string, callback: (...data: unknown[]) => void): () => void
+  /** 既定のブラウザで URL を開く */
+  BrowserOpenURL(url: string): void
+}
+
+/**
+ * window.runtime をそのまま返す(Wails 外では null)。
+ * 個々の API の有無は呼び出し側で確認する(ランタイムのバージョン差を吸収するため)。
+ */
+function findWailsRuntimeObject(): Partial<WailsRuntime> | null {
+  const w = window as unknown as Record<string, unknown>
+  const rt = w['runtime'] as Partial<WailsRuntime> | undefined
+  return rt ?? null
 }
 
 function findWailsRuntime(): WailsRuntime | null {
-  const w = window as unknown as Record<string, unknown>
-  const rt = w['runtime'] as Partial<WailsRuntime> | undefined
+  const rt = findWailsRuntimeObject()
   if (rt && typeof rt.EventsOn === 'function') {
     return rt as WailsRuntime
   }
@@ -1539,6 +1550,23 @@ export function getBackend(): Backend {
 /** モック動作中かどうか(UI での注記表示用) */
 export function isMockBackend(): boolean {
   return findWailsApp() === null
+}
+
+/**
+ * 外部リンクを OS の既定ブラウザで開く。
+ *
+ * デスクトップの WebView 内で通常のリンク遷移を行うとアプリの画面自体が
+ * 外部サイトに置き換わってしまうため、Wails ランタイムの BrowserOpenURL を使う。
+ * ランタイムが無い環境(vite dev / ビルド検証)や、古いランタイムで
+ * BrowserOpenURL が存在しない場合は window.open にフォールバックする。
+ */
+export function openExternalURL(url: string): void {
+  const rt = findWailsRuntimeObject()
+  if (rt && typeof rt.BrowserOpenURL === 'function') {
+    rt.BrowserOpenURL(url)
+    return
+  }
+  window.open(url, '_blank', 'noopener,noreferrer')
 }
 
 /**
