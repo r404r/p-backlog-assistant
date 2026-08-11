@@ -4,7 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"strconv"
+
+	"backlog-assistant/internal/customfield"
 )
 
 // 一括更新・追加の入力検証で使うマスタ取得(設計書 5 節)。
@@ -77,6 +80,100 @@ func (c *Client) GetProjectStatuses(ctx context.Context, projectID int64) ([]Sta
 	out := make([]Status, 0, len(items))
 	for _, it := range items {
 		out = append(out, Status{ID: it.id, Name: it.name})
+	}
+	return out, nil
+}
+
+// GetProjectCustomFields はプロジェクトのカスタム属性定義一覧を取得する。
+//
+// プロジェクトはキーでも ID でも指定できる(GetIssue と同じく文字列で受け、
+// パスへはエスケープして埋め込む)。
+// カスタム属性が使えないプラン・権限では 404 / 403 になるため、
+// 呼び出し側は ErrNotFound / ErrPermissionDenied で縮退を判断できる。
+func (c *Client) GetProjectCustomFields(ctx context.Context, projectIDOrKey string) ([]customfield.Def, error) {
+	body, err := c.rawGet(ctx, "/api/v2/projects/"+url.PathEscape(projectIDOrKey)+"/customFields", nil)
+	if err != nil {
+		return nil, err
+	}
+	return parseCustomFieldDefs(body)
+}
+
+// parseCustomFieldDefs はカスタム属性定義一覧の応答を解析する。
+// items / applicableIssueTypes が null になり得るため parseNamedItems では
+// 表現できず、専用に解析する。
+//
+// 異常応答の扱いは既存のマスタ取得(parseNamedItems)と同じ厳格さで、
+// JSON null(配列ではない)、id <= 0・typeId <= 0・名前欠落の要素、
+// 選択肢や適用課題種別の ID 欠落はエラーにする
+// (定義は列見出し・入力候補の根拠になるため、欠落を空として受理しない。
+// 未知の typeId 自体は将来の型追加に備えて受理する)。
+func parseCustomFieldDefs(body []byte) ([]customfield.Def, error) {
+	const what = "カスタム属性一覧"
+	elems, err := decodeArray(body, what)
+	if err != nil {
+		return nil, err
+	}
+	if elems == nil {
+		return nil, fmt.Errorf("%sの応答が不正です(JSON 配列ではありません)", what)
+	}
+	out := make([]customfield.Def, 0, len(elems))
+	for _, e := range elems {
+		var v struct {
+			ID                   *int64   `json:"id"`
+			TypeID               *int     `json:"typeId"`
+			Name                 *string  `json:"name"`
+			Description          *string  `json:"description"`
+			Required             *bool    `json:"required"`
+			ApplicableIssueTypes []*int64 `json:"applicableIssueTypes"`
+			AllowInput           *bool    `json:"allowInput"`
+			AllowAddItem         *bool    `json:"allowAddItem"`
+			Items                []struct {
+				ID           *int64  `json:"id"`
+				Name         *string `json:"name"`
+				DisplayOrder *int    `json:"displayOrder"`
+			} `json:"items"`
+		}
+		if err := json.Unmarshal(e, &v); err != nil {
+			return nil, fmt.Errorf("%sを解析できません: %w", what, err)
+		}
+		if derefInt64(v.ID) <= 0 {
+			return nil, fmt.Errorf("%sの応答が不正です(id が無い要素が含まれています)", what)
+		}
+		if v.TypeID == nil || *v.TypeID <= 0 {
+			return nil, fmt.Errorf("%sの応答が不正です(typeId が無い要素が含まれています)", what)
+		}
+		if derefString(v.Name) == "" {
+			return nil, fmt.Errorf("%sの応答が不正です(名前が無い要素が含まれています)", what)
+		}
+		def := customfield.Def{
+			ID:          derefInt64(v.ID),
+			TypeID:      *v.TypeID,
+			Name:        derefString(v.Name),
+			Description: derefString(v.Description),
+			Required:    v.Required != nil && *v.Required,
+			// null は「全課題種別に適用」を意味するため、空スライスへ寄せる
+			ApplicableIssueTypes: make([]int64, 0, len(v.ApplicableIssueTypes)),
+			AllowInput:           v.AllowInput != nil && *v.AllowInput,
+			AllowAddItem:         v.AllowAddItem != nil && *v.AllowAddItem,
+			Items:                make([]customfield.Item, 0, len(v.Items)),
+		}
+		for _, id := range v.ApplicableIssueTypes {
+			if derefInt64(id) <= 0 {
+				return nil, fmt.Errorf("%sの応答が不正です(適用課題種別の id が無い要素が含まれています)", what)
+			}
+			def.ApplicableIssueTypes = append(def.ApplicableIssueTypes, derefInt64(id))
+		}
+		for _, it := range v.Items {
+			if derefInt64(it.ID) <= 0 {
+				return nil, fmt.Errorf("%sの応答が不正です(選択肢の id が無い要素が含まれています)", what)
+			}
+			item := customfield.Item{ID: derefInt64(it.ID), Name: derefString(it.Name)}
+			if it.DisplayOrder != nil {
+				item.DisplayOrder = *it.DisplayOrder
+			}
+			def.Items = append(def.Items, item)
+		}
+		out = append(out, def)
 	}
 	return out, nil
 }

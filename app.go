@@ -16,6 +16,7 @@ import (
 	"backlog-assistant/internal/backlogclient"
 	"backlog-assistant/internal/bulk"
 	"backlog-assistant/internal/config"
+	"backlog-assistant/internal/customfield"
 	"backlog-assistant/internal/export"
 	"backlog-assistant/internal/service"
 	"backlog-assistant/internal/store"
@@ -1226,8 +1227,85 @@ func (a *App) ExportBulkResultExcel(profileID string, jobID int64) (*ExportResul
 	return &ExportResultDTO{Path: path, Rows: len(exportRows)}, nil
 }
 
-// GetMasterData は種別・優先度・状態のマスタを返す(取り込みの既定優先度選択などに使用)。
-func (a *App) GetMasterData(profileID string, projectID int64) (*bulk.MasterData, error) {
+// CustomFieldItemDTO はリスト系カスタム属性の選択肢
+// (frontend/src/lib/backend.ts の CustomFieldItem と対)。
+type CustomFieldItemDTO struct {
+	ID   int64  `json:"id"`
+	Name string `json:"name"`
+}
+
+// CustomFieldDefDTO はカスタム属性の定義
+// (frontend/src/lib/backend.ts の CustomFieldDef と対)。
+//
+// typeName は画面での型判定・表示に使うため Go 側で解決して渡す
+// (型 ID の対応表をフロントへ二重に持たせない)。
+type CustomFieldDefDTO struct {
+	ID          int64  `json:"id"`
+	TypeID      int    `json:"typeId"`
+	TypeName    string `json:"typeName"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	Required    bool   `json:"required"`
+	// ApplicableIssueTypes は適用対象の課題種別 ID(空 = 全課題種別)。
+	ApplicableIssueTypes []int64              `json:"applicableIssueTypes"`
+	AllowInput           bool                 `json:"allowInput"`
+	AllowAddItem         bool                 `json:"allowAddItem"`
+	Items                []CustomFieldItemDTO `json:"items"`
+}
+
+// MasterDataDTO は種別・優先度・状態・カスタム属性のマスタ
+// (frontend/src/lib/backend.ts の MasterData と対。各配列は null を返さない)。
+type MasterDataDTO struct {
+	IssueTypes   []bulk.NamedID      `json:"issueTypes"`
+	Priorities   []bulk.NamedID      `json:"priorities"`
+	Statuses     []bulk.NamedID      `json:"statuses"`
+	CustomFields []CustomFieldDefDTO `json:"customFields"`
+}
+
+// newMasterDataDTO はマスタを DTO へ写す(nil スライスは空スライスへ正規化)。
+func newMasterDataDTO(md *bulk.MasterData) *MasterDataDTO {
+	dto := &MasterDataDTO{
+		IssueTypes:   md.IssueTypes,
+		Priorities:   md.Priorities,
+		Statuses:     md.Statuses,
+		CustomFields: make([]CustomFieldDefDTO, 0, len(md.CustomFields)),
+	}
+	if dto.IssueTypes == nil {
+		dto.IssueTypes = []bulk.NamedID{}
+	}
+	if dto.Priorities == nil {
+		dto.Priorities = []bulk.NamedID{}
+	}
+	if dto.Statuses == nil {
+		dto.Statuses = []bulk.NamedID{}
+	}
+	for _, def := range md.CustomFields {
+		d := CustomFieldDefDTO{
+			ID:                   def.ID,
+			TypeID:               def.TypeID,
+			TypeName:             customfield.TypeName(def.TypeID),
+			Name:                 def.Name,
+			Description:          def.Description,
+			Required:             def.Required,
+			ApplicableIssueTypes: def.ApplicableIssueTypes,
+			AllowInput:           def.AllowInput,
+			AllowAddItem:         def.AllowAddItem,
+			Items:                make([]CustomFieldItemDTO, 0, len(def.Items)),
+		}
+		if d.ApplicableIssueTypes == nil {
+			d.ApplicableIssueTypes = []int64{}
+		}
+		for _, it := range def.Items {
+			d.Items = append(d.Items, CustomFieldItemDTO{ID: it.ID, Name: it.Name})
+		}
+		dto.CustomFields = append(dto.CustomFields, d)
+	}
+	return dto
+}
+
+// GetMasterData は種別・優先度・状態・カスタム属性のマスタを返す
+// (取り込みの既定優先度選択などに使用)。
+func (a *App) GetMasterData(profileID string, projectID int64) (*MasterDataDTO, error) {
 	const op = "GetMasterData"
 	attrs := []slog.Attr{slog.String("profileId", profileID), slog.Int64("projectId", projectID)}
 	a.logStart(op, attrs...)
@@ -1241,18 +1319,11 @@ func (a *App) GetMasterData(profileID string, projectID int64) (*bulk.MasterData
 		a.logEnd(op, err, attrs...)
 		return nil, err
 	}
-	if md.IssueTypes == nil {
-		md.IssueTypes = []bulk.NamedID{}
-	}
-	if md.Priorities == nil {
-		md.Priorities = []bulk.NamedID{}
-	}
-	if md.Statuses == nil {
-		md.Statuses = []bulk.NamedID{}
-	}
+	dto := newMasterDataDTO(md)
 	a.logEnd(op, nil, append(attrs,
-		slog.Int("issueTypes", len(md.IssueTypes)),
-		slog.Int("priorities", len(md.Priorities)),
-		slog.Int("statuses", len(md.Statuses)))...)
-	return md, nil
+		slog.Int("issueTypes", len(dto.IssueTypes)),
+		slog.Int("priorities", len(dto.Priorities)),
+		slog.Int("statuses", len(dto.Statuses)),
+		slog.Int("customFields", len(dto.CustomFields)))...)
+	return dto, nil
 }

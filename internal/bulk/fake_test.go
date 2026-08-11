@@ -10,6 +10,7 @@ import (
 	"github.com/xuri/excelize/v2"
 
 	"backlog-assistant/internal/backlogclient"
+	"backlog-assistant/internal/customfield"
 	"backlog-assistant/internal/export"
 	"backlog-assistant/internal/store"
 )
@@ -22,24 +23,27 @@ type fakeAPI struct {
 	// remote は課題キー → リモートの課題(競合検知の再取得で返す)。
 	remote map[string]backlogclient.Issue
 
-	issueTypes []backlogclient.IssueType
-	priorities []backlogclient.Priority
-	statuses   []backlogclient.Status
+	issueTypes   []backlogclient.IssueType
+	priorities   []backlogclient.Priority
+	statuses     []backlogclient.Status
+	customFields []customfield.Def
 
 	// listed は課題一覧(再送前突合で返す既存課題)。
 	listed []backlogclient.Issue
 
 	// 呼び出し記録
-	creates    []backlogclient.IssueCreate
-	updates    []updateCall
-	getCalls   []string
-	listCalls  []backlogclient.IssueQuery
-	nextIssue  int64
-	createErr  error
-	updateErr  error
-	getErr     error
-	listErr    error
-	beforeCall func() // 各書き込みの直前フック(キャンセル検証用)
+	creates          []backlogclient.IssueCreate
+	updates          []updateCall
+	getCalls         []string
+	listCalls        []backlogclient.IssueQuery
+	customFieldCalls []string
+	nextIssue        int64
+	createErr        error
+	updateErr        error
+	getErr           error
+	listErr          error
+	customFieldsErr  error
+	beforeCall       func() // 各書き込みの直前フック(キャンセル検証用)
 }
 
 type updateCall struct {
@@ -59,6 +63,20 @@ func newFakeAPI() *fakeAPI {
 		},
 		statuses: []backlogclient.Status{
 			{ID: 1, Name: "未対応"}, {ID: 2, Name: "処理中"}, {ID: 4, Name: "完了"},
+		},
+		customFields: []customfield.Def{
+			{
+				ID: 31, TypeID: customfield.TypeText, Name: "顧客名", Required: true,
+				ApplicableIssueTypes: []int64{}, Items: []customfield.Item{},
+			},
+			{
+				ID: 32, TypeID: customfield.TypeSingleList, Name: "重要度",
+				ApplicableIssueTypes: []int64{11},
+				Items: []customfield.Item{
+					{ID: 321, Name: "高", DisplayOrder: 0},
+					{ID: 322, Name: "低", DisplayOrder: 1},
+				},
+			},
 		},
 		nextIssue: 1000,
 	}
@@ -126,6 +144,14 @@ func (f *fakeAPI) GetPriorities(ctx context.Context) ([]backlogclient.Priority, 
 
 func (f *fakeAPI) GetProjectStatuses(ctx context.Context, projectID int64) ([]backlogclient.Status, error) {
 	return f.statuses, nil
+}
+
+func (f *fakeAPI) GetProjectCustomFields(ctx context.Context, projectIDOrKey string) ([]customfield.Def, error) {
+	f.customFieldCalls = append(f.customFieldCalls, projectIDOrKey)
+	if f.customFieldsErr != nil {
+		return nil, f.customFieldsErr
+	}
+	return f.customFields, nil
 }
 
 // testMaster は検証用のマスタ(fakeAPI と同じ内容)。

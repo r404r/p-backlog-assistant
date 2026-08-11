@@ -351,11 +351,44 @@ export interface MasterItem {
   name: string
 }
 
+/** リスト系カスタム属性の選択肢(Go 側 main.CustomFieldItemDTO と対) */
+export interface CustomFieldItem {
+  id: number
+  name: string
+}
+
+/** カスタム属性の定義(Go 側 main.CustomFieldDefDTO と対) */
+export interface CustomFieldDef {
+  id: number
+  /** 型 ID(1=文字列 / 2=文章 / 3=数値 / 4=日付 / 5=単一リスト / 6=複数リスト / 7=チェックボックス / 8=ラジオ) */
+  typeId: number
+  /** 型の表示名(Go 側で解決済み。未知の型は「不明(N)」) */
+  typeName: string
+  name: string
+  description: string
+  /** 入力必須かどうか */
+  required: boolean
+  /** 適用対象の課題種別 ID(空配列 = 全課題種別に適用) */
+  applicableIssueTypes: number[]
+  /**
+   * リスト系で「その他」の直接入力を許すか。
+   * API 応答に含まれない場合は false(「不明」と区別できないため、
+   * 入力可否の判定には使わず表示・案内のみに使う)
+   */
+  allowInput: boolean
+  /** リスト系で課題登録時に選択肢自体の追加を許すか(「その他」入力とは別機能) */
+  allowAddItem: boolean
+  /** リスト系の選択肢(リスト系以外は空配列) */
+  items: CustomFieldItem[]
+}
+
 /** プロジェクトのマスタデータ(取り込み時の既定値選択・表示に使う) */
 export interface MasterData {
   issueTypes: MasterItem[]
   priorities: MasterItem[]
   statuses: MasterItem[]
+  /** カスタム属性の定義(未対応プラン・権限不足のスペースでは空配列) */
+  customFields: CustomFieldDef[]
 }
 
 /** 一括実行の進捗(Wails イベント 'bulk:progress' のペイロード) */
@@ -732,6 +765,8 @@ function createWailsBackend(app: WailsApp): Backend {
         issueTypes: r?.issueTypes ?? [],
         priorities: r?.priorities ?? [],
         statuses: r?.statuses ?? [],
+        // 旧バージョンのバインディング(カスタム属性未実装)でも画面を壊さない
+        customFields: r?.customFields ?? [],
       }
     },
     getLogInfo: async () => {
@@ -910,6 +945,77 @@ const MOCK_MASTER: MasterData = {
     { id: 2, name: '処理中' },
     { id: 3, name: '処理済み' },
     { id: 4, name: '完了' },
+  ],
+  // 代表的な 5 型のカスタム属性(実在のプロジェクト設定は含まない)
+  customFields: [
+    {
+      id: 3001,
+      typeId: 1,
+      typeName: '文字列',
+      name: '顧客名',
+      description: '取引先の名称',
+      required: false,
+      applicableIssueTypes: [],
+      allowInput: false,
+      allowAddItem: false,
+      items: [],
+    },
+    {
+      id: 3002,
+      typeId: 3,
+      typeName: '数値',
+      name: '見積工数(時間)',
+      description: '',
+      required: false,
+      applicableIssueTypes: [1001],
+      allowInput: false,
+      allowAddItem: false,
+      items: [],
+    },
+    {
+      id: 3003,
+      typeId: 4,
+      typeName: '日付',
+      name: 'リリース予定日',
+      description: '',
+      required: false,
+      applicableIssueTypes: [],
+      allowInput: false,
+      allowAddItem: false,
+      items: [],
+    },
+    {
+      id: 3004,
+      typeId: 5,
+      typeName: '単一リスト',
+      name: '影響範囲',
+      description: '',
+      required: true,
+      applicableIssueTypes: [1002],
+      allowInput: true,
+      allowAddItem: false,
+      items: [
+        { id: 30041, name: '軽微' },
+        { id: 30042, name: '中程度' },
+        { id: 30043, name: '重大' },
+      ],
+    },
+    {
+      id: 3005,
+      typeId: 6,
+      typeName: '複数リスト',
+      name: '対象環境',
+      description: '',
+      required: false,
+      applicableIssueTypes: [],
+      allowInput: false,
+      allowAddItem: false,
+      items: [
+        { id: 30051, name: 'Windows' },
+        { id: 30052, name: 'macOS' },
+        { id: 30053, name: 'Linux' },
+      ],
+    },
   ],
 }
 
@@ -1382,6 +1488,11 @@ function createMockBackend(): Backend {
         issueTypes: MOCK_MASTER.issueTypes.map((m) => ({ ...m })),
         priorities: MOCK_MASTER.priorities.map((m) => ({ ...m })),
         statuses: MOCK_MASTER.statuses.map((m) => ({ ...m })),
+        customFields: MOCK_MASTER.customFields.map((f) => ({
+          ...f,
+          applicableIssueTypes: [...f.applicableIssueTypes],
+          items: f.items.map((i) => ({ ...i })),
+        })),
       }
     },
 

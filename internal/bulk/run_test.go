@@ -3,6 +3,7 @@ package bulk
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"backlog-assistant/internal/backlogclient"
+	"backlog-assistant/internal/customfield"
 	"backlog-assistant/internal/store"
 )
 
@@ -777,5 +779,67 @@ func TestFetchMasterData(t *testing.T) {
 	}
 	if master.IssueTypes[0].Name != "タスク" {
 		t.Errorf("種別 = %+v", master.IssueTypes)
+	}
+}
+
+// TestFetchMasterData_CustomFields はカスタム属性定義もマスタに載ること、
+// プロジェクトが ID の文字列表現で渡ることを確認する。
+func TestFetchMasterData_CustomFields(t *testing.T) {
+	api := newFakeAPI()
+	master, err := FetchMasterData(context.Background(), api, testProjectID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := api.customFieldCalls; len(got) != 1 || got[0] != strconv.FormatInt(testProjectID, 10) {
+		t.Errorf("カスタム属性の取得引数 = %v", got)
+	}
+	if len(master.CustomFields) != 2 {
+		t.Fatalf("カスタム属性 = %+v", master.CustomFields)
+	}
+	if master.CustomFields[0].Name != "顧客名" || master.CustomFields[0].TypeID != customfield.TypeText {
+		t.Errorf("カスタム属性[0] = %+v", master.CustomFields[0])
+	}
+	if len(master.CustomFields[1].Items) != 2 {
+		t.Errorf("カスタム属性[1].Items = %+v", master.CustomFields[1].Items)
+	}
+}
+
+// TestFetchMasterData_CustomFieldsDegrades はカスタム属性を使えないスペース
+// (プラン未対応 = 404 / 権限不足 = 403)でもマスタ取得全体は成功し、
+// カスタム属性だけが空になることを確認する。
+func TestFetchMasterData_CustomFieldsDegrades(t *testing.T) {
+	for name, cause := range map[string]error{
+		"404(プラン未対応)": backlogclient.ErrNotFound,
+		"403(権限不足)":   backlogclient.ErrPermissionDenied,
+	} {
+		t.Run(name, func(t *testing.T) {
+			api := newFakeAPI()
+			api.customFieldsErr = fmt.Errorf("%w: GET /api/v2/projects/1/customFields", cause)
+
+			master, err := FetchMasterData(context.Background(), api, testProjectID)
+			if err != nil {
+				t.Fatalf("カスタム属性の失敗でマスタ取得全体が失敗した: %v", err)
+			}
+			if master.CustomFields == nil || len(master.CustomFields) != 0 {
+				t.Errorf("カスタム属性 = %#v, want 空スライス", master.CustomFields)
+			}
+			// 他のマスタは従来どおり取得できる
+			if len(master.IssueTypes) != 2 || len(master.Priorities) != 3 || len(master.Statuses) != 3 {
+				t.Errorf("master = %+v", master)
+			}
+		})
+	}
+}
+
+// TestFetchMasterData_CustomFieldsPropagatesOtherErrors は 404 / 403 以外の失敗
+// (通信断・サーバエラー等)は握りつぶさずエラーにすることを確認する。
+func TestFetchMasterData_CustomFieldsPropagatesOtherErrors(t *testing.T) {
+	api := newFakeAPI()
+	api.customFieldsErr = errors.New("HTTP リクエストに失敗しました")
+
+	if _, err := FetchMasterData(context.Background(), api, testProjectID); err == nil {
+		t.Fatal("カスタム属性の取得失敗がエラーにならなかった")
+	} else if !strings.Contains(err.Error(), "カスタム属性") {
+		t.Errorf("エラーメッセージ = %q", err.Error())
 	}
 }

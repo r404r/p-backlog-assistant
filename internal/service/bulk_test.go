@@ -9,6 +9,7 @@ import (
 
 	"backlog-assistant/internal/backlogclient"
 	"backlog-assistant/internal/bulk"
+	"backlog-assistant/internal/customfield"
 	"backlog-assistant/internal/store"
 )
 
@@ -29,6 +30,9 @@ func newBulkTestService(t *testing.T) (*ProfileService, string, *fakeConnector) 
 		issueTypes: []backlogclient.IssueType{{ID: 11, Name: "タスク", ProjectID: 1}},
 		priorities: []backlogclient.Priority{{ID: 2, Name: "高"}, {ID: 3, Name: "中"}},
 		statuses:   []backlogclient.Status{{ID: 1, Name: "未対応"}, {ID: 2, Name: "処理中"}},
+		customFields: []customfield.Def{
+			{ID: 31, TypeID: customfield.TypeText, Name: "顧客名"},
+		},
 	}
 	s, id := newSyncTestService(t, fake)
 	if _, err := s.SyncIssues(context.Background(), id, 1, "full"); err != nil {
@@ -76,6 +80,10 @@ func TestGetMasterData(t *testing.T) {
 	}
 	if len(master.Priorities) != 2 || len(master.Statuses) != 2 {
 		t.Errorf("master = %+v", master)
+	}
+	// カスタム属性定義もサービス層を通って返る
+	if len(master.CustomFields) != 1 || master.CustomFields[0].Name != "顧客名" {
+		t.Errorf("カスタム属性 = %+v", master.CustomFields)
 	}
 }
 

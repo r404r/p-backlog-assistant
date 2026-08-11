@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 
+	"backlog-assistant/internal/bulk"
+	"backlog-assistant/internal/customfield"
 	"backlog-assistant/internal/store"
 )
 
@@ -99,4 +101,68 @@ func TestMaskPathInErrorReplacesFullPathWithPlaceholder(t *testing.T) {
 			t.Errorf("空パスでエラーが差し替えられました: %v", got)
 		}
 	})
+}
+
+// TestNewMasterDataDTO_ConvertsCustomFields はカスタム属性定義が DTO へ写り、
+// 型名がフロント側で解決不要な形(typeName)で載ることを確認する。
+func TestNewMasterDataDTO_ConvertsCustomFields(t *testing.T) {
+	dto := newMasterDataDTO(&bulk.MasterData{
+		IssueTypes: []bulk.NamedID{{ID: 11, Name: "タスク"}},
+		Priorities: []bulk.NamedID{{ID: 3, Name: "中"}},
+		Statuses:   []bulk.NamedID{{ID: 1, Name: "未対応"}},
+		CustomFields: []customfield.Def{
+			{
+				ID: 31, TypeID: customfield.TypeSingleList, Name: "重要度",
+				Description: "説明", Required: true,
+				ApplicableIssueTypes: []int64{11, 12}, AllowAddItem: true,
+				Items: []customfield.Item{{ID: 311, Name: "高", DisplayOrder: 0}},
+			},
+			// 型 ID が未知でも表示から値が消えないこと
+			{ID: 32, TypeID: 99, Name: "将来の型"},
+		},
+	})
+
+	if len(dto.CustomFields) != 2 {
+		t.Fatalf("カスタム属性 = %+v", dto.CustomFields)
+	}
+	first := dto.CustomFields[0]
+	if first.ID != 31 || first.TypeID != customfield.TypeSingleList || first.TypeName != "単一リスト" {
+		t.Errorf("customFields[0] = %+v", first)
+	}
+	if first.Name != "重要度" || first.Description != "説明" || !first.Required || !first.AllowAddItem {
+		t.Errorf("customFields[0] = %+v", first)
+	}
+	if len(first.ApplicableIssueTypes) != 2 || first.ApplicableIssueTypes[1] != 12 {
+		t.Errorf("customFields[0].ApplicableIssueTypes = %v", first.ApplicableIssueTypes)
+	}
+	if len(first.Items) != 1 || first.Items[0].ID != 311 || first.Items[0].Name != "高" {
+		t.Errorf("customFields[0].Items = %+v", first.Items)
+	}
+	if dto.CustomFields[1].TypeName != "不明(99)" {
+		t.Errorf("未知の型名 = %q", dto.CustomFields[1].TypeName)
+	}
+}
+
+// TestNewMasterDataDTO_NormalizesNilSlices は nil スライスを空スライスへ
+// 正規化すること(フロント契約: null を返さない)を確認する。
+func TestNewMasterDataDTO_NormalizesNilSlices(t *testing.T) {
+	dto := newMasterDataDTO(&bulk.MasterData{
+		CustomFields: []customfield.Def{{ID: 31, TypeID: customfield.TypeText, Name: "顧客名"}},
+	})
+
+	if dto.IssueTypes == nil || dto.Priorities == nil || dto.Statuses == nil {
+		t.Errorf("マスタが nil: %+v", dto)
+	}
+	if dto.CustomFields[0].ApplicableIssueTypes == nil {
+		t.Error("applicableIssueTypes が nil(空スライスにすること)")
+	}
+	if dto.CustomFields[0].Items == nil {
+		t.Error("items が nil(空スライスにすること)")
+	}
+
+	// カスタム属性そのものが nil(未対応スペースでの縮退)でも空スライスを返す
+	empty := newMasterDataDTO(&bulk.MasterData{})
+	if empty.CustomFields == nil || len(empty.CustomFields) != 0 {
+		t.Errorf("customFields = %#v, want 空スライス", empty.CustomFields)
+	}
 }

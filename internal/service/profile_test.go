@@ -14,6 +14,7 @@ import (
 
 	"backlog-assistant/internal/backlogclient"
 	"backlog-assistant/internal/config"
+	"backlog-assistant/internal/customfield"
 	"backlog-assistant/internal/secret"
 	"backlog-assistant/internal/store"
 )
@@ -66,12 +67,13 @@ type fakeConnector struct {
 	rateLimit []backlogclient.CategoryStatus
 
 	// 一括更新・追加(bulk.API)の応答と呼び出し記録。
-	issueTypes []backlogclient.IssueType
-	priorities []backlogclient.Priority
-	statuses   []backlogclient.Status
-	created    []backlogclient.IssueCreate
-	updated    []string
-	writeErr   error
+	issueTypes   []backlogclient.IssueType
+	priorities   []backlogclient.Priority
+	statuses     []backlogclient.Status
+	customFields []customfield.Def
+	created      []backlogclient.IssueCreate
+	updated      []string
+	writeErr     error
 }
 
 func (f *fakeConnector) GetProjects(ctx context.Context) ([]backlogclient.Project, error) {
@@ -178,6 +180,10 @@ func (f *fakeConnector) GetPriorities(ctx context.Context) ([]backlogclient.Prio
 
 func (f *fakeConnector) GetProjectStatuses(ctx context.Context, projectID int64) ([]backlogclient.Status, error) {
 	return f.statuses, nil
+}
+
+func (f *fakeConnector) GetProjectCustomFields(ctx context.Context, projectIDOrKey string) ([]customfield.Def, error) {
+	return f.customFields, nil
 }
 
 func (f *fakeConnector) TestConnection(ctx context.Context) (*backlogclient.ConnectionInfo, error) {

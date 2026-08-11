@@ -15,9 +15,12 @@ package bulk
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"strconv"
 
 	"backlog-assistant/internal/backlogclient"
+	"backlog-assistant/internal/customfield"
 )
 
 // ClearToken はフィールドのクリアを指示する専用値(設計書 5 節)。
@@ -42,6 +45,10 @@ type API interface {
 	GetProjectIssueTypes(ctx context.Context, projectID int64) ([]backlogclient.IssueType, error)
 	GetPriorities(ctx context.Context) ([]backlogclient.Priority, error)
 	GetProjectStatuses(ctx context.Context, projectID int64) ([]backlogclient.Status, error)
+	// GetProjectCustomFields はカスタム属性の定義を取得する。
+	// プロジェクトはキーでも指定できる API のため、引数は文字列
+	// (backlogclient のシグネチャに合わせる)。
+	GetProjectCustomFields(ctx context.Context, projectIDOrKey string) ([]customfield.Def, error)
 }
 
 // コンパイル時チェック: *backlogclient.Client が API を満たすこと。
@@ -58,9 +65,13 @@ type MasterData struct {
 	IssueTypes []NamedID `json:"issueTypes"`
 	Priorities []NamedID `json:"priorities"`
 	Statuses   []NamedID `json:"statuses"`
+	// CustomFields はプロジェクトのカスタム属性定義。
+	// 未対応・権限不足のスペースでは空になる(FetchMasterData の縮退)。
+	CustomFields []customfield.Def `json:"customFields"`
 }
 
-// FetchMasterData はプロジェクトの種別・状態とスペースの優先度を取得する。
+// FetchMasterData はプロジェクトの種別・状態・カスタム属性定義と
+// スペースの優先度を取得する。
 func FetchMasterData(ctx context.Context, api API, projectID int64) (*MasterData, error) {
 	types, err := api.GetProjectIssueTypes(ctx, projectID)
 	if err != nil {
@@ -74,10 +85,15 @@ func FetchMasterData(ctx context.Context, api API, projectID int64) (*MasterData
 	if err != nil {
 		return nil, fmt.Errorf("状態一覧の取得に失敗しました: %w", err)
 	}
+	customFields, err := fetchCustomFields(ctx, api, projectID)
+	if err != nil {
+		return nil, err
+	}
 	m := &MasterData{
-		IssueTypes: make([]NamedID, 0, len(types)),
-		Priorities: make([]NamedID, 0, len(priorities)),
-		Statuses:   make([]NamedID, 0, len(statuses)),
+		IssueTypes:   make([]NamedID, 0, len(types)),
+		Priorities:   make([]NamedID, 0, len(priorities)),
+		Statuses:     make([]NamedID, 0, len(statuses)),
+		CustomFields: customFields,
 	}
 	for _, t := range types {
 		m.IssueTypes = append(m.IssueTypes, NamedID{ID: t.ID, Name: t.Name})
@@ -89,6 +105,28 @@ func FetchMasterData(ctx context.Context, api API, projectID int64) (*MasterData
 		m.Statuses = append(m.Statuses, NamedID{ID: s.ID, Name: s.Name})
 	}
 	return m, nil
+}
+
+// fetchCustomFields はカスタム属性定義を取得する。
+//
+// 他のマスタと違い、404(カスタム属性 API が使えないプラン・
+// プロジェクト未参照)と 403(権限不足)はエラーにせず空スライスへ縮退する。
+// カスタム属性は種別・状態・優先度と異なり「無くても一括更新は成立する」
+// 付加情報であり、使っていないスペースで画面全体を止めないため。
+// それ以外の失敗(通信断・サーバエラー等)は隠さずエラーにする。
+// 縮退したことは戻り値では区別しない(ログ出力は呼び出し元の責務)。
+func fetchCustomFields(ctx context.Context, api API, projectID int64) ([]customfield.Def, error) {
+	defs, err := api.GetProjectCustomFields(ctx, strconv.FormatInt(projectID, 10))
+	if err != nil {
+		if errors.Is(err, backlogclient.ErrNotFound) || errors.Is(err, backlogclient.ErrPermissionDenied) {
+			return []customfield.Def{}, nil
+		}
+		return nil, fmt.Errorf("カスタム属性一覧の取得に失敗しました: %w", err)
+	}
+	if defs == nil {
+		return []customfield.Def{}, nil
+	}
+	return defs, nil
 }
 
 // Payload は job_rows.payload に保存する送信内容。
