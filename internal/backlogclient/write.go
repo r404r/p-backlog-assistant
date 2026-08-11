@@ -115,6 +115,9 @@ type IssueCreate struct {
 	Description *string // nil = 送信しない
 	AssigneeID  *int64  // nil = 送信しない
 	DueDate     *string // nil = 送信しない(yyyy-MM-dd)
+	// ParentIssueID は親課題 ID(nil = 送信しない。CF5)。
+	// 新規追加では既存課題だけを親に指定できる(検証は呼び出し側 internal/bulk)。
+	ParentIssueID *int64
 	// CustomFields は customField_{定義ID} として送るカスタム属性(空なら送信しない)。
 	CustomFields []customfield.InputValue
 }
@@ -136,6 +139,8 @@ type IssueUpdate struct {
 	StatusID    *int64 // 更新のみ(新規追加では指定できない)
 	AssigneeID  *int64 // 0 = クリア(未割当にする)
 	DueDate     *string
+	// ParentIssueID は親課題 ID(0 = クリア(親子関係の解除)。CF5)。
+	ParentIssueID *int64
 	// CustomFields は変更するカスタム属性だけを並べる(載っていない属性は変更しない)。
 	CustomFields []customfield.InputValue
 }
@@ -171,6 +176,15 @@ func (u IssueUpdate) values() url.Values {
 		// assigneeId と同じく、空文字による期限クリアは公式仕様に明記が無いため
 		// 要実機確認(中 5)。検証されるまで #CLEAR#(期限)の結果は保証されない。
 		v.Set("dueDate", *u.DueDate) // "" でクリア
+	}
+	if u.ParentIssueID != nil {
+		if *u.ParentIssueID <= 0 {
+			// 親子関係の解除は API 仕様に明記が無く、assigneeId・dueDate と同じく
+			// 空文字パラメータによるクリアを送る(実機検証中。計画 CF5 の留保)。
+			v.Set("parentIssueId", "") // クリア(親子関係の解除)
+		} else {
+			v.Set("parentIssueId", strconv.FormatInt(*u.ParentIssueID, 10))
+		}
 	}
 	addCustomFields(v, u.CustomFields)
 	return v
@@ -229,6 +243,10 @@ func (c *Client) CreateIssue(ctx context.Context, in IssueCreate) (*Issue, error
 	}
 	if in.DueDate != nil {
 		v.Set("dueDate", *in.DueDate)
+	}
+	if in.ParentIssueID != nil && *in.ParentIssueID > 0 {
+		// 新規追加でのクリアは意味を持たないため、正の ID のみ送信する
+		v.Set("parentIssueId", strconv.FormatInt(*in.ParentIssueID, 10))
 	}
 	addCustomFields(v, in.CustomFields)
 	body, err := c.rawForm(ctx, http.MethodPost, "/api/v2/issues", v)

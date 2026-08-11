@@ -50,7 +50,8 @@ func testMasterWithCustomFields() MasterData {
 	return m
 }
 
-// customTemplateHeaders は固定 13 列 + カスタム属性列(定義順)のヘッダ。
+// customTemplateHeaders は固定列 + カスタム属性列(定義順)のヘッダ。
+// 列はヘッダ名で解決するため、この検証で使わない親課題キー列は省いている。
 var customTemplateHeaders = append(append([]string{}, templateHeaders...),
 	"属性:顧客名", "属性:見積工数", "属性:開始日", "属性:重要度",
 	"属性:タグ", "属性:対象OS", "属性:区分", "属性:必須メモ")
@@ -492,8 +493,8 @@ func TestImport_CustomField_AcceptsExportedTemplate(t *testing.T) {
 		t.Fatalf("未編集の行 = %+v, want skip", p)
 	}
 
-	// 属性列(Q 列 = 属性:重要度)を編集すると更新になる
-	editTemplateCells(t, path, map[string]string{"Q2": "低"})
+	// 属性列(R 列 = 属性:重要度)を編集すると更新になる
+	editTemplateCells(t, path, map[string]string{"R2": "低"})
 	edited := importExported()
 	if !edited.Valid {
 		t.Fatalf("カスタム属性の編集がエラーになった: %+v", edited.Errors)

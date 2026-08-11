@@ -22,7 +22,7 @@ var wantBulkHeaders = []string{
 	"状態ID", "状態名",
 	"優先度ID", "優先度名",
 	"担当者ID", "担当者名",
-	"期限", "詳細", "base_updated",
+	"期限", "詳細", "親課題キー", "base_updated",
 }
 
 // sampleBulkRows はテスト用のテンプレート行(実データ・実在 URL は含めない)。
@@ -35,7 +35,8 @@ func sampleBulkRows() []BulkTemplateRow {
 			PriorityID: 2, PriorityName: "中",
 			AssigneeID: 12345, AssigneeName: "テスト太郎",
 			DueDate: "2026-03-04T00:00:00Z", Description: "詳細本文 1",
-			BaseUpdated: "2026-02-03T04:05:06Z",
+			ParentIssueKey: "EX-9",
+			BaseUpdated:    "2026-02-03T04:05:06Z",
 		},
 		{
 			// 担当者・期限が未設定の行。ID 0 は空セルにする(取り込み側で「未指定」と区別するため)
@@ -280,6 +281,8 @@ func TestExportBulkTemplate_Values(t *testing.T) {
 		// 担当者名は同名を区別できるよう「表示名 (ID)」形式で出力する
 		"12345", "テスト太郎 (12345)",
 		"2026-03-04", "詳細本文 1",
+		// 親課題キー(CF5。ローカルに無い親は ID:<数値> 形式)
+		"EX-9",
 		"2026-02-03T04:05:06Z",
 	}
 	if !equalStrings(rows[1], want1) {
@@ -294,6 +297,8 @@ func TestExportBulkTemplate_Values(t *testing.T) {
 		// 担当者 ID 0 は空セル(「0 番の担当者」と誤読させない)
 		"", "",
 		"", "",
+		// 親課題なしは空セル
+		"",
 		// base_updated はパースできない値でも生値のまま(競合検知の基準値)
 		"不正な日時",
 	}
@@ -317,17 +322,17 @@ func TestExportBulkTemplate_EmptyRows(t *testing.T) {
 	if !equalStrings(rows[0], wantBulkHeaders) {
 		t.Errorf("ヘッダ = %v, want %v", rows[0], wantBulkHeaders)
 	}
-	// 0 行でもオートフィルタはヘッダ行(13 列 = A:M)に設定される
-	if got := autoFilterRef(t, path); got != "A1:M1" {
-		t.Errorf("0 行時のオートフィルタ範囲 = %q, want \"A1:M1\"", got)
+	// 0 行でもオートフィルタはヘッダ行(14 列 = A:N)に設定される
+	if got := autoFilterRef(t, path); got != "A1:N1" {
+		t.Errorf("0 行時のオートフィルタ範囲 = %q, want \"A1:N1\"", got)
 	}
 }
 
 func TestExportBulkTemplate_AutoFilterAndFreezePane(t *testing.T) {
 	path := exportBulkToTempFile(t, sampleBulkRows())
 
-	if got := autoFilterRef(t, path); got != "A1:M1" {
-		t.Errorf("オートフィルタ範囲 = %q, want \"A1:M1\"", got)
+	if got := autoFilterRef(t, path); got != "A1:N1" {
+		t.Errorf("オートフィルタ範囲 = %q, want \"A1:N1\"", got)
 	}
 	doc := readZipEntry(t, path, "xl/worksheets/sheet1.xml")
 	if !strings.Contains(doc, `state="frozen"`) || !strings.Contains(doc, `ySplit="1"`) {
@@ -393,6 +398,10 @@ func TestExportBulkTemplate_GuideSheet(t *testing.T) {
 		"食い違",
 		"警告",
 		"表示名 (ID)", // 担当者の表記
+		// 親課題キー(CF5)の記法
+		"親課題キー",
+		"ID:",
+		"新規追加行どうしを親子にすることはできません",
 	}
 	for _, p := range wantPhrases {
 		if !strings.Contains(text, p) {
@@ -504,7 +513,7 @@ func sampleBulkMastersWithCustom() BulkTemplateMasters {
 	return m
 }
 
-// wantBulkCustomHeaders はカスタム属性列のヘッダ(固定 13 列の後ろに定義順で並ぶ)。
+// wantBulkCustomHeaders はカスタム属性列のヘッダ(固定 14 列の後ろに定義順で並ぶ)。
 var wantBulkCustomHeaders = []string{"属性:顧客名", "属性:重要度", "属性:タグ", "属性:開始日"}
 
 // TestExportBulkTemplate_CustomFieldHeaders は固定列の後ろに定義順で
@@ -532,9 +541,9 @@ func TestExportBulkTemplate_CustomFieldHeaders(t *testing.T) {
 	if got := BulkCustomHeader("顧客名"); got != "属性:顧客名" {
 		t.Errorf("BulkCustomHeader = %q", got)
 	}
-	// オートフィルタ・列幅も 17 列(A:Q)に広がる
-	if got := autoFilterRef(t, path); got != "A1:Q1" {
-		t.Errorf("オートフィルタ範囲 = %q, want \"A1:Q1\"", got)
+	// オートフィルタ・列幅も 18 列(A:R)に広がる
+	if got := autoFilterRef(t, path); got != "A1:R1" {
+		t.Errorf("オートフィルタ範囲 = %q, want \"A1:R1\"", got)
 	}
 }
 
@@ -608,7 +617,7 @@ func TestExportBulkTemplate_CustomFieldMasterAndDropDowns(t *testing.T) {
 		}
 	}
 
-	// データシート: 属性:重要度 = O 列 / 属性:区分 = R 列(属性:タグ・属性:開始日には設定しない)
+	// データシート: 属性:重要度 = P 列 / 属性:区分 = S 列(属性:タグ・属性:開始日には設定しない)
 	dvs, err := f.GetDataValidations(SheetBulkTemplate)
 	if err != nil {
 		t.Fatal(err)
@@ -618,8 +627,8 @@ func TestExportBulkTemplate_CustomFieldMasterAndDropDowns(t *testing.T) {
 		got[dv.Sqref] = dv.Formula1
 	}
 	wants := map[string]string{
-		"O2:O1001": "'" + SheetBulkMaster + "'!$E$2:$E$3",
-		"R2:R1001": "'" + SheetBulkMaster + "'!$F$2:$F$3",
+		"P2:P1001": "'" + SheetBulkMaster + "'!$E$2:$E$3",
+		"S2:S1001": "'" + SheetBulkMaster + "'!$F$2:$F$3",
 	}
 	for sqref, formula := range wants {
 		if got[sqref] != formula {

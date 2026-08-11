@@ -8,6 +8,7 @@ import (
 
 	"backlog-assistant/internal/bulk"
 	"backlog-assistant/internal/customfield"
+	"backlog-assistant/internal/export"
 	"backlog-assistant/internal/store"
 )
 
@@ -249,5 +250,44 @@ func TestBulkCustomFieldValues(t *testing.T) {
 	}
 	if got := bulkCustomFieldValues("{壊れた JSON"); len(got) != 0 {
 		t.Errorf("壊れた生 JSON = %+v, want 空", got)
+	}
+}
+
+// TestParentIssueKeyOf は一括更新テンプレート・課題抽出へプリフィルする
+// 親課題の表記(CF5)を確認する。
+//
+// 同一プロジェクトの親は課題キー、ローカルに無い親(未同期・別プロジェクト)は
+// 課題キーと取り違えようのない ID:<数値> 形式にし、取り込み側と往復できるようにする。
+func TestParentIssueKeyOf(t *testing.T) {
+	keys := map[int64]string{100: "EXA-1"}
+	cases := []struct {
+		name    string
+		rawJSON string
+		want    string
+	}{
+		{"ローカルにある親", `{"id":101,"parentIssueId":100}`, "EXA-1"},
+		{"ローカルに無い親", `{"id":101,"parentIssueId":9999}`, "ID:9999"},
+		{"親なし", `{"id":101,"parentIssueId":null}`, ""},
+		{"生 JSON なし", "", ""},
+		{"壊れた生 JSON", "{壊れた JSON", ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := parentIssueKeyOf(c.rawJSON, keys); got != c.want {
+				t.Errorf("parentIssueKeyOf = %q, want %q", got, c.want)
+			}
+		})
+	}
+}
+
+// TestHasColumn は列選択に特定の列キーが含まれるかの判定を確認する
+// (親課題キー列を選んだときだけ課題キーの対応表を作るため)。
+func TestHasColumn(t *testing.T) {
+	columns := []string{"issueKey", "summary", export.ParentIssueKeyColumn}
+	if !hasColumn(columns, export.ParentIssueKeyColumn) {
+		t.Errorf("選択済みの列を検出できない: %v", columns)
+	}
+	if hasColumn([]string{"issueKey"}, export.ParentIssueKeyColumn) {
+		t.Errorf("選択していない列を検出した")
 	}
 }

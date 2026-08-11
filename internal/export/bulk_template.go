@@ -14,7 +14,8 @@ package export
 // 「マスタ」(選択候補)の 3 枚。名前列にはマスタシートを参照するデータ入力規則
 // (ドロップダウン)を設定し、生の ID を知らなくても編集できるようにする。
 //
-// カスタム属性(CF3)は固定 13 列の後ろへ「属性:{定義名}」列を定義順で追加する
+// カスタム属性(CF3)は固定 14 列(CF5 の「親課題キー」を含む)の後ろへ
+// 「属性:{定義名}」列を定義順で追加する
 // (BulkCustomColumnPrefix)。単一リスト・ラジオはマスタシートの選択肢を参照する
 // ドロップダウンにし、複数リスト・チェックボックスはカンマ区切りで記入してもらう。
 //
@@ -70,7 +71,7 @@ const BulkProjectIDLabel = "プロジェクトID"
 // BulkCustomColumnPrefix はカスタム属性列のヘッダ接頭辞(CF3)。
 //
 // カスタム属性は定義 ID ではなく定義名で列を解決する(利用者が Excel 上で
-// 見て分かる必要があるため)。固定 13 列と衝突しないよう接頭辞を付ける。
+// 見て分かる必要があるため)。固定 14 列と衝突しないよう接頭辞を付ける。
 // この文字列は取り込み側(internal/bulk のパーサ)との契約であり、
 // 変更すると記入済み Excel の取り込みが壊れる。
 const BulkCustomColumnPrefix = "属性:"
@@ -106,6 +107,9 @@ type BulkTemplateRow struct {
 	DueDate string
 	// Description は詳細本文。
 	Description string
+	// ParentIssueKey は親課題の現在値(CF5)。同一プロジェクトの親は課題キー、
+	// ローカルに無い親は ID:<数値>(FormatParentIssueRef で作る)。空文字は親なし。
+	ParentIssueKey string
 	// BaseUpdated は競合検知の基準となる更新日時(取得時の生値)。整形せずそのまま出力する。
 	BaseUpdated string
 	// CustomFields はカスタム属性の現在値(定義 ID → 表示文字列)。
@@ -193,6 +197,9 @@ var bulkFixedColumns = []bulkColumn{
 	{"担当者名", func(r *BulkTemplateRow) string { return AssigneeLabel(r.AssigneeName, r.AssigneeID) }, 24},
 	{"期限", func(r *BulkTemplateRow) string { return formatDate(r.DueDate) }, 12},
 	{"詳細", func(r *BulkTemplateRow) string { return r.Description }, 60},
+	// 親課題キー(CF5)は固定列の末尾グループへ置く(カスタム属性列より前)。
+	// base_updated は編集しない機械可読な列のため、抽出出力と同じく最後に残す。
+	{ParentIssueKeyHeader, func(r *BulkTemplateRow) string { return r.ParentIssueKey }, 14},
 	{BaseUpdatedHeader, func(r *BulkTemplateRow) string { return r.BaseUpdated }, 22},
 }
 
@@ -355,6 +362,14 @@ var bulkGuideLines = [][2]string{
 	{BaseUpdatedHeader, BaseUpdatedHeader + " 列は編集しないでください。競合検知(取り込み後にリモートが更新されていないかの確認)に使用します。"},
 	{"新規行の必須項目", "件名と種別(種別名または種別ID のどちらか)が必須です(優先度は未入力なら取り込み時に指定する既定値を適用します)。"},
 	{"プロジェクト", "対象プロジェクトはテンプレート出力時に固定されます。行ごとにプロジェクトを変えることはできません。先頭の「" + BulkProjectIDLabel + "」行は編集・削除しないでください(取り込み時に選択したプロジェクトと照合します)。"},
+	{ParentIssueKeyHeader, "親課題を設定・変更する場合は「" + ParentIssueKeyHeader + "」列に親課題の課題キー(例: ABC-1)を入力してください。" +
+		"ローカルに無い課題(未同期)の場合は「" + ParentIssueIDPrefix + "課題ID」形式(例: " + ParentIssueIDPrefix + "12345)でも指定できます。" +
+		"空欄 = 変更しない、" + ClearMarker + " = 親子関係の解除です(解除は実機検証中の機能です)。"},
+	{"親課題の制限", "親に指定できるのは既に Backlog に存在する課題だけです(同じファイル内の新規追加行どうしを親子にすることはできません)。" +
+		"また Backlog の親子は 1 階層までのため、(1) 親に指定する課題自身が子課題であってはならない、(2) 親を設定する課題自身が子課題を持っていてはならない、という制限があります。" +
+		"親課題は対象プロジェクト内の課題に限ります(他プロジェクトの課題を親にする操作には対応していません)。" +
+		"課題キーはローカルデータで解決するため、見つからない場合は対象プロジェクトを同期してから取り込み直してください。" +
+		"なお、同じファイルの中で親を解除した課題を、別の行の親として指定することはできません(解除だけを先に取り込み、同期してからテンプレートを出力し直してください)。"},
 	{"カスタム属性の列", "「" + BulkCustomColumnPrefix + "定義名」という列がプロジェクトのカスタム属性です(固定列の後ろに並びます)。他の列と同じく、空欄 = 変更しない・" + ClearMarker + " = クリア(実機検証中の機能です)です。"},
 	{"カスタム属性の記法", "文字列・文章はそのまま、数値は数値、日付は yyyy-MM-dd 形式で入力します。単一リスト・ラジオは選択肢名をドロップダウンから選び、複数リスト・チェックボックスは選択肢名をカンマ区切り(例: UI, DB)で入力してください。"},
 	{"カスタム属性の注意", "選択肢に無い値(「その他」の直接入力)は現在未対応です。選択肢名にカンマを含む複数リスト・チェックボックスも、区切りと区別できないため取り込めません。カスタム属性は課題種別ごとに適用が決まっているため、その種別に適用されない属性へ記入するとエラーになります。新規追加行では、その課題種別に適用される必須のカスタム属性が入力必須です。また、文字列として「" + ClearMarker + "」という値そのものを設定する操作は、クリア指示と区別できないため Excel 経由では行えません(既にその値を持つセルは未編集なら変更されません)。"},

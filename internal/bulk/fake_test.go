@@ -229,6 +229,8 @@ func openTestStore(t *testing.T) *store.Store {
 }
 
 // テンプレートの標準ヘッダ(設計書 5 節)。
+// 列はヘッダ名で解決するため、親課題キー列(CF5)を使う検証だけが
+// parent_test.go の parentHeaders でこれを拡張する。
 var templateHeaders = []string{
 	"issueKey", "件名", "種別ID", "種別名", "状態ID", "状態名",
 	"優先度ID", "優先度名", "担当者ID", "担当者名", "期限", "詳細", "base_updated",

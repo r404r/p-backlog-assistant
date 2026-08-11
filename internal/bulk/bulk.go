@@ -136,16 +136,23 @@ func fetchCustomFields(ctx context.Context, api API, projectID int64) ([]customf
 // ポインタの意味は backlogclient.IssueUpdate と同じ:
 // nil = 変更しない / 値あり = その値 / 空値(*int64 が 0・*string が "")= クリア。
 type Payload struct {
-	Action      string   `json:"action"`
-	ProjectID   int64    `json:"projectId,omitempty"` // 新規追加でのみ使用
-	Summary     *string  `json:"summary,omitempty"`
-	Description *string  `json:"description,omitempty"`
-	IssueTypeID *int64   `json:"issueTypeId,omitempty"`
-	PriorityID  *int64   `json:"priorityId,omitempty"`
-	StatusID    *int64   `json:"statusId,omitempty"`
-	AssigneeID  *int64   `json:"assigneeId,omitempty"`
-	DueDate     *string  `json:"dueDate,omitempty"`
-	Changes     []string `json:"changes,omitempty"` // dry-run で表示した差分(結果レポート用)
+	Action      string  `json:"action"`
+	ProjectID   int64   `json:"projectId,omitempty"` // 新規追加でのみ使用
+	Summary     *string `json:"summary,omitempty"`
+	Description *string `json:"description,omitempty"`
+	IssueTypeID *int64  `json:"issueTypeId,omitempty"`
+	PriorityID  *int64  `json:"priorityId,omitempty"`
+	StatusID    *int64  `json:"statusId,omitempty"`
+	AssigneeID  *int64  `json:"assigneeId,omitempty"`
+	DueDate     *string `json:"dueDate,omitempty"`
+	// ParentIssueID は設定する親課題 ID(CF5)。nil = 変更しない。
+	// 解除は ClearParentIssue で表す(0 を「ID 0 の親」と読み違えないよう、
+	// 設定と解除を別の項目に分ける)。
+	ParentIssueID *int64 `json:"parentIssueId,omitempty"`
+	// ClearParentIssue は親子関係の解除(#CLEAR#)。
+	// omitempty のため、この項目を持たない旧ジョブの payload もそのまま復元できる。
+	ClearParentIssue bool     `json:"clearParentIssue,omitempty"`
+	Changes          []string `json:"changes,omitempty"` // dry-run で表示した差分(結果レポート用)
 	// CustomFields は変更するカスタム属性の値(定義順)。
 	// 変更しない属性は載せない(空セル = 変更しない)。
 	// 省略可のため、この項目が無い旧ジョブの payload もそのまま復元できる。

@@ -275,3 +275,25 @@ func TestRunBulkJob_UnknownProfile(t *testing.T) {
 		t.Fatal("未知プロファイルでエラーにならなかった")
 	}
 }
+
+// TestListIssueKeysByID は親課題キーの引き当て(CF5)に使う
+// 「課題 ID → 課題キー」を返すことを確認する。
+func TestListIssueKeysByID(t *testing.T) {
+	s, id, _ := newBulkTestService(t)
+
+	keys, err := s.ListIssueKeysByID(context.Background(), id, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if keys[1] != "EXA-1" {
+		t.Errorf("keys = %+v, want 1 → EXA-1", keys)
+	}
+	// 課題が無いプロジェクトは空(nil ではない)
+	empty, err := s.ListIssueKeysByID(context.Background(), id, 999)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(empty) != 0 {
+		t.Errorf("keys = %+v, want 空", empty)
+	}
+}

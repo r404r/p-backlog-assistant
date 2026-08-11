@@ -46,7 +46,13 @@ const CF_TYPE_NUMERIC = 3
 const CF_TYPE_DATE = 4
 const CF_LIST_TYPE_IDS = [5, 6, 7, 8]
 
-/** 固定の出力列(キーは IssueRow のキー。Go 側の列キーと対応) */
+/**
+ * 固定の出力列(キーは Go 側 export パッケージの列キーと対応)。
+ *
+ * 親課題キー(parentIssueKey)は Excel 出力専用の列で、一覧表示は行わない
+ * (IssueRow は持たない)。親課題 ID → 課題キーの引き当てはローカル DB の
+ * 走査を伴うため、選択されたときだけ Go 側で解決する。
+ */
 const FIXED_EXPORT_COLUMNS: ExportColumn[] = [
   { key: 'issueKey', label: '課題キー' },
   { key: 'summary', label: '件名' },
@@ -57,7 +63,13 @@ const FIXED_EXPORT_COLUMNS: ExportColumn[] = [
   { key: 'created', label: '作成日' },
   { key: 'updated', label: '更新日' },
   { key: 'dueDate', label: '期限' },
+  { key: 'parentIssueKey', label: '親課題キー' },
 ]
+
+/** 既定でチェックを入れる列(親課題キーは選択式のため既定では出力しない) */
+const DEFAULT_EXPORT_COLUMN_KEYS = FIXED_EXPORT_COLUMNS.filter(
+  (c) => c.key !== 'parentIssueKey',
+).map((c) => c.key)
 
 function errorMessage(e: unknown): string {
   if (e instanceof Error) return e.message
@@ -595,8 +607,8 @@ const exportColumns = computed<ExportColumn[]>(() => [
   ...customColumns.value,
 ])
 
-// 既定はカスタム属性列オフ(固定列のみ)
-const selectedColumns = ref<string[]>(FIXED_EXPORT_COLUMNS.map((c) => c.key))
+// 既定はカスタム属性列・親課題キー列オフ
+const selectedColumns = ref<string[]>([...DEFAULT_EXPORT_COLUMN_KEYS])
 
 /** 選択済みの列から、現在は選択できない列(切替前のカスタム属性列)を外す */
 function pruneUnavailableColumns() {

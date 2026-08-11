@@ -16,19 +16,20 @@ import (
 // テンプレートの列キー(内部表現)。ヘッダ名から解決するため、
 // 列の並び順には依存しない(設計書 5 節)。
 const (
-	colIssueKey      = "issueKey"
-	colSummary       = "summary"
-	colIssueTypeID   = "issueTypeId"
-	colIssueTypeName = "issueTypeName"
-	colStatusID      = "statusId"
-	colStatusName    = "statusName"
-	colPriorityID    = "priorityId"
-	colPriorityName  = "priorityName"
-	colAssigneeID    = "assigneeId"
-	colAssigneeName  = "assigneeName"
-	colDueDate       = "dueDate"
-	colDescription   = "description"
-	colBaseUpdated   = "baseUpdated"
+	colIssueKey       = "issueKey"
+	colSummary        = "summary"
+	colIssueTypeID    = "issueTypeId"
+	colIssueTypeName  = "issueTypeName"
+	colStatusID       = "statusId"
+	colStatusName     = "statusName"
+	colPriorityID     = "priorityId"
+	colPriorityName   = "priorityName"
+	colAssigneeID     = "assigneeId"
+	colAssigneeName   = "assigneeName"
+	colDueDate        = "dueDate"
+	colDescription    = "description"
+	colParentIssueKey = "parentIssueKey"
+	colBaseUpdated    = "baseUpdated"
 )
 
 // headerAliases はヘッダ名(正規化済み)→ 列キー。
@@ -44,6 +45,8 @@ var headerAliases = map[string]string{
 	"優先度id": colPriorityID, "優先度名": colPriorityName, "優先度": colPriorityName,
 	"担当者id": colAssigneeID, "担当者名": colAssigneeName, "担当者": colAssigneeName,
 	"期限": colDueDate, "詳細": colDescription,
+	// 親課題(CF5)。抽出出力・テンプレートとも「親課題キー」を使う
+	"親課題キー": colParentIssueKey, "親課題": colParentIssueKey,
 	"base_updated": colBaseUpdated,
 }
 

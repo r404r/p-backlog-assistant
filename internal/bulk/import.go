@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -68,6 +69,12 @@ type ImportOptions struct {
 	DefaultPriorityID int64
 	// Master は種別・状態・優先度のマスタ(FetchMasterData の結果)。
 	Master MasterData
+	// API は親課題の状態確認(CF5)に使う Backlog API。
+	//
+	// ローカルに無い親を ID:<数値> で指定した行だけが使うため、nil でも
+	// 取り込み自体は動く(その場合は当該行を「確認できない」として
+	// 行エラーにし、検証できないまま送信しない)。
+	API API
 }
 
 // Importer は Excel の取り込み(解析・検証・dry-run・ジョブ作成)を担う。
@@ -123,9 +130,19 @@ func (im *Importer) Import(ctx context.Context, opts ImportOptions) (*ImportResu
 	}
 	v := &validator{
 		st:                im.st,
+		api:               opts.API,
 		projectID:         opts.ProjectID,
 		defaultPriorityID: opts.DefaultPriorityID,
 		idx:               newIndex(opts.Master, users),
+	}
+	// 親課題キー列があるファイルだけ、プロジェクト内の親子関係を 1 回走査して
+	// 索引化する(「子を持つか」の判定に全課題が要るため。CF5)
+	if data.columns[colParentIssueKey] {
+		parents, perr := im.st.ListIssueParents(ctx, opts.ProjectID)
+		if perr != nil {
+			return nil, perr
+		}
+		v.parents = newParentIndex(parents)
 	}
 
 	plans := make([]*rowPlan, 0, len(data.rows))
@@ -144,12 +161,29 @@ func (im *Importer) Import(ctx context.Context, opts ImportOptions) (*ImportResu
 		}
 		plan, err := v.plan(ctx, row)
 		if err != nil {
+			// 行の内容が原因ではない失敗(親の状態確認での認証・レート制限・
+			// 通信障害・中断)は行エラーにせず、取り込み全体を止める(CF5)
+			if isFatal(err) {
+				return nil, err
+			}
 			res.Errors = append(res.Errors, RowError{RowNo: row.rowNo, Message: err.Error()})
 			continue
 		}
 		plans = append(plans, plan)
-		// 行の警告(名前列と食い違う ID 列を無視した等)は、行が受理された
-		// 場合のみ報告する(エラー行の警告は利用者の注意を分散させるだけ)
+	}
+
+	// 1 階層制約のうち「同一バッチ内の組み合わせ」は全行を見ないと判定できない
+	// ため、行ごとの検証を終えてからまとめて確認する(CF5 の (d))。
+	if v.parents != nil {
+		if batchErrs := v.parents.validateBatch(plans); len(batchErrs) > 0 {
+			res.Errors = append(res.Errors, batchErrs...)
+			plans = dropRows(plans, batchErrs)
+		}
+	}
+	// エラー行を除いた行だけを集計・プレビューへ載せる。
+	// 行の警告(名前列と食い違う ID 列を無視した等)も受理された行のみ報告する
+	// (エラー行の警告は利用者の注意を分散させるだけ)。
+	for _, plan := range plans {
 		res.Warnings = append(res.Warnings, plan.warnings...)
 		switch plan.action {
 		case ActionCreate:
@@ -168,6 +202,8 @@ func (im *Importer) Import(ctx context.Context, opts ImportOptions) (*ImportResu
 			ConflictWarning: plan.conflictWarning,
 		})
 	}
+	// 行番号順に並べ直す(バッチ検証のエラーは後から足されるため)
+	sort.SliceStable(res.Errors, func(i, j int) bool { return res.Errors[i].RowNo < res.Errors[j].RowNo })
 
 	res.Valid = len(res.Errors) == 0
 	if !res.Valid {
@@ -180,6 +216,22 @@ func (im *Importer) Import(ctx context.Context, opts ImportOptions) (*ImportResu
 	}
 	res.JobID = jobID
 	return res, nil
+}
+
+// dropRows はエラーになった行番号の plan を取り除く
+// (エラー行は送信対象にしないため、集計・プレビューにも載せない)。
+func dropRows(plans []*rowPlan, errs []RowError) []*rowPlan {
+	failed := make(map[int]bool, len(errs))
+	for _, e := range errs {
+		failed[e.RowNo] = true
+	}
+	out := plans[:0]
+	for _, p := range plans {
+		if !failed[p.rowNo] {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 // AssigneeCandidates は担当者として指定できるユーザを返す(中 1)。
@@ -284,6 +336,9 @@ type rowPlan struct {
 	// warnings は取り込みを止めないが利用者へ伝えるべき注意
 	//(名前列と食い違う ID 列を無視した 等)。ImportResult.Warnings へ集約する。
 	warnings []string
+	// parent は親課題の変更内容(nil = この行は親を変更しない)。
+	// バッチ全体の 1 階層検証(CF5 の (d))で使う。
+	parent *parentChange
 }
 
 // index は ID・名前の解決表。
@@ -343,10 +398,15 @@ func newIndex(master MasterData, users []store.UserRef) *index {
 
 // validator は 1 行ずつの検証・差分生成を行う。
 type validator struct {
-	st                *store.Store
+	st *store.Store
+	// api は親課題の状態確認(CF5)にだけ使う。nil 可(ImportOptions.API 参照)。
+	api               API
 	projectID         int64
 	defaultPriorityID int64
 	idx               *index
+	// parents はプロジェクト内の親子関係の索引(CF5)。
+	// 親課題キー列が無いファイルでは nil(検証も走らない)。
+	parents *parentIndex
 	// rowWarnings は処理中の行で発生した警告(plan の入口で初期化する)。
 	rowWarnings []string
 }
@@ -360,7 +420,7 @@ func (v *validator) plan(ctx context.Context, r rawRow) (*rowPlan, error) {
 		err  error
 	)
 	if r.cell(colIssueKey) == "" {
-		plan, err = v.planCreate(r)
+		plan, err = v.planCreate(ctx, r)
 	} else {
 		plan, err = v.planUpdate(ctx, r)
 	}
@@ -372,12 +432,12 @@ func (v *validator) plan(ctx context.Context, r rawRow) (*rowPlan, error) {
 }
 
 // planCreate は新規追加行(issueKey が空)を検証する。
-func (v *validator) planCreate(r rawRow) (*rowPlan, error) {
+func (v *validator) planCreate(ctx context.Context, r rawRow) (*rowPlan, error) {
 	// 新規追加ではクリア指定を使えない(クリアすべき既存値が無い)
 	for _, key := range []string{
 		colSummary, colDescription, colDueDate, colAssigneeID, colAssigneeName,
 		colIssueTypeID, colIssueTypeName, colStatusID, colStatusName,
-		colPriorityID, colPriorityName,
+		colPriorityID, colPriorityName, colParentIssueKey,
 	} {
 		if r.cell(key) == ClearToken {
 			return nil, errors.New("新規追加行では " + ClearToken + " を指定できません")
@@ -444,6 +504,9 @@ func (v *validator) planCreate(r rawRow) (*rowPlan, error) {
 	if desc := r.cell(colDescription); desc != "" {
 		plan.payload.Description = ptrString(desc)
 		plan.changes = append(plan.changes, fmt.Sprintf("詳細: %s", summarize(desc)))
+	}
+	if err := v.planParent(ctx, r, nil, plan); err != nil {
+		return nil, err
 	}
 	if err := v.planCustomFieldsCreate(r, *issueTypeID, plan); err != nil {
 		return nil, err
@@ -583,6 +646,10 @@ func (v *validator) planUpdate(ctx context.Context, r rawRow) (*rowPlan, error) 
 			plan.payload.Description = ptrString(desc)
 			plan.changes = append(plan.changes, change("詳細", summarize(cur.Description), summarize(desc)))
 		}
+	}
+	// 親課題(空欄 = 変更しない / #CLEAR# = 親子関係の解除。CF5)
+	if err := v.planParent(ctx, r, cur, plan); err != nil {
+		return nil, err
 	}
 	// カスタム属性(定義順。空欄 = 変更しない / #CLEAR# = クリア)
 	if err := v.planCustomFieldsUpdate(r, cur, plan); err != nil {

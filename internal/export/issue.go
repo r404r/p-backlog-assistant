@@ -63,12 +63,16 @@ const (
 type column struct {
 	key    string                    // 呼び出し側が指定する列キー
 	header string                    // 1 行目に出力する日本語ヘッダ
-	value  func(*store.Issue) string // セル値の生成(カスタム属性列は nil)
+	value  func(*store.Issue) string // セル値の生成(カスタム属性列・親課題キー列は nil)
 	width  float64                   // 列幅(文字数目安)
 	// customFieldID はカスタム属性列の定義 ID(固定列は 0)。
 	// カスタム属性の値は行ごとに一括で解析した結果から引くため(列ごとに
 	// 生 JSON を解析し直さないため)、value ではなくこの ID で解決する。
 	customFieldID int64
+	// parentIssue は親課題キー列であることを表す(CF5)。
+	// 値の解決には課題自身の生 JSON に加えて Options.ParentIssueKeys が要り、
+	// value(課題 1 件だけを見る関数)では組み立てられないため区別する。
+	parentIssue bool
 }
 
 // columns は出力可能な列の定義(表示順の既定でもある)。
@@ -83,6 +87,9 @@ var columns = []column{
 	{key: "updated", header: "更新日時", value: func(i *store.Issue) string { return formatDateTime(i.Updated) }, width: 18},
 	{key: "dueDate", header: "期限", value: func(i *store.Issue) string { return formatDate(i.DueDate) }, width: 12},
 	{key: "description", header: "詳細", value: func(i *store.Issue) string { return i.Description }, width: 60},
+	// 親課題キー(CF5)。値は生 JSON の parentIssueId を Options.ParentIssueKeys で
+	// 課題キーへ引き当てる(引き当てられない親は ID:<数値>)。
+	{key: ParentIssueKeyColumn, header: ParentIssueKeyHeader, width: 14, parentIssue: true},
 }
 
 // defaultColumnKeys は既定の出力列(詳細は本文が長いため既定では出さない)。
@@ -100,6 +107,10 @@ type Options struct {
 	// (定義に無いキーは ErrUnknownColumn)。カスタム属性列を使わない
 	// 呼び出しでは空のままでよい。
 	CustomFields []customfield.Def
+	// ParentIssueKeys は親課題 ID → 課題キーの対応表(CF5)。
+	// parentIssueKey 列を出力するときに呼び出し側が渡す(対象プロジェクトの
+	// 未削除課題から作る)。ここに無い親課題 ID は ID:<数値> 形式で出力される。
+	ParentIssueKeys map[int64]string
 	// WithBaseUpdated が true のとき、末尾に base_updated 列(更新日時の RFC3339 生値)
 	// を追加する。一括更新テンプレートの競合検知(設計書 5 節)で使う。
 	WithBaseUpdated bool
@@ -275,7 +286,7 @@ func ExportIssues(w io.Writer, rows []store.Issue, opts Options) error {
 		return err
 	}
 
-	if err := writeIssueSheet(f, cols, rows, opts.WithBaseUpdated); err != nil {
+	if err := writeIssueSheet(f, cols, rows, opts); err != nil {
 		return err
 	}
 	return f.Write(w)
@@ -306,12 +317,13 @@ func writeInfoSheet(f *excelize.File, count int) error {
 }
 
 // writeIssueSheet は課題シートを StreamWriter で書き出す。
-func writeIssueSheet(f *excelize.File, cols []column, rows []store.Issue, withBaseUpdated bool) error {
+func writeIssueSheet(f *excelize.File, cols []column, rows []store.Issue, opts Options) error {
 	sw, err := f.NewStreamWriter(SheetIssues)
 	if err != nil {
 		return err
 	}
 
+	withBaseUpdated := opts.WithBaseUpdated
 	colCount := len(cols)
 	if withBaseUpdated {
 		colCount++
@@ -371,12 +383,16 @@ func writeIssueSheet(f *excelize.File, cols []column, rows []store.Issue, withBa
 			custom = customValuesOf(issue)
 		}
 		for i, c := range cols {
-			if c.customFieldID != 0 {
+			switch {
+			case c.customFieldID != 0:
 				// 値を持たない課題・解析できない課題では空欄になる
 				values[i] = custom[c.customFieldID]
-				continue
+			case c.parentIssue:
+				// 生 JSON が無い・壊れている課題は親なし(空欄)へ縮退する
+				values[i] = FormatParentIssueRef(store.ParentIssueID(issue.RawJSON), opts.ParentIssueKeys)
+			default:
+				values[i] = c.value(issue)
 			}
-			values[i] = c.value(issue)
 		}
 		if withBaseUpdated {
 			// 競合検知の基準値は整形せず、取得時の生値をそのまま埋め込む。

@@ -70,12 +70,41 @@ func (s *ProfileService) ImportBulkFile(ctx context.Context, profileID string, p
 	if err != nil {
 		return nil, err
 	}
+	// 親課題の状態確認(CF5。ローカルに無い ID:<数値> の親)に API を使う
+	client, err := s.clientForProfile(ctx, profileID)
+	if err != nil {
+		return nil, err
+	}
 	return bulk.NewImporter(st).Import(ctx, bulk.ImportOptions{
 		ProjectID:         projectID,
 		FilePath:          filePath,
 		DefaultPriorityID: defaultPriorityID,
 		Master:            *master,
+		API:               client,
 	})
+}
+
+// ListIssueKeysByID は指定プロジェクトの「課題 ID → 課題キー」を返す(CF5)。
+//
+// 親課題 ID を課題キーへ引き当てるために、課題抽出・テンプレート出力の両方で使う
+// (引き当てられない親は ID:<数値> 形式で出力する)。API は呼ばない。
+func (s *ProfileService) ListIssueKeysByID(ctx context.Context, profileID string, projectID int64) (map[int64]string, error) {
+	// store を使う操作はプロファイルの削除・保存と排他する(高 2)
+	s.profileMu.RLock()
+	defer s.profileMu.RUnlock()
+	st, err := s.storeForProfile(profileID)
+	if err != nil {
+		return nil, err
+	}
+	refs, err := st.ListIssueRefs(ctx, projectID)
+	if err != nil {
+		return nil, err
+	}
+	keys := make(map[int64]string, len(refs))
+	for _, r := range refs {
+		keys[r.ID] = r.IssueKey
+	}
+	return keys, nil
 }
 
 // RunBulkJob はジョブの未処理行を実行する(進捗は onProgress へ通知)。

@@ -368,8 +368,9 @@ func TestDefaultColumnsIsCopy(t *testing.T) {
 
 func TestAvailableColumnsAllHaveHeaders(t *testing.T) {
 	keys := AvailableColumns(nil)
-	if len(keys) != 10 {
-		t.Fatalf("列キー数 = %d, want 10", len(keys))
+	// 固定列 11(既存 10 + 親課題キー。CF5)
+	if len(keys) != 11 {
+		t.Fatalf("列キー数 = %d, want 11", len(keys))
 	}
 	for _, k := range keys {
 		h, ok := ColumnHeader(k, nil)
@@ -625,11 +626,11 @@ func TestExportIssues_CustomFieldDefsUnusedIsCompatible(t *testing.T) {
 func TestAvailableColumnsWithCustomFields(t *testing.T) {
 	defs := customFieldDefs()
 	keys := AvailableColumns(defs)
-	if len(keys) != 10+len(defs) {
-		t.Fatalf("列キー数 = %d, want %d", len(keys), 10+len(defs))
+	if len(keys) != 11+len(defs) {
+		t.Fatalf("列キー数 = %d, want %d", len(keys), 11+len(defs))
 	}
 	// 固定列が先、カスタム属性列が定義順で続く
-	if keys[9] != "description" || keys[10] != "cf_101" || keys[len(keys)-1] != "cf_108" {
+	if keys[10] != ParentIssueKeyColumn || keys[11] != "cf_101" || keys[len(keys)-1] != "cf_108" {
 		t.Errorf("列キーの並び = %v", keys)
 	}
 	h, ok := ColumnHeader("cf_105", defs)

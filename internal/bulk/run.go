@@ -487,6 +487,8 @@ func samePayload(p *Payload, issue backlogclient.Issue) bool {
 		return false
 	case normalizeNewlines(valueString(p.Description)) != normalizeNewlines(issue.Description):
 		return false
+	case valueInt64(p.ParentIssueID) != issue.ParentIssueID:
+		return false
 	case !sameCustomFields(p.CustomFields, issue):
 		return false
 	}
@@ -602,6 +604,8 @@ func createParamsOf(projectID int64, p *Payload) backlogclient.IssueCreate {
 	in.Description = p.Description
 	in.AssigneeID = p.AssigneeID
 	in.DueDate = p.DueDate
+	// 新規追加で親を解除することは無いため、設定のみを引き継ぐ(CF5)
+	in.ParentIssueID = p.ParentIssueID
 	in.CustomFields = p.CustomFields
 	return in
 }
@@ -609,14 +613,20 @@ func createParamsOf(projectID int64, p *Payload) backlogclient.IssueCreate {
 // updateParamsOf は payload を課題更新のパラメータへ変換する
 // (nil = 変更しない / 空値 = クリア の意味をそのまま引き継ぐ)。
 func updateParamsOf(p *Payload) backlogclient.IssueUpdate {
-	return backlogclient.IssueUpdate{
-		Summary:      p.Summary,
-		Description:  p.Description,
-		IssueTypeID:  p.IssueTypeID,
-		PriorityID:   p.PriorityID,
-		StatusID:     p.StatusID,
-		AssigneeID:   p.AssigneeID,
-		DueDate:      p.DueDate,
-		CustomFields: p.CustomFields,
+	in := backlogclient.IssueUpdate{
+		Summary:       p.Summary,
+		Description:   p.Description,
+		IssueTypeID:   p.IssueTypeID,
+		PriorityID:    p.PriorityID,
+		StatusID:      p.StatusID,
+		AssigneeID:    p.AssigneeID,
+		DueDate:       p.DueDate,
+		ParentIssueID: p.ParentIssueID,
+		CustomFields:  p.CustomFields,
 	}
+	// 親子関係の解除は 0 で表す(backlogclient 側で空文字パラメータになる。CF5)
+	if p.ClearParentIssue {
+		in.ParentIssueID = ptrInt64(0)
+	}
+	return in
 }

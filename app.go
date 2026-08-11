@@ -762,6 +762,16 @@ func (a *App) ExportIssuesExcel(profileID string, query store.IssueFilter, colum
 		}
 		opts.CustomFields = master.CustomFields
 	}
+	// 親課題キー列が選ばれている場合のみ、親課題 ID → 課題キーの対応表を作る
+	// (ローカル DB の走査を増やさない。引き当てられない親は ID:<数値> になる)
+	if hasColumn(columns, export.ParentIssueKeyColumn) {
+		keys, err := s.ListIssueKeysByID(a.ctx, profileID, query.ProjectID)
+		if err != nil {
+			a.logEnd(op, err, attrs...)
+			return nil, err
+		}
+		opts.ParentIssueKeys = keys
+	}
 	path, err := wailsruntime.SaveFileDialog(a.ctx, wailsruntime.SaveDialogOptions{
 		Title:           "Excel 出力先を選択",
 		DefaultFilename: "backlog-issues.xlsx",
@@ -950,6 +960,25 @@ func rawIssueIDs(rawJSON string) (issueTypeID, priorityID int64) {
 	return v.IssueType.ID, v.Priority.ID
 }
 
+// hasColumn は列キー列に指定のキーが含まれるかを返す。
+func hasColumn(columns []string, key string) bool {
+	for _, c := range columns {
+		if c == key {
+			return true
+		}
+	}
+	return false
+}
+
+// parentIssueKeyOf は課題の raw_json から親課題の表記(CF5)を作る。
+//
+// 同一プロジェクトの親は課題キー、ローカルに無い親(未同期・別プロジェクト)は
+// ID:<数値>、親なし・生 JSON が読めない課題は空文字になる。
+// 課題抽出・テンプレート出力の両方で同じ表記を使い、往復できるようにする。
+func parentIssueKeyOf(rawJSON string, keys map[int64]string) string {
+	return export.FormatParentIssueRef(store.ParentIssueID(rawJSON), keys)
+}
+
 // bulkCustomFieldValues は課題の raw_json からカスタム属性の現在値を
 // 「定義 ID → 表示文字列」で取り出す(テンプレートのプリフィル用。CF3)。
 //
@@ -1040,6 +1069,13 @@ func (a *App) ExportBulkTemplate(profileID string, projectID int64, query store.
 		a.logEnd(op, err, attrs...)
 		return nil, err
 	}
+	// 親課題キーのプリフィル(CF5)に使う「課題 ID → 課題キー」。
+	// テンプレートには常に親課題キー列が付くため、こちらは常に取得する。
+	parentKeys, err := s.ListIssueKeysByID(a.ctx, profileID, projectID)
+	if err != nil {
+		a.logEnd(op, err, attrs...)
+		return nil, err
+	}
 	path, err := wailsruntime.SaveFileDialog(a.ctx, wailsruntime.SaveDialogOptions{
 		Title:           "テンプレートの出力先を選択",
 		DefaultFilename: "backlog-bulk-template.xlsx",
@@ -1059,20 +1095,21 @@ func (a *App) ExportBulkTemplate(profileID string, projectID int64, query store.
 	for _, is := range res.Issues {
 		typeID, priorityID := rawIssueIDs(is.RawJSON)
 		rows = append(rows, export.BulkTemplateRow{
-			IssueKey:      is.IssueKey,
-			Summary:       is.Summary,
-			IssueTypeID:   typeID,
-			IssueTypeName: is.IssueTypeName,
-			StatusID:      is.StatusID,
-			StatusName:    is.StatusName,
-			PriorityID:    priorityID,
-			PriorityName:  is.PriorityName,
-			AssigneeID:    is.AssigneeID,
-			AssigneeName:  is.AssigneeName,
-			DueDate:       is.DueDate,
-			Description:   is.Description,
-			BaseUpdated:   is.Updated,
-			CustomFields:  bulkCustomFieldValues(is.RawJSON),
+			IssueKey:       is.IssueKey,
+			Summary:        is.Summary,
+			IssueTypeID:    typeID,
+			IssueTypeName:  is.IssueTypeName,
+			StatusID:       is.StatusID,
+			StatusName:     is.StatusName,
+			PriorityID:     priorityID,
+			PriorityName:   is.PriorityName,
+			AssigneeID:     is.AssigneeID,
+			AssigneeName:   is.AssigneeName,
+			DueDate:        is.DueDate,
+			Description:    is.Description,
+			ParentIssueKey: parentIssueKeyOf(is.RawJSON, parentKeys),
+			BaseUpdated:    is.Updated,
+			CustomFields:   bulkCustomFieldValues(is.RawJSON),
 		})
 	}
 	fileAttr := fileExtAttr(path)

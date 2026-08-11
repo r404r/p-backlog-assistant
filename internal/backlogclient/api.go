@@ -51,6 +51,10 @@ type Issue struct {
 	Created       string `json:"created"`
 	Updated       string `json:"updated"`
 	DueDate       string `json:"dueDate"`
+	// ParentIssueID は親課題 ID(0 = 親なし。CF5)。
+	// 一括更新の 1 階層制約の検証(ローカルに無い親を API で確認する)と
+	// 再送前突合で使う。
+	ParentIssueID int64  `json:"parentIssueId"`
 	RawJSON       string `json:"rawJson"`
 }
 
@@ -355,6 +359,8 @@ func parseIssue(raw json.RawMessage) (Issue, error) {
 		DueDate     *string   `json:"dueDate"`
 		Created     *string   `json:"created"`
 		Updated     *string   `json:"updated"`
+		// parentIssueId は親を持たない課題では null になる(CF5)
+		ParentIssueID *int64 `json:"parentIssueId"`
 	}
 	if err := json.Unmarshal(raw, &a); err != nil {
 		return Issue{}, fmt.Errorf("課題情報を解析できません: %w", err)
@@ -369,6 +375,9 @@ func parseIssue(raw json.RawMessage) (Issue, error) {
 		Created:     derefString(a.Created),
 		Updated:     derefString(a.Updated),
 		RawJSON:     string(raw),
+	}
+	if id := derefInt64(a.ParentIssueID); id > 0 {
+		i.ParentIssueID = id
 	}
 	if a.Status != nil {
 		i.StatusID = derefInt64(a.Status.ID)
