@@ -29,11 +29,31 @@ type fakeAPI struct {
 	activityQueries []backlogclient.ActivityQuery
 	getIssueCalls   []string
 
+	// ユーザ・チーム同期(SyncUsers)用の応答。
+	users         []backlogclient.User
+	teams         []backlogclient.Team
+	projectUsers  map[int64][]backlogclient.User
+	projectAdmins map[int64][]backlogclient.User
+	// projectTeams はプロジェクト単位のチーム(GET /projects/:id/teams)。
+	projectTeams map[int64][]backlogclient.Team
+
+	// ユーザ・チーム同期の呼び出し記録(検証用)。
+	teamOffsets        []int
+	projectUsersCalls  []int64
+	projectAdminsCalls []int64
+	projectTeamsCalls  []int64
+
 	// errors はエンドポイントごとの注入エラー。
 	issuesErr     error
 	countErr      error
 	activitiesErr error
 	projectsErr   error
+	usersErr      error
+	teamsErr      error
+	// projectUsersErr / projectAdminsErr / projectTeamsErr はプロジェクト単位の注入エラー。
+	projectUsersErr  map[int64]error
+	projectAdminsErr map[int64]error
+	projectTeamsErr  map[int64]error
 	// failIssuesAtOffset は指定 offset のページ取得を失敗させる(異常終了の再現)。
 	failIssuesAtOffset int
 }
@@ -43,8 +63,76 @@ func newFakeAPI() *fakeAPI {
 		deletedKeys:        map[string]bool{},
 		deletedIDs:         map[int64]bool{},
 		getIssueOnly:       map[string]backlogclient.Issue{},
+		projectUsers:       map[int64][]backlogclient.User{},
+		projectAdmins:      map[int64][]backlogclient.User{},
+		projectTeams:       map[int64][]backlogclient.Team{},
+		projectUsersErr:    map[int64]error{},
+		projectAdminsErr:   map[int64]error{},
+		projectTeamsErr:    map[int64]error{},
 		failIssuesAtOffset: -1,
 	}
+}
+
+// fakeUser は検証用のユーザを組み立てる(実在しないダミー値のみ)。
+func fakeUser(id int64, code, name string, roleType int) backlogclient.User {
+	raw, _ := json.Marshal(map[string]any{"id": id, "userId": code, "name": name, "roleType": roleType})
+	return backlogclient.User{
+		ID: id, UserCode: code, Name: name,
+		MailAddress: code + "@example.com", RoleType: roleType, RawJSON: string(raw),
+	}
+}
+
+func (f *fakeAPI) GetUsersRaw(ctx context.Context) ([]backlogclient.User, error) {
+	if f.usersErr != nil {
+		return nil, f.usersErr
+	}
+	return f.users, nil
+}
+
+// GetTeamsPaged は offset ページングを実 API と同じ挙動で再現する。
+func (f *fakeAPI) GetTeamsPaged(ctx context.Context, offset, count int) ([]backlogclient.Team, error) {
+	f.teamOffsets = append(f.teamOffsets, offset)
+	if f.teamsErr != nil {
+		return nil, f.teamsErr
+	}
+	if offset >= len(f.teams) {
+		return nil, nil
+	}
+	end := offset + count
+	if end > len(f.teams) {
+		end = len(f.teams)
+	}
+	return f.teams[offset:end], nil
+}
+
+func (f *fakeAPI) GetProjectUsers(ctx context.Context, projectID int64) ([]backlogclient.User, error) {
+	f.projectUsersCalls = append(f.projectUsersCalls, projectID)
+	if err := f.projectUsersErr[projectID]; err != nil {
+		return nil, err
+	}
+	return f.projectUsers[projectID], nil
+}
+
+func (f *fakeAPI) GetProjectAdministrators(ctx context.Context, projectID int64) ([]backlogclient.User, error) {
+	f.projectAdminsCalls = append(f.projectAdminsCalls, projectID)
+	if err := f.projectAdminsErr[projectID]; err != nil {
+		return nil, err
+	}
+	return f.projectAdmins[projectID], nil
+}
+
+func (f *fakeAPI) GetProjectTeams(ctx context.Context, projectID int64) ([]backlogclient.Team, error) {
+	f.projectTeamsCalls = append(f.projectTeamsCalls, projectID)
+	if err := f.projectTeamsErr[projectID]; err != nil {
+		return nil, err
+	}
+	return f.projectTeams[projectID], nil
+}
+
+// fakeTeam は検証用のチームを組み立てる(実在しないダミー値のみ)。
+func fakeTeam(id int64, name string, memberIDs ...int64) backlogclient.Team {
+	raw, _ := json.Marshal(map[string]any{"id": id, "name": name})
+	return backlogclient.Team{ID: id, Name: name, MemberIDs: memberIDs, RawJSON: string(raw)}
 }
 
 // addIssue はフェイクへ課題を追加する。

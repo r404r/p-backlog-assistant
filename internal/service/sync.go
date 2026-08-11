@@ -152,6 +152,37 @@ func (s *ProfileService) SyncIssues(ctx context.Context, profileID string, proje
 	return engine.SyncIssues(ctx, projectID, m, onProgress)
 }
 
+// SyncUsers はユーザ・チーム・プロジェクト参加者を同期する(設計書 3 節)。
+// 管理者権限が無い場合はプロジェクト単位取得へ自動的に縮退し、
+// 結果の Mode("users-space" / "users-projects")と Warnings で UI へ伝える。
+func (s *ProfileService) SyncUsers(ctx context.Context, profileID string) (*syncpkg.Result, error) {
+	// プロファイルの削除・保存と排他する(高 2。ロック順序 profileMu → syncMu)
+	s.profileMu.RLock()
+	defer s.profileMu.RUnlock()
+	// ローカル DB への書き込みを直列化する(SQLite の接続数は 1)
+	s.syncMu.Lock()
+	defer s.syncMu.Unlock()
+
+	engine, err := s.engineForProfile(ctx, profileID)
+	if err != nil {
+		return nil, err
+	}
+	return engine.SyncUsers(ctx)
+}
+
+// ListUsers はローカル DB のユーザ一覧を返す(API は呼ばない。画面 4)。
+// 所属チーム・参加プロジェクト・管理者プロジェクトは JOIN で解決済み。
+func (s *ProfileService) ListUsers(ctx context.Context, profileID string, filter store.UserFilter) (*store.UserListResult, error) {
+	// store を使う操作はプロファイルの削除・保存と排他する(高 2)
+	s.profileMu.RLock()
+	defer s.profileMu.RUnlock()
+	st, err := s.storeForProfile(profileID)
+	if err != nil {
+		return nil, err
+	}
+	return st.ListUserRows(ctx, filter)
+}
+
 // ListProjects はローカル DB のプロジェクト一覧を返す(API は呼ばない)。
 func (s *ProfileService) ListProjects(ctx context.Context, profileID string) ([]store.Project, error) {
 	// store を使う操作はプロファイルの削除・保存と排他する(高 2)

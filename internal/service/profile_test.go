@@ -38,6 +38,18 @@ type fakeConnector struct {
 	issues     []backlogclient.Issue
 	activities []backlogclient.Activity
 
+	// ユーザ・チーム同期(SyncUsers)の応答。
+	// rawUsers / pagedTeams は自前 HTTP 実装(backlogclient.GetUsersRaw 等)側で、
+	// GetUsers / GetTeams(ライブラリ経由・権限判定用)とは別物。
+	rawUsers      []backlogclient.User
+	rawUsersErr   error
+	pagedTeams    []backlogclient.Team
+	pagedTeamsErr error
+	projectUsers  map[int64][]backlogclient.User
+	projectAdmins map[int64][]backlogclient.User
+	// projectTeams は縮退パスでのプロジェクト単位のチーム取得(高 1)。
+	projectTeams map[int64][]backlogclient.Team
+
 	// 同期中の並行操作を検証するためのブロック機構(高 2)。
 	// issuesEntered が非 nil のとき、最初の GetIssues でそれを閉じてから
 	// issuesRelease が閉じられるまで待つ。
@@ -92,6 +104,39 @@ func (f *fakeConnector) GetIssue(ctx context.Context, issueIDOrKey string) (*bac
 
 func (f *fakeConnector) GetSpaceActivities(ctx context.Context, q backlogclient.ActivityQuery) ([]backlogclient.Activity, error) {
 	return f.activities, nil
+}
+
+func (f *fakeConnector) GetUsersRaw(ctx context.Context) ([]backlogclient.User, error) {
+	if f.rawUsersErr != nil {
+		return nil, f.rawUsersErr
+	}
+	return f.rawUsers, nil
+}
+
+func (f *fakeConnector) GetTeamsPaged(ctx context.Context, offset, count int) ([]backlogclient.Team, error) {
+	if f.pagedTeamsErr != nil {
+		return nil, f.pagedTeamsErr
+	}
+	if offset >= len(f.pagedTeams) {
+		return nil, nil
+	}
+	end := offset + count
+	if end > len(f.pagedTeams) {
+		end = len(f.pagedTeams)
+	}
+	return f.pagedTeams[offset:end], nil
+}
+
+func (f *fakeConnector) GetProjectUsers(ctx context.Context, projectID int64) ([]backlogclient.User, error) {
+	return f.projectUsers[projectID], nil
+}
+
+func (f *fakeConnector) GetProjectAdministrators(ctx context.Context, projectID int64) ([]backlogclient.User, error) {
+	return f.projectAdmins[projectID], nil
+}
+
+func (f *fakeConnector) GetProjectTeams(ctx context.Context, projectID int64) ([]backlogclient.Team, error) {
+	return f.projectTeams[projectID], nil
 }
 
 func (f *fakeConnector) TestConnection(ctx context.Context) (*backlogclient.ConnectionInfo, error) {

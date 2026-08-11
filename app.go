@@ -637,3 +637,139 @@ func (a *App) ExportIssuesExcel(profileID string, query store.IssueFilter, colum
 		slog.Int("rows", len(res.Issues)))...)
 	return &ExportResultDTO{Path: path, Rows: len(res.Issues)}, nil
 }
+
+// ---- M3: ユーザ抽出(frontend/src/lib/backend.ts の契約と対) ----
+
+// userAttrs はユーザ検索条件の動作ログ属性(キーワード本文は個人名を含みうるため有無のみ)。
+func userAttrs(profileID string, filter store.UserFilter) []slog.Attr {
+	return []slog.Attr{
+		slog.String("profileId", profileID),
+		slog.Bool("hasKeyword", filter.Keyword != ""),
+		slog.Int("roleType", filter.RoleType),
+	}
+}
+
+// SyncUsers はユーザ・チーム・プロジェクト参加情報を同期する
+// (権限が無い場合はプロジェクト単位の取得へ自動縮退する)。
+func (a *App) SyncUsers(profileID string) (*SyncResultDTO, error) {
+	const op = "SyncUsers"
+	attrs := []slog.Attr{slog.String("profileId", profileID)}
+	a.logStart(op, attrs...)
+	s, err := a.svc()
+	if err != nil {
+		a.logEnd(op, err, attrs...)
+		return nil, err
+	}
+	res, err := s.SyncUsers(a.ctx, profileID)
+	if err != nil {
+		a.logEnd(op, err, attrs...)
+		return nil, err
+	}
+	warnings := res.Warnings
+	if warnings == nil {
+		warnings = []string{}
+	}
+	// 警告本文はプロジェクト名等を含みうるため件数のみ記録する
+	a.logEnd(op, nil, append(attrs,
+		slog.String("executedMode", string(res.Mode)),
+		slog.Int("fetched", res.Fetched),
+		slog.Int("upserted", res.Upserted),
+		slog.Int("warnings", len(warnings)),
+		slog.Int64("durationMs", res.DurationMs))...)
+	return &SyncResultDTO{
+		Mode:       string(res.Mode),
+		Fetched:    res.Fetched,
+		Upserted:   res.Upserted,
+		Deleted:    res.Deleted,
+		Warnings:   warnings,
+		DurationMs: res.DurationMs,
+	}, nil
+}
+
+// UserListDTO はユーザ一覧の検索結果(フロント契約: rows / total)。
+type UserListDTO struct {
+	Rows  []store.UserRow `json:"rows"`
+	Total int             `json:"total"`
+}
+
+// ListUsers はローカル DB からユーザ一覧を返す(所属チーム・参加プロジェクト付き)。
+func (a *App) ListUsers(profileID string, query store.UserFilter) (*UserListDTO, error) {
+	const op = "ListUsers"
+	attrs := userAttrs(profileID, query)
+	a.logStart(op, attrs...)
+	s, err := a.svc()
+	if err != nil {
+		a.logEnd(op, err, attrs...)
+		return nil, err
+	}
+	res, err := s.ListUsers(a.ctx, profileID, query)
+	if err != nil {
+		a.logEnd(op, err, attrs...)
+		return nil, err
+	}
+	rows := res.Users
+	if rows == nil {
+		rows = []store.UserRow{}
+	}
+	a.logEnd(op, nil, append(attrs, slog.Int("rows", len(rows)), slog.Int("total", res.Total))...)
+	return &UserListDTO{Rows: rows, Total: res.Total}, nil
+}
+
+// ExportUsersExcel は条件に一致するユーザ全件を Excel に出力する。
+func (a *App) ExportUsersExcel(profileID string, query store.UserFilter, columns []string) (*ExportResultDTO, error) {
+	const op = "ExportUsersExcel"
+	attrs := append(userAttrs(profileID, query), slog.Int("columns", len(columns)))
+	a.logStart(op, attrs...)
+	s, err := a.svc()
+	if err != nil {
+		a.logEnd(op, err, attrs...)
+		return nil, err
+	}
+	query.Limit = exportSearchLimit
+	res, err := s.ListUsers(a.ctx, profileID, query)
+	if err != nil {
+		a.logEnd(op, err, attrs...)
+		return nil, err
+	}
+	if res.Truncated {
+		err := errors.New("対象件数が上限(100 万件)を超えています。条件で絞り込んでください")
+		a.logEnd(op, err, attrs...)
+		return nil, err
+	}
+	path, err := wailsruntime.SaveFileDialog(a.ctx, wailsruntime.SaveDialogOptions{
+		Title:           "Excel 出力先を選択",
+		DefaultFilename: "backlog-users.xlsx",
+		Filters: []wailsruntime.FileFilter{
+			{DisplayName: "Excel ブック (*.xlsx)", Pattern: "*.xlsx"},
+		},
+	})
+	if err != nil {
+		a.logEnd(op, err, attrs...)
+		return nil, err
+	}
+	if path == "" { // ユーザがキャンセル
+		a.logEnd(op, nil, append(attrs, slog.Bool("canceled", true))...)
+		return &ExportResultDTO{Path: "", Rows: 0}, nil
+	}
+	exportRows := make([]export.UserExportRow, 0, len(res.Users))
+	for _, u := range res.Users {
+		exportRows = append(exportRows, export.UserExportRow{
+			ID:               u.ID,
+			UserCode:         u.UserCode,
+			Name:             u.Name,
+			MailAddress:      u.MailAddress,
+			RoleType:         u.RoleType,
+			RoleName:         u.RoleName,
+			TeamNames:        u.TeamNames,
+			ProjectKeys:      u.ProjectKeys,
+			AdminProjectKeys: u.AdminProjectKeys,
+		})
+	}
+	fileAttr := slog.String("fileName", filepath.Base(path))
+	if err := export.ExportUsersToFile(path, exportRows, export.UserOptions{Columns: columns}); err != nil {
+		a.logEnd(op, maskPathInError(err, path), append(attrs, fileAttr)...)
+		return nil, err
+	}
+	a.logEnd(op, nil, append(attrs, fileAttr, slog.Int("rows", len(exportRows)))...)
+	return &ExportResultDTO{Path: path, Rows: len(exportRows)}, nil
+}

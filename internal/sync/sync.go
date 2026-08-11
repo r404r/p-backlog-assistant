@@ -53,6 +53,15 @@ type API interface {
 	GetIssuesCount(ctx context.Context, q backlogclient.IssueQuery) (int, error)
 	GetIssue(ctx context.Context, issueIDOrKey string) (*backlogclient.Issue, error)
 	GetSpaceActivities(ctx context.Context, q backlogclient.ActivityQuery) ([]backlogclient.Activity, error)
+
+	// ユーザ・チーム同期(SyncUsers)。GetUsersRaw / GetTeamsPaged は
+	// 権限不足時に backlogclient.ErrPermissionDenied を返す。
+	GetUsersRaw(ctx context.Context) ([]backlogclient.User, error)
+	GetTeamsPaged(ctx context.Context, offset, count int) ([]backlogclient.Team, error)
+	GetProjectUsers(ctx context.Context, projectID int64) ([]backlogclient.User, error)
+	GetProjectAdministrators(ctx context.Context, projectID int64) ([]backlogclient.User, error)
+	// GetProjectTeams は縮退パスでチーム情報を合成するために使う(高 1)。
+	GetProjectTeams(ctx context.Context, projectID int64) ([]backlogclient.Team, error)
 }
 
 // コンパイル時チェック: *backlogclient.Client が API を満たすこと。

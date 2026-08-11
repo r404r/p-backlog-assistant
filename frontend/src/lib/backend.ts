@@ -156,6 +156,55 @@ export interface FilterOptions {
   assignees: string[]
 }
 
+/** ユーザ検索条件(ローカル DB に対する検索) */
+export interface UserQuery {
+  /** キーワード(名前・ユーザ ID・メールアドレスの部分一致) */
+  keyword?: string
+  /**
+   * ロール種別(API 実値。
+   * 1=管理者 / 2=一般ユーザ / 3=レポーター / 4=閲覧者 /
+   * 5=ゲストレポーター / 6=ゲスト閲覧者。未指定・0 ならすべて)
+   */
+  roleType?: number
+  /** 画面プレビューの取得上限。未指定ならバックエンドの既定値。Excel 出力時は無視される */
+  limit?: number
+}
+
+/** ユーザ 1 件(検索結果の表示・Excel 出力用) */
+export interface UserRow {
+  /** Backlog のユーザ ID(数値) */
+  id: number
+  /** ログイン用のユーザ ID(Backlog API の userId) */
+  userCode: string
+  /** 表示名 */
+  name: string
+  /** メールアドレス */
+  mailAddress: string
+  /**
+   * スペース全体のロール種別(API 実値。
+   * 1=管理者 / 2=一般ユーザ / 3=レポーター / 4=閲覧者 /
+   * 5=ゲストレポーター / 6=ゲスト閲覧者)
+   */
+  roleType: number
+  /**
+   * roleType の日本語表記(Go 側で解決済み)。
+   * 既知の値は名称、未知の値は「不明(N)」形式で数値を含む。
+   */
+  roleName: string
+  /** 所属チーム名 */
+  teamNames: string[]
+  /** 参加プロジェクトのキー */
+  projectKeys: string[]
+  /** 管理者として登録されているプロジェクトのキー */
+  adminProjectKeys: string[]
+}
+
+/** ユーザ検索の結果。rows は limit で切り詰められるが total は条件に一致する全件数 */
+export interface UserSearchResult {
+  rows: UserRow[]
+  total: number
+}
+
 /** 同期状態(sync_state テーブル 1 行) */
 export interface SyncStateRow {
   /** データ種別(issues / users / teams / projects) */
@@ -233,6 +282,22 @@ export interface Backend {
    */
   exportIssuesExcel(profileId: string, query: IssueQuery, columns: string[]): Promise<ExportResult>
 
+  // --- ユーザ抽出 -----------------------------------------------------------
+
+  /**
+   * Backlog からユーザ(+ チーム・プロジェクト参加情報)を同期する。
+   * 権限不足の場合はプロジェクト単位の取得へ縮退し、その旨が warnings に入る。
+   */
+  syncUsers(profileId: string): Promise<SyncResult>
+  /** ローカル DB からユーザを検索する(API は呼ばない) */
+  listUsers(profileId: string, query: UserQuery): Promise<UserSearchResult>
+  /**
+   * 検索条件に一致するユーザを Excel 出力する(表示上限に関わらず全件)。
+   * 保存先は Go 側の保存ダイアログで選択する。キャンセル時は path が空文字。
+   * @param columns 出力する列キー(UserRow のキー)を表示順で指定する
+   */
+  exportUsersExcel(profileId: string, query: UserQuery, columns: string[]): Promise<ExportResult>
+
   // --- 動作ログ -------------------------------------------------------------
 
   /** 動作ログの出力先パスと有効・無効を返す */
@@ -259,6 +324,9 @@ interface WailsApp {
   ListFilterOptions(profileId: string, projectId: number): Promise<FilterOptions>
   GetSyncState(profileId: string): Promise<SyncStateRow[]>
   ExportIssuesExcel(profileId: string, query: IssueQuery, columns: string[]): Promise<ExportResult>
+  SyncUsers(profileId: string): Promise<SyncResult>
+  ListUsers(profileId: string, query: UserQuery): Promise<UserSearchResult>
+  ExportUsersExcel(profileId: string, query: UserQuery, columns: string[]): Promise<ExportResult>
   GetLogInfo(): Promise<LogInfo>
 }
 
@@ -313,6 +381,30 @@ function createWailsBackend(app: WailsApp): Backend {
     getSyncState: async (profileId) => (await app.GetSyncState(profileId)) ?? [],
     exportIssuesExcel: (profileId, query, columns) =>
       app.ExportIssuesExcel(profileId, query, columns),
+    syncUsers: async (profileId) => {
+      const r = await app.SyncUsers(profileId)
+      return {
+        mode: r?.mode ?? 'full',
+        fetched: r?.fetched ?? 0,
+        upserted: r?.upserted ?? 0,
+        deleted: r?.deleted ?? 0,
+        warnings: r?.warnings ?? [],
+        durationMs: r?.durationMs ?? 0,
+      }
+    },
+    listUsers: async (profileId, query) => {
+      const r = await app.ListUsers(profileId, query)
+      // 所属チーム・プロジェクトが空の場合、Go の nil スライスは null で届く
+      const rows = (r?.rows ?? []).map((u) => ({
+        ...u,
+        teamNames: u.teamNames ?? [],
+        projectKeys: u.projectKeys ?? [],
+        adminProjectKeys: u.adminProjectKeys ?? [],
+      }))
+      return { rows, total: r?.total ?? 0 }
+    },
+    exportUsersExcel: (profileId, query, columns) =>
+      app.ExportUsersExcel(profileId, query, columns),
     getLogInfo: async () => {
       // 旧バージョンのバインディング(GetLogInfo 未実装)でも画面を壊さない
       if (typeof app.GetLogInfo !== 'function') return { path: '', enabled: false }
@@ -345,6 +437,79 @@ const MOCK_PROJECTS: Project[] = [
   { id: 102, projectKey: 'DEMO', name: 'デモ運用プロジェクト', lastSyncedAt: '', syncStateUnknown: false },
   { id: 103, projectKey: 'TRIAL', name: '検証用プロジェクト', lastSyncedAt: '', syncStateUnknown: false },
 ]
+
+/** モック用のダミーユーザ(実在の氏名・メールアドレスは含まない) */
+const MOCK_USERS: UserRow[] = [
+  {
+    id: 12345,
+    userCode: 'mock.taro',
+    name: 'モック 太郎',
+    mailAddress: 'mock.taro@example.invalid',
+    roleType: 1,
+    roleName: '管理者',
+    teamNames: ['開発チーム', '運用チーム'],
+    projectKeys: ['SAMPLE', 'DEMO', 'TRIAL'],
+    adminProjectKeys: ['SAMPLE', 'DEMO'],
+  },
+  {
+    id: 12346,
+    userCode: 'mock.hanako',
+    name: 'モック 花子',
+    mailAddress: 'mock.hanako@example.invalid',
+    roleType: 2,
+    roleName: '一般ユーザー',
+    teamNames: ['開発チーム'],
+    projectKeys: ['SAMPLE'],
+    adminProjectKeys: [],
+  },
+  {
+    id: 12347,
+    userCode: 'mock.jiro',
+    name: 'モック 次郎',
+    mailAddress: 'mock.jiro@example.invalid',
+    roleType: 2,
+    roleName: '一般ユーザー',
+    teamNames: [],
+    projectKeys: ['DEMO', 'TRIAL'],
+    adminProjectKeys: ['TRIAL'],
+  },
+  {
+    id: 12348,
+    userCode: 'mock.saburo',
+    name: 'モック 三郎',
+    mailAddress: 'mock.saburo@example.invalid',
+    roleType: 3,
+    roleName: 'レポーター',
+    teamNames: ['運用チーム'],
+    projectKeys: ['DEMO'],
+    adminProjectKeys: [],
+  },
+  {
+    id: 12349,
+    userCode: 'mock.shiro',
+    name: 'モック 四郎',
+    mailAddress: 'mock.shiro@example.invalid',
+    roleType: 4,
+    roleName: 'ビューアー',
+    teamNames: [],
+    projectKeys: [],
+    adminProjectKeys: [],
+  },
+]
+
+/** モックのローカル検索(Go 側の部分一致検索に相当する簡易版) */
+function filterMockUsers(rows: UserRow[], query: UserQuery): UserRow[] {
+  const keyword = (query.keyword ?? '').trim().toLowerCase()
+  return rows.filter((u) => {
+    if (query.roleType && u.roleType !== query.roleType) return false
+    if (!keyword) return true
+    return (
+      u.name.toLowerCase().includes(keyword) ||
+      u.userCode.toLowerCase().includes(keyword) ||
+      u.mailAddress.toLowerCase().includes(keyword)
+    )
+  })
+}
 
 /** 日付を YYYY-MM-DD 形式で返す */
 function ymd(d: Date): string {
@@ -399,6 +564,7 @@ function createMockBackend(): Backend {
   // 課題抽出・同期のモック状態。プロジェクト 101 のみ「同期済み」の初期状態とし、
   // 他は未同期にして「未同期プロジェクトの導線」も確認できるようにする。
   const projects: Project[] = MOCK_PROJECTS.map((p) => ({ ...p }))
+  const users: UserRow[] = MOCK_USERS.map((u) => ({ ...u }))
   const issuesByProject = new Map<number, IssueRow[]>()
   const syncState: SyncStateRow[] = []
 
@@ -580,6 +746,43 @@ function createMockBackend(): Backend {
       if (columns.length === 0) throw new Error('出力する列を 1 つ以上選択してください')
       const all = issuesByProject.get(query.projectId) ?? []
       const matched = filterMockIssues(all, query)
+      // モックでは保存ダイアログを出せないため、ダミーのパスを返す
+      return { path: '(モック)保存ダイアログは Wails 実行時のみ表示されます', rows: matched.length }
+    },
+
+    async syncUsers() {
+      await delay(1000)
+      const started = Date.now()
+      putSyncState('users', 0, new Date().toISOString())
+      return {
+        mode: 'full',
+        fetched: users.length,
+        upserted: users.length,
+        deleted: 0,
+        warnings: [],
+        durationMs: Date.now() - started,
+      }
+    },
+
+    async listUsers(_profileId, query) {
+      await delay(250)
+      const matched = filterMockUsers(users, query)
+      const limit = query.limit && query.limit > 0 ? query.limit : matched.length
+      return {
+        rows: matched.slice(0, limit).map((u) => ({
+          ...u,
+          teamNames: [...u.teamNames],
+          projectKeys: [...u.projectKeys],
+          adminProjectKeys: [...u.adminProjectKeys],
+        })),
+        total: matched.length,
+      }
+    },
+
+    async exportUsersExcel(_profileId, query, columns) {
+      await delay(700)
+      if (columns.length === 0) throw new Error('出力する列を 1 つ以上選択してください')
+      const matched = filterMockUsers(users, query)
       // モックでは保存ダイアログを出せないため、ダミーのパスを返す
       return { path: '(モック)保存ダイアログは Wails 実行時のみ表示されます', rows: matched.length }
     },
