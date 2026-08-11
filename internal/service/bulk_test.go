@@ -35,7 +35,7 @@ func newBulkTestService(t *testing.T) (*ProfileService, string, *fakeConnector) 
 		},
 	}
 	s, id := newSyncTestService(t, fake)
-	if _, err := s.SyncIssues(context.Background(), id, 1, "full"); err != nil {
+	if _, err := s.SyncIssues(context.Background(), id, 1, "full", ""); err != nil {
 		t.Fatal(err)
 	}
 	return s, id, fake

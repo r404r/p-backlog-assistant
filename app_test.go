@@ -9,7 +9,9 @@ import (
 	"backlog-assistant/internal/bulk"
 	"backlog-assistant/internal/customfield"
 	"backlog-assistant/internal/export"
+	"backlog-assistant/internal/service"
 	"backlog-assistant/internal/store"
+	syncpkg "backlog-assistant/internal/sync"
 )
 
 // TestFileExtAttrRecordsOnlyExtension は、動作ログに残すのが拡張子だけであり、
@@ -289,5 +291,34 @@ func TestHasColumn(t *testing.T) {
 	}
 	if hasColumn([]string{"issueKey"}, export.ParentIssueKeyColumn) {
 		t.Errorf("選択していない列を検出した")
+	}
+}
+
+// TestSyncProgressPayload は課題同期の進捗イベント(sync:progress)の
+// ペイロードが、フロントエンド(backend.ts の SyncProgress)の期待どおりの
+// キー・型で組み立てられることを確認する。
+// イベント送信そのものは Wails ランタイム結合のため手動確認とする(TDD 例外)。
+func TestSyncProgressPayload(t *testing.T) {
+	got := syncProgressPayload(service.SyncProgressEvent{
+		ProfileID: "profile-1",
+		RunID:     "run-7",
+		ProjectID: 42,
+		Progress:  syncpkg.Progress{Phase: syncpkg.PhaseFetch, Fetched: 300, Total: 1200},
+	})
+	want := map[string]any{
+		"profileId": "profile-1",
+		"runId":     "run-7",
+		"projectId": int64(42),
+		"phase":     "fetch",
+		"fetched":   300,
+		"total":     1200,
+	}
+	if len(got) != len(want) {
+		t.Fatalf("キー数 = %d, want %d(%v)", len(got), len(want), got)
+	}
+	for k, v := range want {
+		if got[k] != v {
+			t.Errorf("%s = %#v, want %#v", k, got[k], v)
+		}
 	}
 }

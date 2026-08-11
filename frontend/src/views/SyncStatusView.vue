@@ -2,12 +2,16 @@
 // 同期状態画面。TDD 例外(GUI): フロントエンドにテスト基盤が無いため手動確認で担保する。
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import {
+  formatSyncProgress,
   getBackend,
   isMockBackend,
+  newSyncRunId,
+  onSyncProgress,
   type LogInfo,
   type Project,
   type RateLimitStatus,
   type SyncMode,
+  type SyncProgress,
   type SyncResult,
   type SyncStateRow,
 } from '../lib/backend'
@@ -247,23 +251,62 @@ const busy = computed(() => syncing.value || syncingProjects.value || loading.va
 
 const syncModeLabel = (mode: string) => (mode === 'full' ? 'フル同期' : '差分同期')
 
+/**
+ * 実行中の課題同期の進捗(未受信・非実行中は null)。
+ * フル同期は数万件になり得るため、件数を出さないと無反応に見える。
+ */
+const syncProgress = ref<SyncProgress | null>(null)
+const syncProgressText = computed(() =>
+  syncProgress.value ? formatSyncProgress(syncProgress.value) : '',
+)
+let unsubscribeSyncProgress: (() => void) | null = null
+
+/**
+ * 表示対象の実行 ID(この画面が今まさに走らせている同期。非実行中は空文字)。
+ * プロファイル ID + プロジェクト ID の一致だけでは、同じ対象を続けて
+ * 同期し直した場合や、別画面が同じ対象を同期している場合に旧実行の進捗を
+ * 拾ってしまうため、実行ごとに一意な ID で突き合わせる(中 4)。
+ */
+let currentSyncRunId = ''
+
+onMounted(() => {
+  unsubscribeSyncProgress = onSyncProgress((p) => {
+    // 自分が開始した実行のイベントだけを表示する
+    // (他画面・他プロファイル・失効した実行・前回実行の残りは無視する)
+    if (!currentSyncRunId || p.runId !== currentSyncRunId) return
+    syncProgress.value = p
+  })
+})
+
+onUnmounted(() => {
+  if (unsubscribeSyncProgress) unsubscribeSyncProgress()
+  unsubscribeSyncProgress = null
+})
+
 async function runIssueSync() {
   if (!selectedProjectId.value || busy.value) return
   syncing.value = true
   syncError.value = ''
   syncResult.value = null
+  syncProgress.value = null
   syncResultProject.value = projectLabel(selectedProjectId.value)
+  const runId = newSyncRunId()
+  currentSyncRunId = runId
   try {
     syncResult.value = await backend.syncIssues(
       profileId.value,
       selectedProjectId.value,
       syncMode.value,
+      runId,
     )
     await reload()
   } catch (e) {
     syncError.value = `同期に失敗しました: ${errorMessage(e)}`
   } finally {
     syncing.value = false
+    syncProgress.value = null
+    // 応答後に届く進捗(あれば)を受け取らないよう、実行 ID も外す
+    if (currentSyncRunId === runId) currentSyncRunId = ''
   }
 }
 
@@ -376,6 +419,9 @@ async function runProjectSync() {
             {{ syncingProjects ? 'プロジェクト同期中...' : 'プロジェクト一覧を同期' }}
           </button>
           <span v-if="syncing || syncingProjects" class="spinner" aria-hidden="true"></span>
+          <span v-if="syncing && syncProgressText" class="sync-progress" aria-live="polite">
+            {{ syncProgressText }}
+          </span>
         </div>
 
         <p class="hint">
@@ -605,6 +651,13 @@ button.primary:hover:not(:disabled) {
   border-top-color: #0b5cad;
   border-radius: 50%;
   animation: spin 0.8s linear infinite;
+}
+
+/* 同期中の進捗(取得中 N / M 件) */
+.sync-progress {
+  font-size: 0.85rem;
+  color: #57606a;
+  font-variant-numeric: tabular-nums;
 }
 
 @keyframes spin {

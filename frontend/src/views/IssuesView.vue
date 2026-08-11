@@ -1,16 +1,20 @@
 <script lang="ts" setup>
 // 課題抽出画面。TDD 例外(GUI): フロントエンドにテスト基盤が無いため手動確認で担保する。
-import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import {
   customColumnKey,
+  formatSyncProgress,
   getBackend,
   isMockBackend,
+  newSyncRunId,
+  onSyncProgress,
   type CustomFieldDef,
   type CustomFieldFilter,
   type IssueQuery,
   type IssueRow,
   type Project,
   type SyncMode,
+  type SyncProgress,
   type SyncResult,
 } from '../lib/backend'
 import {
@@ -510,6 +514,9 @@ function invalidatePendingRequests() {
   searchRequestSeq++
   syncRequestSeq++
   exportRequestSeq++
+  // 失効した実行の進捗を表示し続けないよう、表示と受理対象を消す
+  syncProgress.value = null
+  currentSyncRunId = ''
 }
 
 async function search() {
@@ -571,17 +578,53 @@ let syncRequestSeq = 0
 
 const syncModeLabel = (mode: string) => (mode === 'full' ? 'フル同期' : '差分同期')
 
+/**
+ * 実行中の同期の進捗(未受信・非実行中は null)。
+ * フル同期は数万件になり得るため、件数を出さないと無反応に見える。
+ */
+const syncProgress = ref<SyncProgress | null>(null)
+const syncProgressText = computed(() =>
+  syncProgress.value ? formatSyncProgress(syncProgress.value) : '',
+)
+let unsubscribeSyncProgress: (() => void) | null = null
+
+/**
+ * 表示対象の実行 ID(この画面が今まさに走らせている同期。非実行中は空文字)。
+ * プロファイル ID + プロジェクト ID の一致だけでは、A→B→A と切り替えて
+ * 同期し直した場合や、別画面が同じ対象を同期している場合に旧実行の進捗を
+ * 拾ってしまうため、実行ごとに一意な ID で突き合わせる(中 4)。
+ */
+let currentSyncRunId = ''
+
+onMounted(() => {
+  unsubscribeSyncProgress = onSyncProgress((p) => {
+    // 自分が開始した実行のイベントだけを表示する
+    // (他画面・他プロファイル・失効した実行・前回実行の残りは無視する)
+    if (!currentSyncRunId || p.runId !== currentSyncRunId) return
+    syncProgress.value = p
+  })
+})
+
+onUnmounted(() => {
+  if (unsubscribeSyncProgress) unsubscribeSyncProgress()
+  unsubscribeSyncProgress = null
+})
+
 async function runSync() {
   if (!selectedProjectId.value || syncing.value) return
   const seq = ++syncRequestSeq
   syncing.value = true
   syncError.value = ''
   syncResult.value = null
+  syncProgress.value = null
+  const runId = newSyncRunId()
+  currentSyncRunId = runId
   try {
     const result = await backend.syncIssues(
       profileId.value,
       selectedProjectId.value,
       syncMode.value,
+      runId,
     )
     // プロジェクト切替後なら、前のプロジェクトの同期結果は表示しない
     if (seq !== syncRequestSeq) return
@@ -594,6 +637,9 @@ async function runSync() {
   } finally {
     // 同期は多重起動しないため、失効済みの応答でもここで必ず下ろす
     syncing.value = false
+    syncProgress.value = null
+    // 応答後に届く進捗(あれば)を受け取らないよう、実行 ID も外す
+    if (currentSyncRunId === runId) currentSyncRunId = ''
   }
 }
 
@@ -748,6 +794,9 @@ async function exportExcel() {
             {{ syncing ? '同期中...' : '同期' }}
           </button>
           <span v-if="syncing" class="spinner" aria-hidden="true"></span>
+          <span v-if="syncing && syncProgressText" class="sync-progress" aria-live="polite">
+            {{ syncProgressText }}
+          </span>
         </div>
         <p class="hint">
           自動は同期状態から判定します(未同期・長期間未同期ならフル同期)。
@@ -1224,6 +1273,13 @@ button.primary:hover:not(:disabled) {
   border-top-color: #0b5cad;
   border-radius: 50%;
   animation: spin 0.8s linear infinite;
+}
+
+/* 同期中の進捗(取得中 N / M 件) */
+.sync-progress {
+  font-size: 0.85rem;
+  color: #57606a;
+  font-variant-numeric: tabular-nums;
 }
 
 @keyframes spin {

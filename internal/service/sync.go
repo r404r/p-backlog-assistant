@@ -10,8 +10,22 @@ import (
 	syncpkg "backlog-assistant/internal/sync"
 )
 
+// SyncProgressEvent は同期進捗の通知内容。
+//
+// RunID は「どの実行の進捗か」を表す識別子で、同期を開始した呼び出し元
+// (UI)が採番して SyncIssues へ渡す。プロファイル ID + プロジェクト ID
+// だけでは、同じ対象を続けて同期し直した場合や、失効した実行が
+// まだ動いている場合に、新旧の実行を区別できないため(中 4)。
+// service 側は解釈せずそのまま通知へ載せる(空文字も許す)。
+type SyncProgressEvent struct {
+	ProfileID string
+	RunID     string
+	ProjectID int64
+	Progress  syncpkg.Progress
+}
+
 // SyncProgressFunc は同期進捗の通知先(app.go から Wails のイベント送信へ接続する想定)。
-type SyncProgressFunc func(profileID string, projectID int64, p syncpkg.Progress)
+type SyncProgressFunc func(ev SyncProgressEvent)
 
 // SetSyncProgressHandler は同期進捗の通知先を設定する(nil で解除)。
 func (s *ProfileService) SetSyncProgressHandler(fn SyncProgressFunc) {
@@ -128,7 +142,8 @@ func (s *ProfileService) SyncProjects(ctx context.Context, profileID string) (*s
 
 // SyncIssues は 1 プロジェクトの課題を同期する。
 // mode は "auto"(既定・sync_state から判定)/ "full" / "incremental"。
-func (s *ProfileService) SyncIssues(ctx context.Context, profileID string, projectID int64, mode string) (*syncpkg.Result, error) {
+// runID は進捗通知に載せる実行識別子(SyncProgressEvent の説明を参照。空可)。
+func (s *ProfileService) SyncIssues(ctx context.Context, profileID string, projectID int64, mode, runID string) (*syncpkg.Result, error) {
 	// プロファイルの削除・保存と排他する(高 2。ロック順序 profileMu → syncMu)
 	s.profileMu.RLock()
 	defer s.profileMu.RUnlock()
@@ -147,7 +162,9 @@ func (s *ProfileService) SyncIssues(ctx context.Context, profileID string, proje
 	}
 	var onProgress syncpkg.ProgressFunc
 	if fn := s.progressHandler(); fn != nil {
-		onProgress = func(p syncpkg.Progress) { fn(profileID, projectID, p) }
+		onProgress = func(p syncpkg.Progress) {
+			fn(SyncProgressEvent{ProfileID: profileID, RunID: runID, ProjectID: projectID, Progress: p})
+		}
 	}
 	return engine.SyncIssues(ctx, projectID, m, onProgress)
 }

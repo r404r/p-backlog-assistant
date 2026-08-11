@@ -93,16 +93,19 @@ func TestSyncIssues_ThenSearchAndFilterOptions(t *testing.T) {
 	s, id := newSyncTestService(t, fake)
 	ctx := context.Background()
 
-	// 進捗コールバックが呼ばれること
+	// 進捗コールバックが呼ばれること(実行 ID がそのまま届くこと)
 	var progressCalls int
-	s.SetSyncProgressHandler(func(profileID string, projectID int64, p syncpkg.Progress) {
-		if profileID != id || projectID != 1 {
-			t.Errorf("進捗の宛先 = %s / %d", profileID, projectID)
+	s.SetSyncProgressHandler(func(ev SyncProgressEvent) {
+		if ev.ProfileID != id || ev.ProjectID != 1 {
+			t.Errorf("進捗の宛先 = %s / %d", ev.ProfileID, ev.ProjectID)
+		}
+		if ev.RunID != "run-1" {
+			t.Errorf("実行 ID = %q, want \"run-1\"", ev.RunID)
 		}
 		progressCalls++
 	})
 
-	res, err := s.SyncIssues(ctx, id, 1, "full")
+	res, err := s.SyncIssues(ctx, id, 1, "full", "run-1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -156,7 +159,7 @@ func TestSearchIssues_ReportsTruncated(t *testing.T) {
 	}
 	s, id := newSyncTestService(t, fake)
 	ctx := context.Background()
-	if _, err := s.SyncIssues(ctx, id, 1, "full"); err != nil {
+	if _, err := s.SyncIssues(ctx, id, 1, "full", ""); err != nil {
 		t.Fatal(err)
 	}
 
@@ -196,7 +199,7 @@ func TestSyncIssues_AutoModeFallsBackToFullOnFirstSync(t *testing.T) {
 	}
 	s, id := newSyncTestService(t, fake)
 
-	res, err := s.SyncIssues(context.Background(), id, 1, "auto")
+	res, err := s.SyncIssues(context.Background(), id, 1, "auto", "")
 	if err != nil {
 		t.Fatalf("auto モードの初回同期が失敗した: %v", err)
 	}
@@ -212,7 +215,7 @@ func TestSyncIssues_RejectsUnknownMode(t *testing.T) {
 	fake := &fakeConnector{info: testInfo()}
 	s, id := newSyncTestService(t, fake)
 
-	if _, err := s.SyncIssues(context.Background(), id, 1, "weekly"); err == nil {
+	if _, err := s.SyncIssues(context.Background(), id, 1, "weekly", ""); err == nil {
 		t.Fatal("不明なモードでエラーにならなかった")
 	}
 }
@@ -261,7 +264,7 @@ func TestDeleteProfile_WaitsForRunningSync(t *testing.T) {
 
 	syncDone := make(chan error, 1)
 	go func() {
-		_, err := s.SyncIssues(ctx, id, 1, "full")
+		_, err := s.SyncIssues(ctx, id, 1, "full", "")
 		syncDone <- err
 	}()
 	<-fake.issuesEntered // 同期が API 取得(DB オープン済み)まで進んだ

@@ -106,6 +106,69 @@ export interface SyncResult {
   durationMs: number
 }
 
+/**
+ * 課題同期の進捗の段階(Go 側 internal/sync の Phase と対)。
+ * count = 総件数の確認 / fetch = 取得・保存 / deleteScan = 削除検知 / done = 完了。
+ */
+export type SyncPhase = 'count' | 'fetch' | 'deleteScan' | 'done'
+
+/** 課題同期の進捗(Wails イベント 'sync:progress' のペイロード) */
+export interface SyncProgress {
+  /**
+   * 実行 ID。syncIssues の呼び出し側が採番して渡した値がそのまま返る。
+   * 画面はこれが一致するイベントだけを受理する(同じプロファイル・
+   * 同じプロジェクトを続けて同期し直した場合や、画面切替で失効した
+   * 実行がまだ動いている場合に、新旧を取り違えないため)。
+   */
+  runId: string
+  /** 進捗の発生元プロファイル(補助情報) */
+  profileId: string
+  /** 進捗の発生元プロジェクト(補助情報) */
+  projectId: number
+  phase: SyncPhase
+  /** 取得済み件数 */
+  fetched: number
+  /** 総件数(不明な場合は 0。差分同期では総件数が分からない) */
+  total: number
+}
+
+/** newSyncRunId の連番(同一プロセス内で重複しないようにするため) */
+let syncRunSeq = 0
+
+/**
+ * 課題同期の実行 ID を採番する。
+ *
+ * 進捗イベントは syncIssues の応答より先に届くため、実行 ID は
+ * 「呼び出す側が呼び出す前に決める」必要がある(応答で受け取る方式では
+ * 最初の進捗を取りこぼす)。アプリは 1 プロセス・1 ウィンドウで動くため、
+ * 連番 + 時刻 + 乱数で十分に一意になる。
+ */
+export function newSyncRunId(): string {
+  syncRunSeq += 1
+  return `sync-${Date.now()}-${syncRunSeq}-${Math.random().toString(36).slice(2, 8)}`
+}
+
+/**
+ * 同期の進捗を画面表示用の文字列にする(課題抽出画面・同期状態画面で共用)。
+ * 総件数が分からない段階では分母を出さない(0 件中と誤解させないため)。
+ */
+export function formatSyncProgress(p: SyncProgress): string {
+  switch (p.phase) {
+    case 'count':
+      return '総件数を確認中...'
+    case 'fetch':
+      return p.total > 0
+        ? `取得中 ${p.fetched.toLocaleString()} / ${p.total.toLocaleString()} 件`
+        : `取得中 ${p.fetched.toLocaleString()} 件`
+    case 'deleteScan':
+      return `削除された課題を確認中(${p.fetched.toLocaleString()} 件取得済み)`
+    case 'done':
+      return `取得完了 ${p.fetched.toLocaleString()} 件(仕上げ中...)`
+    default:
+      return ''
+  }
+}
+
 /** カスタム属性列の列キーの接頭辞(Go 側 export パッケージの規約 cf_{定義ID} と対) */
 export const CUSTOM_COLUMN_PREFIX = 'cf_'
 
@@ -568,7 +631,16 @@ export interface Backend {
   /** Backlog からプロジェクト一覧を取得してローカル DB を更新する */
   syncProjects(profileId: string): Promise<void>
   /** 指定プロジェクトの課題を同期する(差分 / フル) */
-  syncIssues(profileId: string, projectId: number, mode: SyncMode): Promise<SyncResult>
+  /**
+   * 課題を同期する。runId は進捗イベント(onSyncProgress)と突き合わせるための
+   * 実行 ID(newSyncRunId で採番する。進捗を使わない呼び出しは空文字でよい)。
+   */
+  syncIssues(
+    profileId: string,
+    projectId: number,
+    mode: SyncMode,
+    runId: string,
+  ): Promise<SyncResult>
   /**
    * ローカル DB から課題を検索する(API は呼ばない)。
    * @param columns 一覧に表示する列キー(Excel 出力と同じ形式)。
@@ -693,7 +765,12 @@ interface WailsApp {
   SetActiveProfile(id: string): Promise<void>
   ListProjects(profileId: string): Promise<Project[]>
   SyncProjects(profileId: string): Promise<void>
-  SyncIssues(profileId: string, projectId: number, mode: SyncMode): Promise<SyncResult>
+  SyncIssues(
+    profileId: string,
+    projectId: number,
+    mode: SyncMode,
+    runId: string,
+  ): Promise<SyncResult>
   SearchIssues(
     profileId: string,
     query: IssueQuery,
@@ -782,8 +859,8 @@ function createWailsBackend(app: WailsApp): Backend {
         syncStateUnknown: p.syncStateUnknown ?? false,
       })),
     syncProjects: (profileId) => app.SyncProjects(profileId),
-    syncIssues: async (profileId, projectId, mode) => {
-      const r = await app.SyncIssues(profileId, projectId, mode)
+    syncIssues: async (profileId, projectId, mode, runId) => {
+      const r = await app.SyncIssues(profileId, projectId, mode, runId)
       return {
         mode: r?.mode ?? mode,
         fetched: r?.fetched ?? 0,
@@ -1314,8 +1391,9 @@ const MOCK_MASTER: MasterData = {
 
 // --- モックの進捗イベント配信 ---------------------------------------------
 // Wails ランタイム外では window.runtime が無く EventsOn を使えないため、
-// モック実行時のみ、この簡易エミッタ経由で 'bulk:progress' 相当を配信する
-// (画面側は onBulkProgress を呼ぶだけで、どちらの経路かを意識しない)。
+// モック実行時のみ、この簡易エミッタ経由で 'bulk:progress' / 'sync:progress'
+// 相当を配信する(画面側は onBulkProgress / onSyncProgress を呼ぶだけで、
+// どちらの経路かを意識しない)。
 
 type BulkProgressCallback = (p: BulkProgress) => void
 
@@ -1323,6 +1401,14 @@ const mockProgressListeners = new Set<BulkProgressCallback>()
 
 function emitMockProgress(p: BulkProgress): void {
   for (const cb of mockProgressListeners) cb(p)
+}
+
+type SyncProgressCallback = (p: SyncProgress) => void
+
+const mockSyncProgressListeners = new Set<SyncProgressCallback>()
+
+function emitMockSyncProgress(p: SyncProgress): void {
+  for (const cb of mockSyncProgressListeners) cb(p)
 }
 
 function createMockBackend(): Backend {
@@ -1461,8 +1547,7 @@ function createMockBackend(): Backend {
       putSyncState('projects', 0, new Date().toISOString())
     },
 
-    async syncIssues(_profileId, projectId, mode) {
-      await delay(1200)
+    async syncIssues(profileId, projectId, mode, runId) {
       const project = projects.find((p) => p.id === projectId)
       if (!project) throw new Error('プロジェクトが見つかりません')
       const started = Date.now()
@@ -1470,20 +1555,37 @@ function createMockBackend(): Backend {
       // auto は Go 側と同じく「同期実績が無ければフル同期」に解決する
       const effectiveMode: SyncMode =
         mode === 'auto' ? (existing.length === 0 ? 'full' : 'incremental') : mode
+      // 進捗表示を Wails 外でも手動確認できるよう、Go 側と同じ段階を配信する
+      const emit = (phase: SyncPhase, fetchedNow: number, total: number) =>
+        emitMockSyncProgress({ runId, profileId, projectId, phase, fetched: fetchedNow, total })
       let fetched: number
       let upserted: number
       if (effectiveMode === 'full' || existing.length === 0) {
         const count = existing.length > 0 ? existing.length : 120 + (projectId % 7) * 13
+        await delay(200)
+        emit('count', 0, count)
+        // 取得を 4 回に分けて進捗を進める(合計の待ち時間は従来と同程度)
+        for (let step = 1; step <= 4; step += 1) {
+          await delay(200)
+          emit('fetch', Math.round((count * step) / 4), count)
+        }
+        emit('deleteScan', count, count)
+        await delay(200)
         issuesByProject.set(projectId, buildMockIssues(project, count))
         fetched = count
         upserted = count
       } else {
-        // 差分同期: 先頭数件だけ更新されたことにする
+        // 差分同期: 先頭数件だけ更新されたことにする(総件数は不明のまま進む)
         fetched = Math.min(existing.length, 8)
         upserted = fetched
+        await delay(600)
+        emit('fetch', fetched, 0)
+        emit('deleteScan', fetched, 0)
+        await delay(600)
         const now = new Date().toISOString()
         for (let i = 0; i < fetched; i += 1) existing[i].updated = now
       }
+      emit('done', fetched, fetched)
       const at = new Date().toISOString()
       project.lastSyncedAt = at
       putSyncState('issues', projectId, at)
@@ -1913,5 +2015,36 @@ export function onBulkProgress(cb: (p: BulkProgress) => void): () => void {
   mockProgressListeners.add(cb)
   return () => {
     mockProgressListeners.delete(cb)
+  }
+}
+
+/**
+ * 課題同期の進捗イベント('sync:progress')を購読する。戻り値を呼ぶと購読を解除する。
+ *
+ * 経路の扱いは onBulkProgress と同じ(Wails ランタイムが無ければモックの
+ * 簡易エミッタを購読する)。イベントはプロファイル・プロジェクトを問わず
+ * 届くため、画面側で「自分が開始した同期か」を必ず確認すること。
+ */
+export function onSyncProgress(cb: (p: SyncProgress) => void): () => void {
+  const rt = findWailsRuntime()
+  if (rt) {
+    const off = rt.EventsOn('sync:progress', (...data: unknown[]) => {
+      const p = data[0] as Partial<SyncProgress> | undefined
+      if (!p) return
+      cb({
+        runId: p.runId ?? '',
+        profileId: p.profileId ?? '',
+        projectId: p.projectId ?? 0,
+        phase: p.phase ?? 'fetch',
+        fetched: p.fetched ?? 0,
+        total: p.total ?? 0,
+      })
+    })
+    // Wails の EventsOn は解除関数を返すが、バージョンにより undefined の場合がある
+    return typeof off === 'function' ? off : () => {}
+  }
+  mockSyncProgressListeners.add(cb)
+  return () => {
+    mockSyncProgressListeners.delete(cb)
   }
 }

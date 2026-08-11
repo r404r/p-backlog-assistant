@@ -57,6 +57,35 @@ func (a *App) startup(ctx context.Context) {
 		return
 	}
 	a.profiles = service.NewProfileService(mgr)
+	// 課題同期の進捗を画面へ流す(一括更新の 'bulk:progress' と同じ流儀)。
+	// フル同期は数万件になり得るため、進捗が無いとスピナーだけの無反応な
+	// 待ち時間になってしまう。
+	a.profiles.SetSyncProgressHandler(func(ev service.SyncProgressEvent) {
+		wailsruntime.EventsEmit(a.ctx, syncProgressEvent, syncProgressPayload(ev))
+	})
+}
+
+// syncProgressEvent は課題同期の進捗を伝える Wails イベント名
+// (frontend/src/lib/backend.ts の onSyncProgress と対)。
+const syncProgressEvent = "sync:progress"
+
+// syncProgressPayload は sync:progress イベントのペイロードを組み立てる。
+//
+// 画面は「自分が開始した同期」だけを表示する。その判定には
+// runId(SyncIssues の呼び出し元が採番した実行識別子)を使う。プロファイル ID +
+// プロジェクト ID だけでは、同じ対象を続けて同期し直した場合や、
+// 画面を切り替えて失効した実行がまだ動いている場合に新旧を区別できず、
+// 古い実行の進捗を表示してしまうため(中 4)。
+// profileId / projectId は補助情報として併せて載せる。
+func syncProgressPayload(ev service.SyncProgressEvent) map[string]any {
+	return map[string]any{
+		"profileId": ev.ProfileID,
+		"runId":     ev.RunID,
+		"projectId": ev.ProjectID,
+		"phase":     string(ev.Progress.Phase),
+		"fetched":   ev.Progress.Fetched,
+		"total":     ev.Progress.Total, // 総件数が不明な段階(差分同期)は 0
+	}
 }
 
 // shutdown は Wails の OnShutdown から呼ばれる(main.go で結線)。
@@ -463,7 +492,13 @@ type SyncResultDTO struct {
 }
 
 // SyncIssues は指定プロジェクトの課題を同期する(mode: full / incremental / auto)。
-func (a *App) SyncIssues(profileID string, projectID int64, mode string) (*SyncResultDTO, error) {
+//
+// runID は進捗イベント(sync:progress)に載せる実行識別子で、画面が
+// 「自分が開始した実行の進捗か」を判定するために使う(中 4)。
+// 呼び出し側(画面)が採番するのは、進捗イベントが本メソッドの戻り値より
+// 先に届くため、戻り値で識別子を渡す方式では取りこぼすからである。
+// 進捗表示が不要な呼び出しは空文字でよい。
+func (a *App) SyncIssues(profileID string, projectID int64, mode, runID string) (*SyncResultDTO, error) {
 	const op = "SyncIssues"
 	attrs := []slog.Attr{
 		slog.String("profileId", profileID),
@@ -476,7 +511,7 @@ func (a *App) SyncIssues(profileID string, projectID int64, mode string) (*SyncR
 		a.logEnd(op, err, attrs...)
 		return nil, err
 	}
-	res, err := s.SyncIssues(a.ctx, profileID, projectID, mode)
+	res, err := s.SyncIssues(a.ctx, profileID, projectID, mode, runID)
 	if err != nil {
 		a.logEnd(op, err, attrs...)
 		return nil, err
