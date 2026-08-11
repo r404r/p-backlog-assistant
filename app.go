@@ -47,7 +47,7 @@ func (a *App) startup(ctx context.Context) {
 	} else {
 		a.log = lg
 	}
-	a.log.Op("アプリを起動しました")
+	a.log.Op("アプリを起動しました", slog.String("version", version))
 
 	mgr, err := config.NewManager()
 	if err != nil {
@@ -103,6 +103,16 @@ type LogInfo struct {
 // GetLogInfo は動作ログの出力先と有効・無効を返す(画面の案内表示用)。
 func (a *App) GetLogInfo() (*LogInfo, error) {
 	return &LogInfo{Path: a.log.Path(), Enabled: a.log.Enabled()}, nil
+}
+
+// AppVersionInfo はアプリのバージョン情報(frontend/src/lib/backend.ts の AppVersion と対)。
+type AppVersionInfo struct {
+	Version string `json:"version"`
+}
+
+// GetAppVersion はビルド時に埋め込まれたバージョンを返す(フッタ表示・問い合わせ時の特定用)。
+func (a *App) GetAppVersion() (*AppVersionInfo, error) {
+	return &AppVersionInfo{Version: version}, nil
 }
 
 func (a *App) svc() (*service.ProfileService, error) {

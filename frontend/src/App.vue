@@ -1,7 +1,8 @@
 <script lang="ts" setup>
 // アプリ外枠(サイドバー + コンテンツ)。TDD 例外(GUI): フロントエンドにテスト基盤が
 // 無いため手動確認で担保する。
-import { computed, onErrorCaptured, ref, type Component } from 'vue'
+import { computed, onErrorCaptured, onMounted, ref, type Component } from 'vue'
+import { getBackend } from './lib/backend'
 import SettingsView from './views/SettingsView.vue'
 import IssuesView from './views/IssuesView.vue'
 import BulkUpdateView from './views/BulkUpdateView.vue'
@@ -59,6 +60,16 @@ function toggleSidebar(): void {
 // 接続設定を初期表示とする(マイルストーン 2 で見直す)。
 const current = ref<ScreenId>('settings')
 
+// アプリのバージョン(サイドバーのフッタ表示。取得失敗時は非表示のまま)
+const appVersion = ref('')
+onMounted(async () => {
+  try {
+    appVersion.value = (await getBackend().getAppVersion()).version
+  } catch {
+    // 表示専用のため失敗は無視する
+  }
+})
+
 // 子コンポーネントの描画・ライフサイクル中の例外で画面全体が真っ白になるのを防ぐ
 // 最後の防衛線(初回起動時の JSON null クラッシュが白画面として現れた実績あり)。
 const fatalError = ref('')
@@ -96,6 +107,9 @@ onErrorCaptured((err) => {
           </button>
         </li>
       </ul>
+      <div v-if="appVersion && !collapsed" class="app-version" :title="'バージョン ' + appVersion">
+        {{ appVersion }}
+      </div>
     </nav>
     <main class="content">
       <div v-if="fatalError" class="fatal-error">
@@ -120,12 +134,23 @@ onErrorCaptured((err) => {
 .sidebar {
   width: 200px;
   flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
   background: #f6f8fa;
   border-right: 1px solid #d0d7de;
   padding: 1rem 0;
   box-sizing: border-box;
   overflow: hidden;
   transition: width 0.2s ease;
+}
+
+/* バージョン表示(フッタ)。メニューとの間の余白を吸収して最下部に置く */
+.app-version {
+  margin-top: auto;
+  padding: 0.5rem 1rem 0;
+  font-size: 0.75rem;
+  color: #57606a;
+  white-space: nowrap;
 }
 
 .sidebar.collapsed {

@@ -11,6 +11,10 @@ import (
 //go:embed all:frontend/dist
 var assets embed.FS
 
+// version はビルド時に -ldflags "-X main.version=v1.0.0" で埋め込む。
+// 未指定(ローカル開発)では "dev" のまま。
+var version = "dev"
+
 func main() {
 	// Create an instance of the app structure
 	app := NewApp()

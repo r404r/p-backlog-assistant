@@ -1,0 +1,130 @@
+# タグ v* のプッシュで発火するリリースワークフロー。
+# Windows / macOS をビルドし、GitHub Release を作成して成果物を添付する。
+# バージョンはタグ名を -ldflags で main.version へ埋め込む(画面フッタ・動作ログに表示)。
+#
+# セキュリティ: タグ名(github.ref_name)はスクリプトへ直接展開せず、
+# 必ず env 経由で受けて引用符付きのシェル変数として使う(スクリプトインジェクション対策)。
+# 権限は最小化し、書き込みは release ジョブのみに付与する。
+name: release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version: stable
+          cache: true
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: タグ形式の検証(SemVer のみ許可)
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          if [[ ! "$TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            echo "タグ '$TAG' は vX.Y.Z 形式(SemVer、先頭ゼロなし)ではありません" >&2
+            exit 1
+          fi
+      - name: リリースノートとタグの整合検証(バージョン食い違い防止)
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          if [[ "$(head -n 1 .github/RELEASE_NOTES.md)" != "# backlog-assistant $TAG" ]]; then
+            echo "RELEASE_NOTES.md の見出しが '# backlog-assistant $TAG' と完全一致しません(前リリースのノート流用を防ぐため更新してください)" >&2
+            exit 1
+          fi
+      - name: フロントエンドの型検査とビルド
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run build
+      - name: Go vet / テスト
+        run: |
+          go vet ./internal/...
+          go test -count=1 ./internal/...
+
+  build:
+    needs: test
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            platform: windows/amd64
+            artifact: release-windows
+          - os: macos-latest
+            platform: darwin/universal
+            artifact: release-macos
+    runs-on: ${{ matrix.os }}
+    env:
+      TAG: ${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version: stable
+          cache: true
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Wails CLI のインストール
+        run: go install github.com/wailsapp/wails/v2/cmd/wails@v2.13.0
+      - name: wails.json へ productVersion を反映(OS のファイルプロパティ用)
+        shell: bash
+        run: |
+          jq --arg v "${TAG#v}" '.info.productVersion = $v' wails.json > wails.json.tmp
+          mv wails.json.tmp wails.json
+      - name: リリースビルド(バージョン埋め込み)
+        shell: bash
+        run: wails build -platform ${{ matrix.platform }} -clean -ldflags "-X main.version=$TAG"
+      - name: Windows 成果物の zip 化
+        if: runner.os == 'Windows'
+        working-directory: build/bin
+        shell: pwsh
+        run: Compress-Archive -Path backlog-assistant.exe -DestinationPath "backlog-assistant-$env:TAG-windows.zip"
+      - name: macOS 成果物の zip 化
+        if: runner.os == 'macOS'
+        working-directory: build/bin
+        shell: bash
+        run: |
+          app=$(ls -d *.app | head -1)
+          ditto -c -k --keepParent "$app" "backlog-assistant-$TAG-macos.zip"
+      - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        with:
+          name: ${{ matrix.artifact }}
+          path: build/bin/*.zip
+          if-no-files-found: error
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # Release の作成・アップロードに必要(このジョブのみ)
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6
+        with:
+          path: dist
+          merge-multiple: true
+      - name: GitHub Release を作成して成果物を添付
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          gh release create "$TAG" dist/*.zip \
+            --title "backlog-assistant $TAG" \
+            --notes-file .github/RELEASE_NOTES.md \
+            --verify-tag

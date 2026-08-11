@@ -7,6 +7,10 @@ Nulab [Backlog](https://backlog.com/ja/) の課題とユーザ情報を、ロー
 - Excel 入出力: [excelize](https://github.com/qax-os/excelize)
 - 配布対象: Windows / macOS(GitHub Actions で自動ビルド)
 
+## ダウンロード
+
+[Releases](https://github.com/r404r/p-backlog-assistant/releases) から最新版の zip(Windows / macOS)をダウンロードして展開してください。開発中の最新ビルドは Actions の Artifacts にあります。
+
 ## 機能
 
 ### 接続設定

@@ -386,6 +386,12 @@ export interface RateLimitStatus {
   categories: RateLimitCategory[]
 }
 
+/** アプリのバージョン情報(Go 側 main.AppVersionInfo と対) */
+export interface AppVersion {
+  /** ビルド時に埋め込まれたバージョン(例: v1.0.0。ローカル開発ビルドは dev) */
+  version: string
+}
+
 /** 動作ログの状態(Go 側 main.LogInfo と対) */
 export interface LogInfo {
   /** ログファイルのパス(無効な場合は空文字) */
@@ -525,6 +531,9 @@ export interface Backend {
    * 発生しないため、画面からの定期的な参照も安全)。
    */
   getRateLimitStatus(profileId: string): Promise<RateLimitStatus>
+
+  /** アプリのバージョンを返す(サイドバーのフッタ表示用) */
+  getAppVersion(): Promise<AppVersion>
 }
 
 // ---------------------------------------------------------------------------
@@ -569,6 +578,7 @@ interface WailsApp {
   GetMasterData(profileId: string, projectId: number): Promise<MasterData>
   GetLogInfo(): Promise<LogInfo>
   GetRateLimitStatus(profileId: string): Promise<RateLimitStatus>
+  GetAppVersion(): Promise<AppVersion>
 }
 
 /** Wails ランタイム(window.runtime)のうち本アプリが使うイベント購読 API */
@@ -733,6 +743,12 @@ function createWailsBackend(app: WailsApp): Backend {
     getRateLimitStatus: async (profileId) => {
       const r = await app.GetRateLimitStatus(profileId)
       return { categories: r?.categories ?? [] }
+    },
+    getAppVersion: async () => {
+      // 旧バージョンのバインディングでも画面を壊さない
+      if (typeof app.GetAppVersion !== 'function') return { version: '' }
+      const r = await app.GetAppVersion()
+      return { version: r?.version ?? '' }
     },
   }
 }
@@ -1373,6 +1389,10 @@ function createMockBackend(): Backend {
       await delay(50)
       // モックでは実ファイルを作らないため、ダミーのパスを返す
       return { path: '(モック)logs/backlog-assistant-YYYYMMDD.log', enabled: true }
+    },
+
+    async getAppVersion() {
+      return { version: 'dev(モック)' }
     },
 
     async getRateLimitStatus() {
