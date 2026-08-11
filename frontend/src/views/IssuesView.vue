@@ -4,6 +4,7 @@ import { computed, onMounted, reactive, ref, watch } from 'vue'
 import {
   getBackend,
   isMockBackend,
+  type CustomFieldDef,
   type IssueQuery,
   type IssueRow,
   type Project,
@@ -17,8 +18,14 @@ const mock = isMockBackend()
 /** 画面に表示する最大件数(Excel 出力は条件に一致する全件が対象) */
 const PREVIEW_LIMIT = 200
 
-/** Excel 出力の列定義(キーは IssueRow のキー。Go 側の列キーと対応) */
-const EXPORT_COLUMNS: { key: keyof IssueRow; label: string }[] = [
+/** Excel 出力の列(key は Go 側 export パッケージの列キー) */
+interface ExportColumn {
+  key: string
+  label: string
+}
+
+/** 固定の出力列(キーは IssueRow のキー。Go 側の列キーと対応) */
+const FIXED_EXPORT_COLUMNS: ExportColumn[] = [
   { key: 'issueKey', label: '課題キー' },
   { key: 'summary', label: '件名' },
   { key: 'statusName', label: '状態' },
@@ -199,6 +206,7 @@ watch(selectedProjectId, () => {
   exportPath.value = ''
   exportError.value = ''
   void loadFilterOptions()
+  void loadCustomFields()
 })
 
 /** 現在の条件を IssueQuery に変換する(空文字の条件は送らない) */
@@ -290,7 +298,72 @@ async function runSync() {
 // Excel 出力
 // ---------------------------------------------------------------------------
 
-const selectedColumns = ref<string[]>(EXPORT_COLUMNS.map((c) => c.key))
+/** カスタム属性列の列キーの接頭辞(Go 側 export パッケージの規約 cf_{定義ID} と対) */
+const CUSTOM_COLUMN_PREFIX = 'cf_'
+
+/** カスタム属性の定義 ID から列キーを作る */
+const customColumnKey = (defId: number) => `${CUSTOM_COLUMN_PREFIX}${defId}`
+
+/** 選択中プロジェクトのカスタム属性の定義(取得できない場合は空) */
+const customFields = ref<CustomFieldDef[]>([])
+
+/** カスタム属性の出力列(定義順) */
+const customColumns = computed<ExportColumn[]>(() =>
+  customFields.value.map((f) => ({ key: customColumnKey(f.id), label: f.name })),
+)
+
+/** 出力できる列(固定列 + カスタム属性列) */
+const exportColumns = computed<ExportColumn[]>(() => [
+  ...FIXED_EXPORT_COLUMNS,
+  ...customColumns.value,
+])
+
+// 既定はカスタム属性列オフ(固定列のみ)
+const selectedColumns = ref<string[]>(FIXED_EXPORT_COLUMNS.map((c) => c.key))
+
+/** カスタム属性の取得失敗の表示用メッセージ(空 = 正常) */
+const customFieldsError = ref('')
+
+/**
+ * loadCustomFields の世代番号。プロジェクトを A→B→A と素早く切り替えると
+ * projectId の比較だけでは最初の A の古い応答を弾けないため、
+ * 「最後に開始した要求」の応答だけを反映する。
+ */
+let customFieldsRequestSeq = 0
+
+/**
+ * 出力列に載せるカスタム属性の定義を取得する。
+ *
+ * 未対応プラン・権限不足はバックエンド側で空配列へ縮退済みのため、
+ * ここに届く失敗は通信断等の障害。固定列の出力は妨げず、
+ * 取得できなかった旨の警告と再試行の導線を表示する。
+ */
+async function loadCustomFields() {
+  const seq = ++customFieldsRequestSeq
+  // 前のプロジェクトの列が選択に残らないようにしてから取得する
+  customFields.value = []
+  customFieldsError.value = ''
+  pruneUnavailableColumns()
+  if (!profileId.value || !selectedProjectId.value) return
+  try {
+    const master = await backend.getMasterData(profileId.value, selectedProjectId.value)
+    // より新しい要求が開始済みなら、この(古い)応答は反映しない
+    if (seq !== customFieldsRequestSeq) return
+    customFields.value = master.customFields
+  } catch (e) {
+    if (seq !== customFieldsRequestSeq) return
+    customFieldsError.value =
+      'カスタム属性の取得に失敗しました(固定列は出力できます): ' +
+      (e instanceof Error ? e.message : String(e))
+  }
+}
+
+/** 選択済みの列から、現在は選択できない列(切替前のカスタム属性列)を外す */
+function pruneUnavailableColumns() {
+  const available = new Set(exportColumns.value.map((c) => c.key))
+  selectedColumns.value = selectedColumns.value.filter((k) => available.has(k))
+}
+
 const exporting = ref(false)
 const exportPath = ref('')
 const exportRows = ref(0)
@@ -309,9 +382,9 @@ async function exportExcel() {
   exportCanceled.value = false
   try {
     // 表示上限は付けない(条件に一致する全件を出力する)
-    const columns = EXPORT_COLUMNS.filter((c) => selectedColumns.value.includes(c.key)).map(
-      (c) => c.key as string,
-    )
+    const columns = exportColumns.value
+      .filter((c) => selectedColumns.value.includes(c.key))
+      .map((c) => c.key)
     const res = await backend.exportIssuesExcel(profileId.value, buildQuery(false), columns)
     if (!res.path) {
       exportCanceled.value = true
@@ -541,11 +614,24 @@ async function exportExcel() {
         <h2>Excel 出力</h2>
         <p class="hint">出力する列を選択してください(現在の検索条件に一致する全件が出力されます)。</p>
         <div class="columns">
-          <label v-for="c in EXPORT_COLUMNS" :key="c.key" class="checkbox">
+          <label v-for="c in FIXED_EXPORT_COLUMNS" :key="c.key" class="checkbox">
             <input v-model="selectedColumns" type="checkbox" :value="c.key" />
             {{ c.label }}
           </label>
         </div>
+        <template v-if="customColumns.length > 0">
+          <p class="hint">カスタム属性(既定では出力しません)</p>
+          <div class="columns">
+            <label v-for="c in customColumns" :key="c.key" class="checkbox">
+              <input v-model="selectedColumns" type="checkbox" :value="c.key" />
+              {{ c.label }}
+            </label>
+          </div>
+        </template>
+        <p v-if="customFieldsError" class="hint warn">
+          {{ customFieldsError }}
+          <button type="button" class="link" @click="loadCustomFields">再試行</button>
+        </p>
         <div class="row buttons">
           <button class="primary" :disabled="!canExport" @click="exportExcel">
             {{ exporting ? '出力中...' : 'Excel 出力' }}
@@ -675,6 +761,17 @@ select:disabled {
 
 .hint.warn {
   color: #9a6700;
+}
+
+/* 文中に置く軽量なアクション(カスタム属性取得の再試行) */
+button.link {
+  border: none;
+  background: none;
+  padding: 0;
+  font-size: inherit;
+  color: #0b5cad;
+  cursor: pointer;
+  text-decoration: underline;
 }
 
 .freshness {

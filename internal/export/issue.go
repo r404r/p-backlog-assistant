@@ -14,9 +14,11 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
+	"backlog-assistant/internal/customfield"
 	"backlog-assistant/internal/store"
 
 	"github.com/xuri/excelize/v2"
@@ -46,26 +48,41 @@ var ErrUnknownColumn = errors.New("未知の列キーです")
 // localLocation は日時整形に使うタイムゾーン。テストから差し替える。
 var localLocation = time.Local
 
+// customColumnPrefix はカスタム属性列の列キーの接頭辞。
+// 列キーは cf_{定義ID}(例: cf_123)で、ヘッダには定義名を使う。
+const customColumnPrefix = "cf_"
+
+// カスタム属性列の列幅(文字数目安)。値の長さは定義の型でしか見当が付かないため、
+// 数値・日付は固定列の期限・数値系に合わせて狭く、テキスト系・リスト系は広めにする。
+const (
+	customColumnWidthNarrow = 14
+	customColumnWidthWide   = 30
+)
+
 // column は 1 出力列の定義。
 type column struct {
 	key    string                    // 呼び出し側が指定する列キー
 	header string                    // 1 行目に出力する日本語ヘッダ
-	value  func(*store.Issue) string // セル値の生成
+	value  func(*store.Issue) string // セル値の生成(カスタム属性列は nil)
 	width  float64                   // 列幅(文字数目安)
+	// customFieldID はカスタム属性列の定義 ID(固定列は 0)。
+	// カスタム属性の値は行ごとに一括で解析した結果から引くため(列ごとに
+	// 生 JSON を解析し直さないため)、value ではなくこの ID で解決する。
+	customFieldID int64
 }
 
 // columns は出力可能な列の定義(表示順の既定でもある)。
 var columns = []column{
-	{"issueKey", "キー", func(i *store.Issue) string { return i.IssueKey }, 14},
-	{"summary", "件名", func(i *store.Issue) string { return i.Summary }, 48},
-	{"statusName", "状態", func(i *store.Issue) string { return i.StatusName }, 12},
-	{"assigneeName", "担当者", func(i *store.Issue) string { return i.AssigneeName }, 16},
-	{"issueTypeName", "種別", func(i *store.Issue) string { return i.IssueTypeName }, 14},
-	{"priorityName", "優先度", func(i *store.Issue) string { return i.PriorityName }, 10},
-	{"created", "作成日時", func(i *store.Issue) string { return formatDateTime(i.Created) }, 18},
-	{"updated", "更新日時", func(i *store.Issue) string { return formatDateTime(i.Updated) }, 18},
-	{"dueDate", "期限", func(i *store.Issue) string { return formatDate(i.DueDate) }, 12},
-	{"description", "詳細", func(i *store.Issue) string { return i.Description }, 60},
+	{key: "issueKey", header: "キー", value: func(i *store.Issue) string { return i.IssueKey }, width: 14},
+	{key: "summary", header: "件名", value: func(i *store.Issue) string { return i.Summary }, width: 48},
+	{key: "statusName", header: "状態", value: func(i *store.Issue) string { return i.StatusName }, width: 12},
+	{key: "assigneeName", header: "担当者", value: func(i *store.Issue) string { return i.AssigneeName }, width: 16},
+	{key: "issueTypeName", header: "種別", value: func(i *store.Issue) string { return i.IssueTypeName }, width: 14},
+	{key: "priorityName", header: "優先度", value: func(i *store.Issue) string { return i.PriorityName }, width: 10},
+	{key: "created", header: "作成日時", value: func(i *store.Issue) string { return formatDateTime(i.Created) }, width: 18},
+	{key: "updated", header: "更新日時", value: func(i *store.Issue) string { return formatDateTime(i.Updated) }, width: 18},
+	{key: "dueDate", header: "期限", value: func(i *store.Issue) string { return formatDate(i.DueDate) }, width: 12},
+	{key: "description", header: "詳細", value: func(i *store.Issue) string { return i.Description }, width: 60},
 }
 
 // defaultColumnKeys は既定の出力列(詳細は本文が長いため既定では出さない)。
@@ -78,55 +95,124 @@ var defaultColumnKeys = []string{
 type Options struct {
 	// Columns は出力する列キーを表示順に指定する。空なら DefaultColumns を使う。
 	Columns []string
+	// CustomFields は出力対象プロジェクトのカスタム属性定義。
+	// cf_{定義ID} 形式の列キーはここに載っている定義だけが指定できる
+	// (定義に無いキーは ErrUnknownColumn)。カスタム属性列を使わない
+	// 呼び出しでは空のままでよい。
+	CustomFields []customfield.Def
 	// WithBaseUpdated が true のとき、末尾に base_updated 列(更新日時の RFC3339 生値)
 	// を追加する。一括更新テンプレートの競合検知(設計書 5 節)で使う。
 	WithBaseUpdated bool
 }
 
 // DefaultColumns は既定の出力列キーを返す(呼び出し側が書き換えても内部に影響しない)。
+// カスタム属性列は既定に含めない(利用者が明示的に選んだときだけ出力する)。
 func DefaultColumns() []string {
 	out := make([]string, len(defaultColumnKeys))
 	copy(out, defaultColumnKeys)
 	return out
 }
 
-// AvailableColumns は指定可能な列キーを定義順に返す。
-func AvailableColumns() []string {
-	out := make([]string, len(columns))
-	for i, c := range columns {
-		out[i] = c.key
+// AvailableColumns は指定可能な列キーを返す。
+// 固定列(定義順)の後に、渡されたカスタム属性の定義順で cf_{定義ID} が並ぶ。
+func AvailableColumns(defs []customfield.Def) []string {
+	out := make([]string, 0, len(columns)+len(defs))
+	for _, c := range columns {
+		out = append(out, c.key)
+	}
+	for _, d := range defs {
+		out = append(out, CustomColumnKey(d.ID))
 	}
 	return out
 }
 
 // ColumnHeader は列キーに対応する日本語ヘッダを返す。未知のキーなら ok=false。
-func ColumnHeader(key string) (string, bool) {
-	for _, c := range columns {
-		if c.key == key {
-			return c.header, true
+// カスタム属性列(cf_{定義ID})のヘッダは定義名になる。
+func ColumnHeader(key string, defs []customfield.Def) (string, bool) {
+	c, ok := findColumn(key, defs)
+	if !ok {
+		return "", false
+	}
+	return c.header, true
+}
+
+// CustomColumnKey はカスタム属性の定義 ID に対応する列キーを返す。
+func CustomColumnKey(defID int64) string {
+	return customColumnPrefix + strconv.FormatInt(defID, 10)
+}
+
+// HasCustomColumns は列キー列にカスタム属性列が含まれるかを返す。
+// 呼び出し側が「カスタム属性の定義取得(API 呼び出し)が要るか」を
+// 判断するために使う(選ばれていなければ取得を増やさない)。
+func HasCustomColumns(keys []string) bool {
+	for _, k := range keys {
+		if strings.HasPrefix(k, customColumnPrefix) {
+			return true
 		}
 	}
-	return "", false
+	return false
+}
+
+// parseCustomColumnKey は列キーからカスタム属性の定義 ID を取り出す。
+// 接頭辞が無い・ID が数値でない場合は ok=false(固定列として扱われ、
+// 最終的に ErrUnknownColumn になる)。
+func parseCustomColumnKey(key string) (int64, bool) {
+	if !strings.HasPrefix(key, customColumnPrefix) {
+		return 0, false
+	}
+	id, err := strconv.ParseInt(strings.TrimPrefix(key, customColumnPrefix), 10, 64)
+	if err != nil {
+		return 0, false
+	}
+	return id, true
+}
+
+// customColumn はカスタム属性の定義から出力列を作る。
+func customColumn(def customfield.Def) column {
+	width := float64(customColumnWidthWide)
+	switch def.TypeID {
+	case customfield.TypeNumeric, customfield.TypeDate:
+		width = customColumnWidthNarrow
+	}
+	return column{
+		key:           CustomColumnKey(def.ID),
+		header:        def.Name,
+		width:         width,
+		customFieldID: def.ID,
+	}
+}
+
+// findColumn は列キーを固定列またはカスタム属性列の定義に解決する。
+func findColumn(key string, defs []customfield.Def) (column, bool) {
+	for _, c := range columns {
+		if c.key == key {
+			return c, true
+		}
+	}
+	id, ok := parseCustomColumnKey(key)
+	if !ok {
+		return column{}, false
+	}
+	for _, d := range defs {
+		if d.ID == id {
+			return customColumn(d), true
+		}
+	}
+	return column{}, false
 }
 
 // resolveColumns は列キー列を定義に解決する。未知のキーは ErrUnknownColumn。
-func resolveColumns(keys []string) ([]column, error) {
+func resolveColumns(keys []string, defs []customfield.Def) ([]column, error) {
 	if len(keys) == 0 {
 		keys = defaultColumnKeys
 	}
 	out := make([]column, 0, len(keys))
 	for _, k := range keys {
-		var found bool
-		for _, c := range columns {
-			if c.key == k {
-				out = append(out, c)
-				found = true
-				break
-			}
-		}
-		if !found {
+		c, ok := findColumn(k, defs)
+		if !ok {
 			return nil, fmt.Errorf("%w: %s", ErrUnknownColumn, k)
 		}
+		out = append(out, c)
 	}
 	return out, nil
 }
@@ -135,7 +221,7 @@ func resolveColumns(keys []string) ([]column, error) {
 // 書き出しに失敗した場合、書きかけのファイルは残さない。
 func ExportIssuesToFile(path string, rows []store.Issue, opts Options) error {
 	// 列指定の検証はファイル生成前に済ませ、不正指定で空ファイルを作らない。
-	if _, err := resolveColumns(opts.Columns); err != nil {
+	if _, err := resolveColumns(opts.Columns, opts.CustomFields); err != nil {
 		return err
 	}
 	f, err := os.Create(path)
@@ -153,7 +239,7 @@ func ExportIssuesToFile(path string, rows []store.Issue, opts Options) error {
 // ExportIssues は課題一覧を xlsx として w に書き出す。
 // columns が空なら DefaultColumns を使う。未知の列キーは ErrUnknownColumn を返す。
 func ExportIssues(w io.Writer, rows []store.Issue, opts Options) error {
-	cols, err := resolveColumns(opts.Columns)
+	cols, err := resolveColumns(opts.Columns, opts.CustomFields)
 	if err != nil {
 		return err
 	}
@@ -254,10 +340,22 @@ func writeIssueSheet(f *excelize.File, cols []column, rows []store.Issue, withBa
 	}
 
 	// 2 行目以降: 課題データ。
+	// カスタム属性列があるときだけ、行ごとに生 JSON を 1 回解析して値を引く
+	// (固定列だけの出力に解析コストを掛けない)。
+	hasCustom := containsCustomColumn(cols)
 	values := make([]any, colCount)
+	var custom map[int64]string
 	for n := range rows {
 		issue := &rows[n]
+		if hasCustom {
+			custom = customValuesOf(issue)
+		}
 		for i, c := range cols {
+			if c.customFieldID != 0 {
+				// 値を持たない課題・解析できない課題では空欄になる
+				values[i] = custom[c.customFieldID]
+				continue
+			}
 			values[i] = c.value(issue)
 		}
 		if withBaseUpdated {
@@ -282,6 +380,41 @@ func writeIssueSheet(f *excelize.File, cols []column, rows []store.Issue, withBa
 		return err
 	}
 	return sw.Flush()
+}
+
+// containsCustomColumn は解決済みの列にカスタム属性列が含まれるかを返す
+// (列キーを見る HasCustomColumns と対で、こちらは解決後の列を見る)。
+func containsCustomColumn(cols []column) bool {
+	for _, c := range cols {
+		if c.customFieldID != 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// customValuesOf は課題 1 件のカスタム属性を「定義 ID → 表示文字列」にまとめる。
+//
+// 生 JSON の解析は行ごとに 1 回だけ行い、複数のカスタム属性列で使い回す。
+// 解析できない場合(生 JSON が空 / 壊れている / customFields が配列でない)は
+// nil を返し、その行のカスタム属性列だけを空欄へ縮退させる。行や出力全体を
+// 失敗させないのは、Excel 出力が「今ローカルにある情報の書き出し」であり、
+// 1 件のデータ不備で全件の出力を失う方が損失が大きいため
+// (生 JSON が空になるのは旧バージョンで同期した課題で起こりうる)。
+// 異常の検知は同期側・customfield 側の責務とし、ここでは通知しない。
+func customValuesOf(issue *store.Issue) map[int64]string {
+	if issue.RawJSON == "" {
+		return nil
+	}
+	values, err := customfield.ParseValues(issue.RawJSON)
+	if err != nil {
+		return nil
+	}
+	out := make(map[int64]string, len(values))
+	for _, v := range values {
+		out[v.ID] = customfield.FormatValue(v)
+	}
+	return out
 }
 
 // formatDateTime は RFC3339 の日時をローカル時刻の "YYYY-MM-DD HH:MM" に整形する。

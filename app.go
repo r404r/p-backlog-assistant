@@ -665,6 +665,19 @@ func (a *App) ExportIssuesExcel(profileID string, query store.IssueFilter, colum
 		a.logEnd(op, err, attrs...)
 		return nil, err
 	}
+	// カスタム属性列が選ばれている場合のみ、ヘッダ(定義名)と値の解決に必要な
+	// 定義を取得する(選ばれていなければ API 呼び出しを増やさない)。
+	// 保存先を尋ねる前に取得し、失敗した場合はダイアログを出さずにエラーを返す
+	// (利用者が明示的に選んだ列を黙って空欄・欠落にしない)。
+	opts := export.Options{Columns: columns}
+	if export.HasCustomColumns(columns) {
+		master, err := s.GetMasterData(a.ctx, profileID, query.ProjectID)
+		if err != nil {
+			a.logEnd(op, err, attrs...)
+			return nil, err
+		}
+		opts.CustomFields = master.CustomFields
+	}
 	path, err := wailsruntime.SaveFileDialog(a.ctx, wailsruntime.SaveDialogOptions{
 		Title:           "Excel 出力先を選択",
 		DefaultFilename: "backlog-issues.xlsx",
@@ -683,7 +696,7 @@ func (a *App) ExportIssuesExcel(profileID string, query store.IssueFilter, colum
 	// 保存先・ファイル名はユーザが決めるため、ローカルユーザ名や顧客名を
 	// 含みうる。パスもファイル名も記録せず、拡張子だけを残す(低 1)。
 	fileAttr := fileExtAttr(path)
-	if err := export.ExportIssuesToFile(path, res.Issues, export.Options{Columns: columns}); err != nil {
+	if err := export.ExportIssuesToFile(path, res.Issues, opts); err != nil {
 		// 失敗時のエラーメッセージにも保存先のフルパスが含まれるため、
 		// ログへ渡す前にプレースホルダへ置換する(高 2 / 2 回目 低 1)。
 		// 画面へ返すエラーは、ユーザ自身が選んだパスなのでそのままにする。

@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"backlog-assistant/internal/customfield"
 	"backlog-assistant/internal/store"
 
 	"github.com/xuri/excelize/v2"
@@ -366,17 +367,17 @@ func TestDefaultColumnsIsCopy(t *testing.T) {
 }
 
 func TestAvailableColumnsAllHaveHeaders(t *testing.T) {
-	keys := AvailableColumns()
+	keys := AvailableColumns(nil)
 	if len(keys) != 10 {
 		t.Fatalf("列キー数 = %d, want 10", len(keys))
 	}
 	for _, k := range keys {
-		h, ok := ColumnHeader(k)
+		h, ok := ColumnHeader(k, nil)
 		if !ok || h == "" {
 			t.Errorf("列キー %q のヘッダが未定義", k)
 		}
 	}
-	if _, ok := ColumnHeader("nosuchcolumn"); ok {
+	if _, ok := ColumnHeader("nosuchcolumn", nil); ok {
 		t.Errorf("未知の列キーが解決できてしまう")
 	}
 }
@@ -431,6 +432,237 @@ func TestExportIssues_LargeRows(t *testing.T) {
 	}
 	if v != fmt.Sprint(n) {
 		t.Errorf("情報シートの件数 = %q, want %d", v, n)
+	}
+}
+
+// ---- カスタム属性列(CF2) ----
+
+// customFieldDefs は 8 型すべてを含むカスタム属性の定義(テスト用。実データは含めない)。
+func customFieldDefs() []customfield.Def {
+	return []customfield.Def{
+		{ID: 101, TypeID: customfield.TypeText, Name: "顧客名"},
+		{ID: 102, TypeID: customfield.TypeTextArea, Name: "備考"},
+		{ID: 103, TypeID: customfield.TypeNumeric, Name: "見積工数"},
+		{ID: 104, TypeID: customfield.TypeDate, Name: "納品日"},
+		{ID: 105, TypeID: customfield.TypeSingleList, Name: "重要度"},
+		{ID: 106, TypeID: customfield.TypeMultipleList, Name: "対象環境"},
+		{ID: 107, TypeID: customfield.TypeCheckBox, Name: "確認項目"},
+		{ID: 108, TypeID: customfield.TypeRadio, Name: "承認"},
+	}
+}
+
+// customFieldsRawJSON は 8 型すべてに値が入った課題の生 JSON。
+const customFieldsRawJSON = `{
+  "id": 1,
+  "issueKey": "EX-1",
+  "customFields": [
+    {"id": 101, "fieldTypeId": 1, "name": "顧客名", "value": "テスト商事"},
+    {"id": 102, "fieldTypeId": 2, "name": "備考", "value": "1 行目\n2 行目"},
+    {"id": 103, "fieldTypeId": 3, "name": "見積工数", "value": 12.5},
+    {"id": 104, "fieldTypeId": 4, "name": "納品日", "value": "2026-03-04T00:00:00Z"},
+    {"id": 105, "fieldTypeId": 5, "name": "重要度", "value": {"id": 1, "name": "高"}},
+    {"id": 106, "fieldTypeId": 6, "name": "対象環境", "value": [{"id": 1, "name": "本番"}, {"id": 2, "name": "検証"}]},
+    {"id": 107, "fieldTypeId": 7, "name": "確認項目", "value": [{"id": 3, "name": "仕様"}], "otherValue": "その他確認"},
+    {"id": 108, "fieldTypeId": 8, "name": "承認", "value": null, "otherValue": "部長"}
+  ]
+}`
+
+// TestExportIssues_CustomFieldColumns は 8 型すべてのカスタム属性が
+// 定義名のヘッダと表示用の値で出力されることを確認する。
+func TestExportIssues_CustomFieldColumns(t *testing.T) {
+	rows := []store.Issue{{
+		IssueKey: "EX-1", Summary: "課題 1", RawJSON: customFieldsRawJSON,
+	}}
+	opts := Options{
+		Columns: []string{
+			"issueKey", "cf_101", "cf_102", "cf_103", "cf_104",
+			"cf_105", "cf_106", "cf_107", "cf_108",
+		},
+		CustomFields: customFieldDefs(),
+	}
+	path := exportToTempFile(t, rows, opts)
+	f := openExported(t, path)
+
+	got, err := f.GetRows(SheetIssues)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := [][]string{
+		{"キー", "顧客名", "備考", "見積工数", "納品日", "重要度", "対象環境", "確認項目", "承認"},
+		{
+			"EX-1", "テスト商事", "1 行目\n2 行目", "12.5", "2026-03-04",
+			"高", "本番, 検証", "仕様, その他確認", "部長",
+		},
+	}
+	for i := range want {
+		if !equalStrings(got[i], want[i]) {
+			t.Errorf("行 %d = %v, want %v", i+1, got[i], want[i])
+		}
+	}
+}
+
+// TestExportIssues_CustomFieldColumnOrder は固定列とカスタム属性列を混在させても
+// 指定順が保たれることを確認する。
+func TestExportIssues_CustomFieldColumnOrder(t *testing.T) {
+	rows := []store.Issue{{
+		IssueKey: "EX-1", Summary: "課題 1", RawJSON: customFieldsRawJSON,
+	}}
+	opts := Options{
+		Columns:      []string{"cf_105", "issueKey", "cf_101", "summary"},
+		CustomFields: customFieldDefs(),
+	}
+	path := exportToTempFile(t, rows, opts)
+	f := openExported(t, path)
+
+	got, err := f.GetRows(SheetIssues)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := [][]string{
+		{"重要度", "キー", "顧客名", "件名"},
+		{"高", "EX-1", "テスト商事", "課題 1"},
+	}
+	for i := range want {
+		if !equalStrings(got[i], want[i]) {
+			t.Errorf("行 %d = %v, want %v", i+1, got[i], want[i])
+		}
+	}
+	// オートフィルタもカスタム属性列まで含む(4 列 = A:D)
+	if ref := autoFilterRef(t, path); ref != "A1:D1" {
+		t.Errorf("オートフィルタ範囲 = %q, want \"A1:D1\"", ref)
+	}
+}
+
+// TestExportIssues_CustomFieldMissingRawJSON は生 JSON が無い・壊れている行でも
+// 出力を失敗させず、その行のカスタム属性列だけが空欄になることを確認する。
+func TestExportIssues_CustomFieldMissingRawJSON(t *testing.T) {
+	rows := []store.Issue{
+		// 旧バージョンで同期した課題は生 JSON を持たない
+		{IssueKey: "EX-1", Summary: "生 JSON なし", RawJSON: ""},
+		// 生 JSON が壊れている
+		{IssueKey: "EX-2", Summary: "壊れた JSON", RawJSON: "{"},
+		// customFields が配列でない(ParseValues がエラーにする形)
+		{IssueKey: "EX-3", Summary: "配列でない", RawJSON: `{"customFields":{"id":101}}`},
+		// customFields が無い(カスタム属性を使わないプロジェクト)
+		{IssueKey: "EX-4", Summary: "属性なし", RawJSON: `{"id":4}`},
+		{IssueKey: "EX-5", Summary: "属性あり", RawJSON: customFieldsRawJSON},
+	}
+	opts := Options{
+		Columns:      []string{"issueKey", "cf_101", "summary"},
+		CustomFields: customFieldDefs(),
+	}
+	path := exportToTempFile(t, rows, opts)
+	f := openExported(t, path)
+
+	got, err := f.GetRows(SheetIssues)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != len(rows)+1 {
+		t.Fatalf("行数 = %d, want %d", len(got), len(rows)+1)
+	}
+	for i := 1; i <= 4; i++ {
+		// 空セルは GetRows で行末が切り詰められることがあるため、長さも許容して判定する
+		if len(got[i]) > 1 && got[i][1] != "" {
+			t.Errorf("行 %d のカスタム属性 = %q, want \"\"(空欄への縮退)", i+1, got[i][1])
+		}
+		// 固定列は欠落しない
+		if got[i][0] != rows[i-1].IssueKey {
+			t.Errorf("行 %d のキー = %q, want %q", i+1, got[i][0], rows[i-1].IssueKey)
+		}
+	}
+	if got[5][1] != "テスト商事" {
+		t.Errorf("正常な行のカスタム属性 = %q, want \"テスト商事\"", got[5][1])
+	}
+}
+
+// TestExportIssues_UnknownCustomFieldColumn は定義に無い cf_ キーが
+// 従来どおり ErrUnknownColumn になることを確認する。
+func TestExportIssues_UnknownCustomFieldColumn(t *testing.T) {
+	cases := []struct {
+		name string
+		opts Options
+	}{
+		{"定義に無い ID", Options{Columns: []string{"issueKey", "cf_999"}, CustomFields: customFieldDefs()}},
+		{"定義が 0 件", Options{Columns: []string{"issueKey", "cf_101"}}},
+		{"ID が数値でない", Options{Columns: []string{"cf_abc"}, CustomFields: customFieldDefs()}},
+		{"ID が空", Options{Columns: []string{"cf_"}, CustomFields: customFieldDefs()}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			err := ExportIssues(&buf, sampleIssues(), c.opts)
+			if !errors.Is(err, ErrUnknownColumn) {
+				t.Fatalf("err = %v, want ErrUnknownColumn", err)
+			}
+			if buf.Len() != 0 {
+				t.Errorf("エラー時に出力が書かれている(%d バイト)", buf.Len())
+			}
+		})
+	}
+}
+
+// TestExportIssues_CustomFieldDefsUnusedIsCompatible は定義を渡しても
+// カスタム属性列を選ばなければ従来どおりの出力になることを確認する。
+func TestExportIssues_CustomFieldDefsUnusedIsCompatible(t *testing.T) {
+	rows := sampleIssues()
+	rows[0].RawJSON = customFieldsRawJSON
+	path := exportToTempFile(t, rows, Options{CustomFields: customFieldDefs()})
+	f := openExported(t, path)
+
+	got, err := f.GetRows(SheetIssues)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantHeader := []string{"キー", "件名", "状態", "担当者", "種別", "優先度", "作成日時", "更新日時", "期限"}
+	if !equalStrings(got[0], wantHeader) {
+		t.Errorf("ヘッダ = %v, want %v", got[0], wantHeader)
+	}
+}
+
+// TestAvailableColumnsWithCustomFields はカスタム属性の定義から
+// 選択可能な列とヘッダが生成されることを確認する。
+func TestAvailableColumnsWithCustomFields(t *testing.T) {
+	defs := customFieldDefs()
+	keys := AvailableColumns(defs)
+	if len(keys) != 10+len(defs) {
+		t.Fatalf("列キー数 = %d, want %d", len(keys), 10+len(defs))
+	}
+	// 固定列が先、カスタム属性列が定義順で続く
+	if keys[9] != "description" || keys[10] != "cf_101" || keys[len(keys)-1] != "cf_108" {
+		t.Errorf("列キーの並び = %v", keys)
+	}
+	h, ok := ColumnHeader("cf_105", defs)
+	if !ok || h != "重要度" {
+		t.Errorf("ColumnHeader(cf_105) = %q, %v, want \"重要度\", true", h, ok)
+	}
+	if _, ok := ColumnHeader("cf_999", defs); ok {
+		t.Errorf("定義に無いカスタム属性列が解決できてしまう")
+	}
+	// 定義を渡さなければ固定列だけ
+	if _, ok := ColumnHeader("cf_105", nil); ok {
+		t.Errorf("定義なしでカスタム属性列が解決できてしまう")
+	}
+}
+
+// TestHasCustomColumns は呼び出し側(app.go)がマスタ取得の要否を
+// 判定するための関数を確認する。
+func TestHasCustomColumns(t *testing.T) {
+	cases := []struct {
+		keys []string
+		want bool
+	}{
+		{nil, false},
+		{[]string{"issueKey", "summary"}, false},
+		{[]string{"issueKey", "cf_101"}, true},
+		{[]string{"cf_101"}, true},
+		// 接頭辞が一致するだけの固定列キーは誤検知しない
+		{[]string{"cfx_101"}, false},
+	}
+	for _, c := range cases {
+		if got := HasCustomColumns(c.keys); got != c.want {
+			t.Errorf("HasCustomColumns(%v) = %v, want %v", c.keys, got, c.want)
+		}
 	}
 }
 
