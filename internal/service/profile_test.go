@@ -61,6 +61,14 @@ type fakeConnector struct {
 	// プロファイル削除中に旧クライアントで API が呼ばれないことの検証に使う(中 1)。
 	usersEntered chan struct{}
 	usersOnce    sync.Once
+
+	// 一括更新・追加(bulk.API)の応答と呼び出し記録。
+	issueTypes []backlogclient.IssueType
+	priorities []backlogclient.Priority
+	statuses   []backlogclient.Status
+	created    []backlogclient.IssueCreate
+	updated    []string
+	writeErr   error
 }
 
 func (f *fakeConnector) GetProjects(ctx context.Context) ([]backlogclient.Project, error) {
@@ -137,6 +145,36 @@ func (f *fakeConnector) GetProjectAdministrators(ctx context.Context, projectID 
 
 func (f *fakeConnector) GetProjectTeams(ctx context.Context, projectID int64) ([]backlogclient.Team, error) {
 	return f.projectTeams[projectID], nil
+}
+
+// 一括更新・追加(bulk.API)のフェイク実装。
+
+func (f *fakeConnector) CreateIssue(ctx context.Context, in backlogclient.IssueCreate) (*backlogclient.Issue, error) {
+	f.created = append(f.created, in)
+	if f.writeErr != nil {
+		return nil, f.writeErr
+	}
+	return &backlogclient.Issue{ID: 900 + int64(len(f.created)), IssueKey: "EXA-900", ProjectID: in.ProjectID}, nil
+}
+
+func (f *fakeConnector) UpdateIssue(ctx context.Context, issueIDOrKey string, in backlogclient.IssueUpdate) (*backlogclient.Issue, error) {
+	f.updated = append(f.updated, issueIDOrKey)
+	if f.writeErr != nil {
+		return nil, f.writeErr
+	}
+	return &backlogclient.Issue{IssueKey: issueIDOrKey}, nil
+}
+
+func (f *fakeConnector) GetProjectIssueTypes(ctx context.Context, projectID int64) ([]backlogclient.IssueType, error) {
+	return f.issueTypes, nil
+}
+
+func (f *fakeConnector) GetPriorities(ctx context.Context) ([]backlogclient.Priority, error) {
+	return f.priorities, nil
+}
+
+func (f *fakeConnector) GetProjectStatuses(ctx context.Context, projectID int64) ([]backlogclient.Status, error) {
+	return f.statuses, nil
 }
 
 func (f *fakeConnector) TestConnection(ctx context.Context) (*backlogclient.ConnectionInfo, error) {

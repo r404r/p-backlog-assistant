@@ -221,6 +221,152 @@ export interface ExportResult {
   rows: number
 }
 
+// --- 一括更新・追加(画面 3) ---------------------------------------------
+
+/** 取り込み時の検証エラー(1 行 1 件) */
+export interface BulkValidationError {
+  /** Excel の行番号(ヘッダを除く 1 始まりではなく、シート上の行番号) */
+  rowNo: number
+  /** エラー内容(日本語) */
+  message: string
+}
+
+/** dry-run プレビューの 1 行 */
+export interface BulkPreviewRow {
+  /** Excel の行番号 */
+  rowNo: number
+  /** この行の処理区分。skip は検証エラー等で実行対象外になる行 */
+  action: 'create' | 'update' | 'skip'
+  /** 課題キー(新規追加行は空文字) */
+  issueKey: string
+  /** 件名 */
+  summary: string
+  /** 変更内容(「状態: 未対応 → 処理中」等の human readable な差分。Go 側で生成) */
+  changes: string[]
+  /**
+   * 取り込み時点でリモートの更新日時が base_updated と異なっていたか。
+   * true でも実行はできるが、実行直前の再チェックで conflict として skip される可能性が高い。
+   */
+  conflictWarning: boolean
+}
+
+/** Excel 取り込み(検証 + dry-run)の結果 */
+export interface BulkImportResult {
+  /** 採番されたジョブ ID(実行・再開時に指定する) */
+  jobId: number
+  /** 対象プロジェクト ID(テンプレートに固定されている値) */
+  projectId: number
+  /** 取り込んだデータ行数(ヘッダを除く) */
+  totalRows: number
+  /** 新規追加になる行数 */
+  creates: number
+  /** 更新になる行数 */
+  updates: number
+  /** 実行対象外(変更なし・エラー)の行数 */
+  skips: number
+  /** すべての検証を通過し、実行可能かどうか */
+  valid: boolean
+  /** 取り込み時の警告(旧テンプレートのプロジェクト ID 欠落・担当者検証のフォールバック等) */
+  warnings: string[]
+  /** 検証エラー一覧 */
+  errors: BulkValidationError[]
+  /** dry-run プレビュー */
+  previews: BulkPreviewRow[]
+}
+
+/** 一括実行の結果サマリ */
+export interface BulkRunResult {
+  jobId: number
+  /** 成功件数 */
+  done: number
+  /** 失敗件数 */
+  failed: number
+  /** 競合により書き込まなかった件数 */
+  conflict: number
+  /**
+   * 取り込み時に「変更なし」と判定して送信対象から外した行数(skip 行)。
+   * キャンセル・中断で処理しなかった行はここには含まれない。
+   * 未処理の件数は warnings と、ジョブ履歴の pending / sending で確認する。
+   */
+  skipped: number
+  /** 所要時間(ミリ秒) */
+  durationMs: number
+  /** 警告(キャンセル・部分実行・再送確認の必要等。日本語) */
+  warnings: string[]
+}
+
+/** ジョブ履歴の 1 行 */
+export interface BulkJobRow {
+  jobId: number
+  projectId: number
+  /** ジョブ種別(bulk_update 等) */
+  kind: string
+  /** 作成日時(RFC3339) */
+  createdAt: string
+  /** ジョブ状態(pending / running / done / failed / canceled 等) */
+  status: string
+  /** 対象行数 */
+  total: number
+  /** 完了行数 */
+  done: number
+  /** 失敗行数 */
+  failed: number
+  /** 未処理行数 */
+  pending: number
+  /**
+   * 送信中のまま残っている行数。
+   * 0 より大きい場合は実行が中断された可能性があり、再開時に再送するかの確認が必要
+   * (新規追加の二重作成を防ぐため、自動では再送しない)。
+   */
+  sending: number
+  /**
+   * 競合により書き込まなかった行数。
+   * 0 より大きい場合は「競合を上書きして再実行(force)」で処理できる。
+   */
+  conflict: number
+  /**
+   * 取り込み時に「変更なし」と判定して送信対象から外した行数(skip 行)。
+   * キャンセル・中断で処理しなかった行は pending / sending に残る。
+   */
+  skipped: number
+}
+
+/** ジョブ行明細の 1 行(履歴の展開表示用) */
+export interface BulkJobRowDetail {
+  /** Excel の行番号 */
+  rowNo: number
+  /** 課題キー(新規追加行は空文字) */
+  issueKey: string
+  /** 行の状態(pending / sending / done / error / conflict / skip) */
+  status: string
+  /** 新規追加で作成済みの場合の課題 ID(未作成なら 0) */
+  resultIssueId: number
+  /** エラー内容(日本語。エラーが無ければ空文字) */
+  error: string
+}
+
+/** マスタデータの 1 項目(種別・優先度・状態に共通) */
+export interface MasterItem {
+  id: number
+  name: string
+}
+
+/** プロジェクトのマスタデータ(取り込み時の既定値選択・表示に使う) */
+export interface MasterData {
+  issueTypes: MasterItem[]
+  priorities: MasterItem[]
+  statuses: MasterItem[]
+}
+
+/** 一括実行の進捗(Wails イベント 'bulk:progress' のペイロード) */
+export interface BulkProgress {
+  jobId: number
+  /** 処理済み行数 */
+  processed: number
+  /** 対象行数 */
+  total: number
+}
+
 /** 動作ログの状態(Go 側 main.LogInfo と対) */
 export interface LogInfo {
   /** ログファイルのパス(無効な場合は空文字) */
@@ -298,6 +444,56 @@ export interface Backend {
    */
   exportUsersExcel(profileId: string, query: UserQuery, columns: string[]): Promise<ExportResult>
 
+  // --- 一括更新・追加 -------------------------------------------------------
+
+  /**
+   * 一括更新テンプレート(xlsx)を出力する。
+   * 保存先は Go 側の保存ダイアログで選択する。キャンセル時は path が空文字。
+   * @param projectId 対象プロジェクト ID(テンプレートに固定される)
+   * @param query     テンプレートに含める課題の条件(現状は projectId のみを使う)
+   */
+  exportBulkTemplate(
+    profileId: string,
+    projectId: number,
+    query: IssueQuery,
+  ): Promise<ExportResult>
+  /**
+   * 記入済み Excel を取り込み、検証と dry-run プレビューを行う(Backlog への書き込みはしない)。
+   * 取り込むファイルは Go 側のファイル選択ダイアログで選ぶ。
+   * キャンセル時は jobId=0・totalRows=0 の結果が返る。
+   * @param defaultPriorityId 優先度が未入力の新規行に適用する既定の優先度 ID
+   */
+  importBulkFile(
+    profileId: string,
+    projectId: number,
+    defaultPriorityId: number,
+  ): Promise<BulkImportResult>
+  /**
+   * 取り込み済みジョブを実行する(Backlog へ 1 件ずつ書き込む)。
+   * @param force         true なら競合(リモートが更新済み)を無視して強制上書きする
+   * @param resendSending true なら中断時に sending のまま残った行を再送する
+   *                      (新規追加の二重作成の可能性があるため、既定は false)
+   */
+  runBulkJob(
+    profileId: string,
+    jobId: number,
+    force: boolean,
+    resendSending: boolean,
+  ): Promise<BulkRunResult>
+  /** 実行中のジョブを中断する(送信済みの行は取り消さない) */
+  cancelBulkRun(profileId: string, jobId: number): Promise<void>
+  /** ジョブ履歴を新しい順に返す */
+  listBulkJobs(profileId: string): Promise<BulkJobRow[]>
+  /** 指定ジョブの行明細を行番号順に返す(履歴の展開表示用) */
+  getBulkJobRows(profileId: string, jobId: number): Promise<BulkJobRowDetail[]>
+  /**
+   * 指定ジョブの結果レポートを Excel 出力する。
+   * 保存先は Go 側の保存ダイアログで選択する。キャンセル時は path が空文字。
+   */
+  exportBulkResultExcel(profileId: string, jobId: number): Promise<ExportResult>
+  /** 種別・優先度・状態のマスタデータを返す */
+  getMasterData(profileId: string, projectId: number): Promise<MasterData>
+
   // --- 動作ログ -------------------------------------------------------------
 
   /** 動作ログの出力先パスと有効・無効を返す */
@@ -327,7 +523,38 @@ interface WailsApp {
   SyncUsers(profileId: string): Promise<SyncResult>
   ListUsers(profileId: string, query: UserQuery): Promise<UserSearchResult>
   ExportUsersExcel(profileId: string, query: UserQuery, columns: string[]): Promise<ExportResult>
+  ExportBulkTemplate(profileId: string, projectId: number, query: IssueQuery): Promise<ExportResult>
+  ImportBulkFile(
+    profileId: string,
+    projectId: number,
+    defaultPriorityId: number,
+  ): Promise<BulkImportResult>
+  RunBulkJob(
+    profileId: string,
+    jobId: number,
+    force: boolean,
+    resendSending: boolean,
+  ): Promise<BulkRunResult>
+  CancelBulkRun(profileId: string, jobId: number): Promise<void>
+  ListBulkJobs(profileId: string): Promise<BulkJobRow[]>
+  GetBulkJobRows(profileId: string, jobId: number): Promise<BulkJobRowDetail[]>
+  ExportBulkResultExcel(profileId: string, jobId: number): Promise<ExportResult>
+  GetMasterData(profileId: string, projectId: number): Promise<MasterData>
   GetLogInfo(): Promise<LogInfo>
+}
+
+/** Wails ランタイム(window.runtime)のうち本アプリが使うイベント購読 API */
+interface WailsRuntime {
+  EventsOn(name: string, callback: (...data: unknown[]) => void): () => void
+}
+
+function findWailsRuntime(): WailsRuntime | null {
+  const w = window as unknown as Record<string, unknown>
+  const rt = w['runtime'] as Partial<WailsRuntime> | undefined
+  if (rt && typeof rt.EventsOn === 'function') {
+    return rt as WailsRuntime
+  }
+  return null
 }
 
 function findWailsApp(): WailsApp | null {
@@ -405,6 +632,70 @@ function createWailsBackend(app: WailsApp): Backend {
     },
     exportUsersExcel: (profileId, query, columns) =>
       app.ExportUsersExcel(profileId, query, columns),
+    exportBulkTemplate: async (profileId, projectId, query) => {
+      const r = await app.ExportBulkTemplate(profileId, projectId, query)
+      return { path: r?.path ?? '', rows: r?.rows ?? 0 }
+    },
+    importBulkFile: async (profileId, projectId, defaultPriorityId) => {
+      const r = await app.ImportBulkFile(profileId, projectId, defaultPriorityId)
+      // Go の nil スライスは null で届くため、配列は必ず正規化する
+      return {
+        jobId: r?.jobId ?? 0,
+        projectId: r?.projectId ?? projectId,
+        totalRows: r?.totalRows ?? 0,
+        creates: r?.creates ?? 0,
+        updates: r?.updates ?? 0,
+        skips: r?.skips ?? 0,
+        valid: r?.valid ?? false,
+        warnings: r?.warnings ?? [],
+        errors: r?.errors ?? [],
+        previews: (r?.previews ?? []).map((p) => ({
+          ...p,
+          changes: p.changes ?? [],
+          conflictWarning: p.conflictWarning ?? false,
+        })),
+      }
+    },
+    runBulkJob: async (profileId, jobId, force, resendSending) => {
+      const r = await app.RunBulkJob(profileId, jobId, force, resendSending)
+      return {
+        jobId: r?.jobId ?? jobId,
+        done: r?.done ?? 0,
+        failed: r?.failed ?? 0,
+        conflict: r?.conflict ?? 0,
+        skipped: r?.skipped ?? 0,
+        durationMs: r?.durationMs ?? 0,
+        warnings: r?.warnings ?? [],
+      }
+    },
+    cancelBulkRun: (profileId, jobId) => app.CancelBulkRun(profileId, jobId),
+    listBulkJobs: async (profileId) =>
+      ((await app.ListBulkJobs(profileId)) ?? []).map((j) => ({
+        ...j,
+        // 旧バージョンのバインディング(集計フィールド未実装)でも 0 として扱う
+        conflict: j.conflict ?? 0,
+        skipped: j.skipped ?? 0,
+      })),
+    getBulkJobRows: async (profileId, jobId) =>
+      ((await app.GetBulkJobRows(profileId, jobId)) ?? []).map((r) => ({
+        rowNo: r?.rowNo ?? 0,
+        issueKey: r?.issueKey ?? '',
+        status: r?.status ?? '',
+        resultIssueId: r?.resultIssueId ?? 0,
+        error: r?.error ?? '',
+      })),
+    exportBulkResultExcel: async (profileId, jobId) => {
+      const r = await app.ExportBulkResultExcel(profileId, jobId)
+      return { path: r?.path ?? '', rows: r?.rows ?? 0 }
+    },
+    getMasterData: async (profileId, projectId) => {
+      const r = await app.GetMasterData(profileId, projectId)
+      return {
+        issueTypes: r?.issueTypes ?? [],
+        priorities: r?.priorities ?? [],
+        statuses: r?.statuses ?? [],
+      }
+    },
     getLogInfo: async () => {
       // 旧バージョンのバインディング(GetLogInfo 未実装)でも画面を壊さない
       if (typeof app.GetLogInfo !== 'function') return { path: '', enabled: false }
@@ -554,6 +845,39 @@ function filterMockIssues(rows: IssueRow[], query: IssueQuery): IssueRow[] {
   })
 }
 
+/** モック用のマスタデータ(実在のプロジェクト設定は含まない) */
+const MOCK_MASTER: MasterData = {
+  issueTypes: [
+    { id: 1001, name: 'タスク' },
+    { id: 1002, name: 'バグ' },
+    { id: 1003, name: '要望' },
+  ],
+  priorities: [
+    { id: 2, name: '高' },
+    { id: 3, name: '中' },
+    { id: 4, name: '低' },
+  ],
+  statuses: [
+    { id: 1, name: '未対応' },
+    { id: 2, name: '処理中' },
+    { id: 3, name: '処理済み' },
+    { id: 4, name: '完了' },
+  ],
+}
+
+// --- モックの進捗イベント配信 ---------------------------------------------
+// Wails ランタイム外では window.runtime が無く EventsOn を使えないため、
+// モック実行時のみ、この簡易エミッタ経由で 'bulk:progress' 相当を配信する
+// (画面側は onBulkProgress を呼ぶだけで、どちらの経路かを意識しない)。
+
+type BulkProgressCallback = (p: BulkProgress) => void
+
+const mockProgressListeners = new Set<BulkProgressCallback>()
+
+function emitMockProgress(p: BulkProgress): void {
+  for (const cb of mockProgressListeners) cb(p)
+}
+
 function createMockBackend(): Backend {
   // メモリ上のみ。リロードで消える。
   const profiles: Profile[] = []
@@ -567,6 +891,16 @@ function createMockBackend(): Backend {
   const users: UserRow[] = MOCK_USERS.map((u) => ({ ...u }))
   const issuesByProject = new Map<number, IssueRow[]>()
   const syncState: SyncStateRow[] = []
+
+  // 一括更新のモック状態。ジョブは新しい順に保持する。
+  const jobs: BulkJobRow[] = []
+  /** ジョブ ID -> 行明細(履歴の展開表示・結果レポートの確認用) */
+  const jobRows = new Map<number, BulkJobRowDetail[]>()
+  const canceledJobs = new Set<number>()
+  let jobSeq = 0
+  // 1 回目の取り込みは検証エラーあり、2 回目以降はエラー無しにして、
+  // 「実行できない状態」と「実行できる状態」の両方を手動確認できるようにする。
+  let importSeq = 0
 
   function putSyncState(dataKind: string, projectId: number, at: string) {
     const found = syncState.find((s) => s.dataKind === dataKind && s.projectId === projectId)
@@ -787,6 +1121,222 @@ function createMockBackend(): Backend {
       return { path: '(モック)保存ダイアログは Wails 実行時のみ表示されます', rows: matched.length }
     },
 
+    async exportBulkTemplate(_profileId, projectId) {
+      await delay(700)
+      const all = issuesByProject.get(projectId) ?? []
+      // モックでは保存ダイアログを出せないため、ダミーのパスを返す
+      return { path: '(モック)保存ダイアログは Wails 実行時のみ表示されます', rows: all.length }
+    },
+
+    async importBulkFile(_profileId, projectId, defaultPriorityId) {
+      await delay(900)
+      const all = issuesByProject.get(projectId) ?? []
+      // 既存課題の先頭数件を「更新」、末尾に「新規追加」と「エラー行」を足した固定シナリオ
+      const targets = all.slice(0, 4)
+      const previews: BulkPreviewRow[] = targets.map((r, i) => ({
+        rowNo: i + 2,
+        action: 'update',
+        issueKey: r.issueKey,
+        summary: r.summary,
+        changes:
+          i % 2 === 0
+            ? ['状態: 未対応 → 処理中', '担当者: (未設定) → モック 太郎']
+            : ['期限: (未設定) → 2026-12-31'],
+        // 1 件だけ競合警告を出して、警告の見え方を確認できるようにする
+        conflictWarning: i === 1,
+      }))
+      previews.push({
+        rowNo: targets.length + 2,
+        action: 'create',
+        issueKey: '',
+        summary: '(モック)新規追加する課題',
+        changes: [
+          `種別: ${MOCK_MASTER.issueTypes[0].name}`,
+          `優先度: ${
+            MOCK_MASTER.priorities.find((p) => p.id === defaultPriorityId)?.name ?? '(既定値)'
+          }`,
+        ],
+        conflictWarning: false,
+      })
+      importSeq += 1
+      const withErrors = importSeq === 1
+      const errors: BulkValidationError[] = withErrors
+        ? [{ rowNo: targets.length + 3, message: '(モック)種別ID が未入力です(新規追加行の必須項目)' }]
+        : []
+      if (withErrors) {
+        previews.push({
+          rowNo: targets.length + 3,
+          action: 'skip',
+          issueKey: '',
+          summary: '(モック)検証エラーの行',
+          changes: [],
+          conflictWarning: false,
+        })
+      }
+
+      jobSeq += 1
+      const totalRows = previews.length
+      const creates = previews.filter((p) => p.action === 'create').length
+      const updates = previews.filter((p) => p.action === 'update').length
+      const skips = previews.filter((p) => p.action === 'skip').length
+      const job: BulkJobRow = {
+        jobId: jobSeq,
+        projectId,
+        kind: 'bulk_update',
+        createdAt: new Date().toISOString(),
+        status: 'pending',
+        total: totalRows,
+        done: 0,
+        failed: 0,
+        pending: creates + updates,
+        sending: 0,
+        conflict: 0,
+        skipped: skips,
+      }
+      jobs.unshift(job)
+      jobRows.set(
+        job.jobId,
+        previews.map((p) => ({
+          rowNo: p.rowNo,
+          issueKey: p.issueKey,
+          status: p.action === 'skip' ? 'skip' : 'pending',
+          resultIssueId: 0,
+          error:
+            p.action === 'skip'
+              ? errors.find((e) => e.rowNo === p.rowNo)?.message ?? ''
+              : '',
+        })),
+      )
+      return {
+        jobId: job.jobId,
+        projectId,
+        totalRows,
+        creates,
+        updates,
+        skips,
+        // エラー行があるうちは実行できない(画面の「実行」ボタン無効の確認用)
+        valid: errors.length === 0,
+        warnings: [],
+        errors,
+        previews,
+      }
+    },
+
+    async runBulkJob(_profileId, jobId, force, resendSending) {
+      const started = Date.now()
+      const job = jobs.find((j) => j.jobId === jobId)
+      if (!job) throw new Error('ジョブが見つかりません')
+      canceledJobs.delete(jobId)
+      job.status = 'running'
+
+      const rows = jobRows.get(jobId) ?? []
+      // 処理対象: 未処理 + 競合(force のときのみ)+ 送信中(再送を選んだときのみ)
+      const targets = rows.filter(
+        (r) =>
+          r.status === 'pending' ||
+          (force && r.status === 'conflict') ||
+          (resendSending && r.status === 'sending'),
+      )
+      const total = targets.length
+      let done = 0
+      let conflict = 0
+      for (let i = 0; i < total; i += 1) {
+        await delay(400)
+        const row = targets[i]
+        if (canceledJobs.has(jobId)) {
+          // 中断時は「送信したが結果を確認できなかった行」を 1 件だけ再現し、
+          // 履歴の sending 表示・再送確認の導線を手動確認できるようにする
+          row.status = 'sending'
+          break
+        }
+        // 2 件目は競合させる(force 指定時のみ書き込めることを確認できる)
+        if (i === 1 && !force) {
+          conflict += 1
+          row.status = 'conflict'
+          row.error = '(モック)リモートが更新されているため上書きしませんでした'
+        } else {
+          done += 1
+          row.status = 'done'
+          row.error = ''
+          if (!row.issueKey) {
+            // 新規追加行は作成済みの課題 ID が付く(再送時の二重作成防止の突合に使う)
+            row.resultIssueId = 900000 + row.rowNo
+          }
+        }
+        emitMockProgress({ jobId, processed: i + 1, total })
+      }
+      const canceled = canceledJobs.has(jobId)
+      canceledJobs.delete(jobId)
+
+      job.done = rows.filter((r) => r.status === 'done').length
+      job.failed = rows.filter((r) => r.status === 'error').length
+      job.pending = rows.filter((r) => r.status === 'pending').length
+      job.sending = rows.filter((r) => r.status === 'sending').length
+      job.conflict = rows.filter((r) => r.status === 'conflict').length
+      job.skipped = rows.filter((r) => r.status === 'skip').length
+      job.status = canceled
+        ? 'canceled'
+        : job.pending + job.sending + job.conflict > 0
+          ? 'partial'
+          : 'done'
+
+      const warnings: string[] = []
+      const unprocessed = job.pending + job.sending
+      if (canceled) {
+        // Go 側と同じく、未処理の件数を警告に載せる(結果の skipped には含めない)
+        warnings.push(
+          `(モック)キャンセルされました(未処理 ${unprocessed} 件: 未送信 ${job.pending} 件 / 送信中 ${job.sending} 件)。ジョブ履歴から再開できます`,
+        )
+      }
+      if (conflict > 0) {
+        warnings.push('(モック)リモートが更新されている課題をスキップしました。')
+      }
+      if (job.sending > 0) {
+        warnings.push('(モック)送信結果を確認できなかった行があります。再開時に確認してください。')
+      }
+      return {
+        jobId,
+        done,
+        failed: 0,
+        conflict,
+        // skipped は「取り込み時の変更なし行」だけを数える(未処理は含めない)
+        skipped: job.skipped,
+        durationMs: Date.now() - started,
+        warnings,
+      }
+    },
+
+    async cancelBulkRun(_profileId, jobId) {
+      canceledJobs.add(jobId)
+    },
+
+    async listBulkJobs() {
+      await delay(150)
+      return jobs.map((j) => ({ ...j }))
+    },
+
+    async getBulkJobRows(_profileId, jobId) {
+      await delay(200)
+      const rows = jobRows.get(jobId) ?? []
+      return rows.map((r) => ({ ...r })).sort((a, b) => a.rowNo - b.rowNo)
+    },
+
+    async exportBulkResultExcel(_profileId, jobId) {
+      await delay(600)
+      const rows = jobRows.get(jobId) ?? []
+      // モックでは保存ダイアログを出せないため、ダミーのパスを返す
+      return { path: '(モック)保存ダイアログは Wails 実行時のみ表示されます', rows: rows.length }
+    },
+
+    async getMasterData() {
+      await delay(200)
+      return {
+        issueTypes: MOCK_MASTER.issueTypes.map((m) => ({ ...m })),
+        priorities: MOCK_MASTER.priorities.map((m) => ({ ...m })),
+        statuses: MOCK_MASTER.statuses.map((m) => ({ ...m })),
+      }
+    },
+
     async getLogInfo() {
       await delay(50)
       // モックでは実ファイルを作らないため、ダミーのパスを返す
@@ -813,4 +1363,29 @@ export function getBackend(): Backend {
 /** モック動作中かどうか(UI での注記表示用) */
 export function isMockBackend(): boolean {
   return findWailsApp() === null
+}
+
+/**
+ * 一括実行の進捗イベント('bulk:progress')を購読する。戻り値を呼ぶと購読を解除する。
+ *
+ * Wails ランタイムの EventsOn は実行時に window.runtime から参照する
+ * (バインディング生成物に型が無いため)。ランタイムが無い環境(vite dev / ビルド検証)では
+ * モックバックエンドの簡易エミッタを購読する。どちらも存在しない場合は
+ * 解除だけを行う no-op を返し、画面側は分岐せずに使える。
+ */
+export function onBulkProgress(cb: (p: BulkProgress) => void): () => void {
+  const rt = findWailsRuntime()
+  if (rt) {
+    const off = rt.EventsOn('bulk:progress', (...data: unknown[]) => {
+      const p = data[0] as Partial<BulkProgress> | undefined
+      if (!p) return
+      cb({ jobId: p.jobId ?? 0, processed: p.processed ?? 0, total: p.total ?? 0 })
+    })
+    // Wails の EventsOn は解除関数を返すが、バージョンにより undefined の場合がある
+    return typeof off === 'function' ? off : () => {}
+  }
+  mockProgressListeners.add(cb)
+  return () => {
+    mockProgressListeners.delete(cb)
+  }
 }

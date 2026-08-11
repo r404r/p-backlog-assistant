@@ -180,7 +180,8 @@ func TestGetIssues_ParamsAndMapping(t *testing.T) {
 		Summary: "件名", Description: "詳細",
 		StatusID: 2, StatusName: "処理中",
 		AssigneeID: 42, AssigneeName: "担当 太郎",
-		IssueTypeName: "タスク", PriorityName: "中",
+		IssueTypeID: 9, IssueTypeName: "タスク",
+		PriorityID: 3, PriorityName: "中",
 		Created: "2026-08-01T00:00:00Z", Updated: "2026-08-02T00:00:00Z", DueDate: "2026-09-01",
 	}
 	i.RawJSON = ""

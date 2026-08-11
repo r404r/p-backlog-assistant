@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -13,6 +14,7 @@ import (
 
 	"backlog-assistant/internal/applog"
 	"backlog-assistant/internal/backlogclient"
+	"backlog-assistant/internal/bulk"
 	"backlog-assistant/internal/config"
 	"backlog-assistant/internal/export"
 	"backlog-assistant/internal/service"
@@ -559,19 +561,34 @@ func (a *App) GetSyncState(profileID string) ([]SyncStateRow, error) {
 	return rows, nil
 }
 
-// maskPathInError はエラーメッセージ中の path をそのファイル名へ置換した
-// 新しいエラーを返す(動作ログ用。高 2)。
-// 保存先ディレクトリはローカルユーザ名や顧客名を含みうるため、ログには残さない。
+// maskedPathPlaceholder はエラーメッセージ中のファイルパスの置換先。
+const maskedPathPlaceholder = "<file>"
+
+// maskPathInError はエラーメッセージ中の path を固定のプレースホルダへ置換した
+// 新しいエラーを返す(動作ログ用。高 2 / 2 回目 低 1)。
+//
+// 保存先ディレクトリはローカルユーザ名や顧客名を含みうる。ファイル名も
+// ユーザが自由に付けられ顧客名・案件名を含みうるため、ベース名も残さない
+// (形式の取り違えは fileExtAttr の拡張子で追える)。
 // err が nil、または path が空の場合は元のエラーをそのまま返す。
 func maskPathInError(err error, path string) error {
 	if err == nil || path == "" {
 		return err
 	}
-	msg := strings.ReplaceAll(err.Error(), path, filepath.Base(path))
+	msg := strings.ReplaceAll(err.Error(), path, maskedPathPlaceholder)
 	if msg == err.Error() {
 		return err
 	}
 	return errors.New(msg)
+}
+
+// fileExtAttr は保存・取り込みファイルの拡張子だけをログ属性にする(低 1)。
+//
+// ファイル名はユーザが自由に付けられ、顧客名・案件名を含みうるため記録しない。
+// 拡張子だけであれば個人・顧客を特定しえないため、形式の取り違え(csv を選んだ 等)を
+// 追える最小限の情報として残す。
+func fileExtAttr(path string) slog.Attr {
+	return slog.String("ext", strings.ToLower(filepath.Ext(path)))
 }
 
 // ExportResultDTO は Excel 出力結果(キャンセル時は path 空・rows 0)。
@@ -622,12 +639,12 @@ func (a *App) ExportIssuesExcel(profileID string, query store.IssueFilter, colum
 		a.logEnd(op, nil, append(attrs, slog.Bool("canceled", true))...)
 		return &ExportResultDTO{Path: "", Rows: 0}, nil
 	}
-	// 保存先はユーザが選ぶため、ローカルユーザ名や顧客名を含むフォルダになりうる。
-	// ディレクトリは記録せずファイル名だけを残す(高 1)。
-	fileAttr := slog.String("fileName", filepath.Base(path))
+	// 保存先・ファイル名はユーザが決めるため、ローカルユーザ名や顧客名を
+	// 含みうる。パスもファイル名も記録せず、拡張子だけを残す(低 1)。
+	fileAttr := fileExtAttr(path)
 	if err := export.ExportIssuesToFile(path, res.Issues, export.Options{Columns: columns}); err != nil {
 		// 失敗時のエラーメッセージにも保存先のフルパスが含まれるため、
-		// ログへ渡す前にファイル名だけへ置換する(高 2)。
+		// ログへ渡す前にプレースホルダへ置換する(高 2 / 2 回目 低 1)。
 		// 画面へ返すエラーは、ユーザ自身が選んだパスなのでそのままにする。
 		a.logEnd(op, maskPathInError(err, path), append(attrs, fileAttr)...)
 		return nil, err
@@ -765,11 +782,391 @@ func (a *App) ExportUsersExcel(profileID string, query store.UserFilter, columns
 			AdminProjectKeys: u.AdminProjectKeys,
 		})
 	}
-	fileAttr := slog.String("fileName", filepath.Base(path))
+	fileAttr := fileExtAttr(path)
 	if err := export.ExportUsersToFile(path, exportRows, export.UserOptions{Columns: columns}); err != nil {
 		a.logEnd(op, maskPathInError(err, path), append(attrs, fileAttr)...)
 		return nil, err
 	}
 	a.logEnd(op, nil, append(attrs, fileAttr, slog.Int("rows", len(exportRows)))...)
 	return &ExportResultDTO{Path: path, Rows: len(exportRows)}, nil
+}
+
+// ---- M4: 一括更新・追加(frontend/src/lib/backend.ts の契約と対) ----
+
+// rawIssueIDs は課題の raw_json から種別 ID・優先度 ID を取り出す
+// (store.Issue は名前のみ保持しているため、テンプレートの ID 列はここで補完する)。
+func rawIssueIDs(rawJSON string) (issueTypeID, priorityID int64) {
+	var v struct {
+		IssueType struct {
+			ID int64 `json:"id"`
+		} `json:"issueType"`
+		Priority struct {
+			ID int64 `json:"id"`
+		} `json:"priority"`
+	}
+	if err := json.Unmarshal([]byte(rawJSON), &v); err != nil {
+		return 0, 0
+	}
+	return v.IssueType.ID, v.Priority.ID
+}
+
+// ExportBulkTemplate は一括更新テンプレート(既存課題 + base_updated)を Excel 出力する。
+func (a *App) ExportBulkTemplate(profileID string, projectID int64, query store.IssueFilter) (*ExportResultDTO, error) {
+	const op = "ExportBulkTemplate"
+	attrs := []slog.Attr{slog.String("profileId", profileID), slog.Int64("projectId", projectID)}
+	a.logStart(op, attrs...)
+	s, err := a.svc()
+	if err != nil {
+		a.logEnd(op, err, attrs...)
+		return nil, err
+	}
+	query.ProjectID = projectID
+	query.Limit = exportSearchLimit
+	res, err := s.SearchIssues(a.ctx, profileID, query)
+	if err != nil {
+		a.logEnd(op, err, attrs...)
+		return nil, err
+	}
+	if res.Truncated {
+		err := errors.New("対象件数が上限(100 万件)を超えています。条件で絞り込んでください")
+		a.logEnd(op, err, attrs...)
+		return nil, err
+	}
+	path, err := wailsruntime.SaveFileDialog(a.ctx, wailsruntime.SaveDialogOptions{
+		Title:           "テンプレートの出力先を選択",
+		DefaultFilename: "backlog-bulk-template.xlsx",
+		Filters: []wailsruntime.FileFilter{
+			{DisplayName: "Excel ブック (*.xlsx)", Pattern: "*.xlsx"},
+		},
+	})
+	if err != nil {
+		a.logEnd(op, err, attrs...)
+		return nil, err
+	}
+	if path == "" { // ユーザがキャンセル
+		a.logEnd(op, nil, append(attrs, slog.Bool("canceled", true))...)
+		return &ExportResultDTO{Path: "", Rows: 0}, nil
+	}
+	rows := make([]export.BulkTemplateRow, 0, len(res.Issues))
+	for _, is := range res.Issues {
+		typeID, priorityID := rawIssueIDs(is.RawJSON)
+		rows = append(rows, export.BulkTemplateRow{
+			IssueKey:      is.IssueKey,
+			Summary:       is.Summary,
+			IssueTypeID:   typeID,
+			IssueTypeName: is.IssueTypeName,
+			StatusID:      is.StatusID,
+			StatusName:    is.StatusName,
+			PriorityID:    priorityID,
+			PriorityName:  is.PriorityName,
+			AssigneeID:    is.AssigneeID,
+			AssigneeName:  is.AssigneeName,
+			DueDate:       is.DueDate,
+			Description:   is.Description,
+			BaseUpdated:   is.Updated,
+		})
+	}
+	fileAttr := fileExtAttr(path)
+	if err := export.ExportBulkTemplateToFile(path, projectID, rows); err != nil {
+		a.logEnd(op, maskPathInError(err, path), append(attrs, fileAttr)...)
+		return nil, err
+	}
+	a.logEnd(op, nil, append(attrs, fileAttr, slog.Int("rows", len(rows)))...)
+	return &ExportResultDTO{Path: path, Rows: len(rows)}, nil
+}
+
+// ImportBulkFile は記入済み Excel を選択して取り込み、検証 + dry-run プレビューを返す。
+// ファイル選択キャンセル時は jobId=0 かつ totalRows=0 を返す(フロント契約)。
+func (a *App) ImportBulkFile(profileID string, projectID int64, defaultPriorityID int64) (*bulk.ImportResult, error) {
+	const op = "ImportBulkFile"
+	attrs := []slog.Attr{
+		slog.String("profileId", profileID),
+		slog.Int64("projectId", projectID),
+		slog.Int64("defaultPriorityId", defaultPriorityID),
+	}
+	a.logStart(op, attrs...)
+	s, err := a.svc()
+	if err != nil {
+		a.logEnd(op, err, attrs...)
+		return nil, err
+	}
+	path, err := wailsruntime.OpenFileDialog(a.ctx, wailsruntime.OpenDialogOptions{
+		Title: "記入済みの Excel ファイルを選択",
+		Filters: []wailsruntime.FileFilter{
+			{DisplayName: "Excel ブック (*.xlsx)", Pattern: "*.xlsx"},
+		},
+	})
+	if err != nil {
+		a.logEnd(op, err, attrs...)
+		return nil, err
+	}
+	if path == "" { // ユーザがキャンセル
+		a.logEnd(op, nil, append(attrs, slog.Bool("canceled", true))...)
+		return &bulk.ImportResult{
+			ProjectID: projectID,
+			Errors:    []bulk.RowError{},
+			Previews:  []bulk.RowPreview{},
+			Warnings:  []string{},
+		}, nil
+	}
+	fileAttr := fileExtAttr(path)
+	res, err := s.ImportBulkFile(a.ctx, profileID, projectID, path, defaultPriorityID)
+	if err != nil {
+		a.logEnd(op, maskPathInError(err, path), append(attrs, fileAttr)...)
+		return nil, err
+	}
+	if res.Errors == nil {
+		res.Errors = []bulk.RowError{}
+	}
+	if res.Previews == nil {
+		res.Previews = []bulk.RowPreview{}
+	}
+	if res.Warnings == nil {
+		res.Warnings = []string{}
+	}
+	// 警告本文はプロジェクト情報等を含みうるため件数のみ記録する
+	a.logEnd(op, nil, append(attrs,
+		fileAttr,
+		slog.Int64("jobId", res.JobID),
+		slog.Int("totalRows", res.TotalRows),
+		slog.Int("creates", res.Creates),
+		slog.Int("updates", res.Updates),
+		slog.Int("errors", len(res.Errors)),
+		slog.Int("warnings", len(res.Warnings)),
+		slog.Bool("valid", res.Valid))...)
+	return res, nil
+}
+
+// RunBulkJob は取り込み済みジョブを実行する(1 件ずつ POST/PATCH。進捗は
+// Wails イベント 'bulk:progress' {jobId, processed, total} で通知)。
+func (a *App) RunBulkJob(profileID string, jobID int64, force, resendSending bool) (*bulk.RunResult, error) {
+	const op = "RunBulkJob"
+	attrs := []slog.Attr{
+		slog.String("profileId", profileID),
+		slog.Int64("jobId", jobID),
+		slog.Bool("force", force),
+		slog.Bool("resendSending", resendSending),
+	}
+	a.logStart(op, attrs...)
+	s, err := a.svc()
+	if err != nil {
+		a.logEnd(op, err, attrs...)
+		return nil, err
+	}
+	onProgress := func(p bulk.Progress) {
+		wailsruntime.EventsEmit(a.ctx, "bulk:progress", map[string]any{
+			"jobId":     jobID,
+			"processed": p.Processed,
+			"total":     p.Total,
+		})
+	}
+	res, err := s.RunBulkJob(a.ctx, profileID, jobID, bulk.RunOptions{Force: force, ResendSending: resendSending}, onProgress)
+	if err != nil {
+		a.logEnd(op, err, attrs...)
+		return nil, err
+	}
+	if res.Warnings == nil {
+		res.Warnings = []string{}
+	}
+	// 警告本文は課題キー等を含みうるため件数のみ記録する
+	a.logEnd(op, nil, append(attrs,
+		slog.Int("done", res.Done),
+		slog.Int("failed", res.Failed),
+		slog.Int("conflict", res.Conflict),
+		slog.Int("skipped", res.Skipped),
+		slog.Int("warnings", len(res.Warnings)),
+		slog.Int64("durationMs", res.DurationMs))...)
+	return res, nil
+}
+
+// CancelBulkRun は実行中の一括ジョブへキャンセルを要求する(行間で反映される)。
+// ジョブ ID はプロファイルごとの採番のため、プロファイル ID と併せて指定する(中 2)。
+func (a *App) CancelBulkRun(profileID string, jobID int64) error {
+	const op = "CancelBulkRun"
+	attrs := []slog.Attr{slog.String("profileId", profileID), slog.Int64("jobId", jobID)}
+	a.logStart(op, attrs...)
+	s, err := a.svc()
+	if err != nil {
+		a.logEnd(op, err, attrs...)
+		return err
+	}
+	s.CancelBulkRun(profileID, jobID)
+	a.logEnd(op, nil, attrs...)
+	return nil
+}
+
+// ListBulkJobs は一括ジョブの履歴(行数集計付き)を返す。
+func (a *App) ListBulkJobs(profileID string) ([]store.JobSummary, error) {
+	const op = "ListBulkJobs"
+	attrs := []slog.Attr{slog.String("profileId", profileID)}
+	a.logStart(op, attrs...)
+	s, err := a.svc()
+	if err != nil {
+		a.logEnd(op, err, attrs...)
+		return nil, err
+	}
+	jobs, err := s.ListBulkJobs(a.ctx, profileID)
+	if err != nil {
+		a.logEnd(op, err, attrs...)
+		return nil, err
+	}
+	if jobs == nil {
+		jobs = []store.JobSummary{}
+	}
+	a.logEnd(op, nil, append(attrs, slog.Int("jobs", len(jobs)))...)
+	return jobs, nil
+}
+
+// BulkJobRowDTO は一括ジョブの行明細 1 行(フロント契約)。
+//
+// payload(送信内容)・baseUpdated は返さない。課題本文・件名を含みうるうえ、
+// 画面での結果確認には不要なため(設計書 7 節)。
+type BulkJobRowDTO struct {
+	RowNo         int    `json:"rowNo"`
+	IssueKey      string `json:"issueKey"`
+	Status        string `json:"status"`
+	ResultIssueID int64  `json:"resultIssueId"`
+	Error         string `json:"error"`
+}
+
+// GetBulkJobRows はジョブの行明細を行番号順で返す(実行結果の確認用)。
+func (a *App) GetBulkJobRows(profileID string, jobID int64) ([]BulkJobRowDTO, error) {
+	const op = "GetBulkJobRows"
+	attrs := []slog.Attr{slog.String("profileId", profileID), slog.Int64("jobId", jobID)}
+	a.logStart(op, attrs...)
+	rows, err := a.bulkJobRows(profileID, jobID)
+	if err != nil {
+		a.logEnd(op, err, attrs...)
+		return nil, err
+	}
+	out := make([]BulkJobRowDTO, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, BulkJobRowDTO{
+			RowNo:         r.RowNo,
+			IssueKey:      r.IssueKey,
+			Status:        r.Status,
+			ResultIssueID: r.ResultIssueID,
+			Error:         r.Error,
+		})
+	}
+	a.logEnd(op, nil, append(attrs, slog.Int("rows", len(out)))...)
+	return out, nil
+}
+
+// bulkJobRows はジョブの行明細を取得する(バインディング共通の前処理)。
+func (a *App) bulkJobRows(profileID string, jobID int64) ([]store.JobRow, error) {
+	s, err := a.svc()
+	if err != nil {
+		return nil, err
+	}
+	return s.GetBulkJobRows(a.ctx, profileID, jobID)
+}
+
+// bulkRowAction は行の処理区分の表示名を返す。
+// payload を解析せず、行状態と課題キーの有無だけで判断する
+// (送信内容を画面・Excel へ持ち出さないため)。
+func bulkRowAction(row store.JobRow) string {
+	switch {
+	case row.Status == store.RowStatusSkip:
+		return "変更なし"
+	case row.IssueKey == "":
+		return "追加"
+	default:
+		return "更新"
+	}
+}
+
+// bulkRowStatusLabels は行状態の表示名(Excel 用)。
+var bulkRowStatusLabels = map[string]string{
+	store.RowStatusPending:  "未実行",
+	store.RowStatusSending:  "送信中(結果未確認)",
+	store.RowStatusDone:     "完了",
+	store.RowStatusError:    "失敗",
+	store.RowStatusConflict: "競合",
+	store.RowStatusSkip:     "変更なし",
+}
+
+// bulkRowStatusLabel は行状態の表示名を返す(未知の値はそのまま返す)。
+func bulkRowStatusLabel(status string) string {
+	if label, ok := bulkRowStatusLabels[status]; ok {
+		return label
+	}
+	return status
+}
+
+// ExportBulkResultExcel はジョブの実行結果を Excel に出力する(高 5)。
+// 保存先は OS の保存ダイアログでユーザが選択する(キャンセル時は path 空)。
+func (a *App) ExportBulkResultExcel(profileID string, jobID int64) (*ExportResultDTO, error) {
+	const op = "ExportBulkResultExcel"
+	attrs := []slog.Attr{slog.String("profileId", profileID), slog.Int64("jobId", jobID)}
+	a.logStart(op, attrs...)
+	rows, err := a.bulkJobRows(profileID, jobID)
+	if err != nil {
+		a.logEnd(op, err, attrs...)
+		return nil, err
+	}
+	path, err := wailsruntime.SaveFileDialog(a.ctx, wailsruntime.SaveDialogOptions{
+		Title:           "実行結果の出力先を選択",
+		DefaultFilename: "backlog-bulk-result.xlsx",
+		Filters: []wailsruntime.FileFilter{
+			{DisplayName: "Excel ブック (*.xlsx)", Pattern: "*.xlsx"},
+		},
+	})
+	if err != nil {
+		a.logEnd(op, err, attrs...)
+		return nil, err
+	}
+	if path == "" { // ユーザがキャンセル
+		a.logEnd(op, nil, append(attrs, slog.Bool("canceled", true))...)
+		return &ExportResultDTO{Path: "", Rows: 0}, nil
+	}
+	exportRows := make([]export.BulkResultRow, 0, len(rows))
+	for _, r := range rows {
+		exportRows = append(exportRows, export.BulkResultRow{
+			RowNo:         r.RowNo,
+			Action:        bulkRowAction(r),
+			IssueKey:      r.IssueKey,
+			ResultIssueID: r.ResultIssueID,
+			Status:        bulkRowStatusLabel(r.Status),
+			ErrorMessage:  r.Error,
+		})
+	}
+	fileAttr := fileExtAttr(path)
+	if err := export.ExportBulkResultToFile(path, exportRows); err != nil {
+		a.logEnd(op, maskPathInError(err, path), append(attrs, fileAttr)...)
+		return nil, err
+	}
+	a.logEnd(op, nil, append(attrs, fileAttr, slog.Int("rows", len(exportRows)))...)
+	return &ExportResultDTO{Path: path, Rows: len(exportRows)}, nil
+}
+
+// GetMasterData は種別・優先度・状態のマスタを返す(取り込みの既定優先度選択などに使用)。
+func (a *App) GetMasterData(profileID string, projectID int64) (*bulk.MasterData, error) {
+	const op = "GetMasterData"
+	attrs := []slog.Attr{slog.String("profileId", profileID), slog.Int64("projectId", projectID)}
+	a.logStart(op, attrs...)
+	s, err := a.svc()
+	if err != nil {
+		a.logEnd(op, err, attrs...)
+		return nil, err
+	}
+	md, err := s.GetMasterData(a.ctx, profileID, projectID)
+	if err != nil {
+		a.logEnd(op, err, attrs...)
+		return nil, err
+	}
+	if md.IssueTypes == nil {
+		md.IssueTypes = []bulk.NamedID{}
+	}
+	if md.Priorities == nil {
+		md.Priorities = []bulk.NamedID{}
+	}
+	if md.Statuses == nil {
+		md.Statuses = []bulk.NamedID{}
+	}
+	a.logEnd(op, nil, append(attrs,
+		slog.Int("issueTypes", len(md.IssueTypes)),
+		slog.Int("priorities", len(md.Priorities)),
+		slog.Int("statuses", len(md.Statuses)))...)
+	return md, nil
 }

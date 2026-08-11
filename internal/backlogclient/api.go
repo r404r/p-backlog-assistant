@@ -44,7 +44,9 @@ type Issue struct {
 	StatusName    string `json:"statusName"`
 	AssigneeID    int64  `json:"assigneeId"`
 	AssigneeName  string `json:"assigneeName"`
+	IssueTypeID   int64  `json:"issueTypeId"`
 	IssueTypeName string `json:"issueTypeName"`
+	PriorityID    int64  `json:"priorityId"`
 	PriorityName  string `json:"priorityName"`
 	Created       string `json:"created"`
 	Updated       string `json:"updated"`
@@ -377,9 +379,12 @@ func parseIssue(raw json.RawMessage) (Issue, error) {
 		i.AssigneeName = derefString(a.Assignee.Name)
 	}
 	if a.IssueType != nil {
+		// ID は再送前突合(送信内容とリモートの完全一致確認)で使う
+		i.IssueTypeID = derefInt64(a.IssueType.ID)
 		i.IssueTypeName = derefString(a.IssueType.Name)
 	}
 	if a.Priority != nil {
+		i.PriorityID = derefInt64(a.Priority.ID)
 		i.PriorityName = derefString(a.Priority.Name)
 	}
 	return i, nil

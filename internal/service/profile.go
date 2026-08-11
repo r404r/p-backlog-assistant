@@ -11,12 +11,14 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode"
 
 	"github.com/kenzo0107/backlog"
 
 	"backlog-assistant/internal/backlogclient"
+	"backlog-assistant/internal/bulk"
 	"backlog-assistant/internal/config"
 	"backlog-assistant/internal/secret"
 	"backlog-assistant/internal/store"
@@ -32,6 +34,9 @@ type connector interface {
 	GetTeams(ctx context.Context) ([]*backlog.Team, error)
 	InitRateLimit(ctx context.Context) error
 	syncpkg.API
+	// 一括更新・追加(書き込み + マスタ取得)。GetIssue は syncpkg.API と
+	// 同じシグネチャのため重複してもよい(埋め込みインターフェースの重複メソッド)。
+	bulk.API
 }
 
 // コンパイル時チェック: *backlogclient.Client が connector を満たすこと。
@@ -106,6 +111,20 @@ type ProfileService struct {
 	// onProgress は同期進捗の通知先(app.go が設定する)。
 	progressMu sync.Mutex
 	onProgress SyncProgressFunc
+
+	// bulkCancels は実行中の一括更新ジョブ(プロファイル + ジョブ ID)→ キャンセルフラグ。
+	// 実行中に別スレッドから中断を指示するため、他のロックとは独立させる
+	// (syncMu を取ると実行完了まで待たされ、キャンセルにならない)。
+	bulkMu      sync.Mutex
+	bulkCancels map[bulkRunKey]*atomic.Bool
+}
+
+// bulkRunKey は実行中ジョブの識別子(中 2)。
+// ジョブ ID はプロファイル(ローカル DB)ごとの採番であり、ID だけをキーにすると
+// 別プロファイルの同番ジョブを誤って中断しうるため、プロファイル ID と組で扱う。
+type bulkRunKey struct {
+	profileID string
+	jobID     int64
 }
 
 // storeEntry はローカル DB キャッシュの 1 エントリ。
@@ -122,12 +141,13 @@ func NewProfileService(cfg *config.Manager) *ProfileService {
 		newClient: func(spaceURL, apiKey string) (connector, error) {
 			return backlogclient.New(spaceURL, apiKey)
 		},
-		removeDB:  store.RemoveDatabase,
-		dbPathFor: store.DBPath,
-		openStore: store.Open,
-		now:       time.Now,
-		clients:   map[string]*clientEntry{},
-		stores:    map[string]*storeEntry{},
+		removeDB:    store.RemoveDatabase,
+		dbPathFor:   store.DBPath,
+		openStore:   store.Open,
+		now:         time.Now,
+		clients:     map[string]*clientEntry{},
+		stores:      map[string]*storeEntry{},
+		bulkCancels: map[bulkRunKey]*atomic.Bool{},
 	}
 }
 
