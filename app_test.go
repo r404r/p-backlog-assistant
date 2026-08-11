@@ -166,3 +166,29 @@ func TestNewMasterDataDTO_NormalizesNilSlices(t *testing.T) {
 		t.Errorf("customFields = %#v, want 空スライス", empty.CustomFields)
 	}
 }
+
+// TestBulkCustomFieldValues は一括更新テンプレートへプリフィルする
+// カスタム属性の現在値(定義 ID → 表示文字列)を確認する(CF3)。
+// 生 JSON を解釈できない課題は、テンプレート出力全体を止めないため空にする。
+func TestBulkCustomFieldValues(t *testing.T) {
+	values := bulkCustomFieldValues(`{"id":101,"customFields":[
+		{"id":31,"fieldTypeId":1,"value":"取引先 A"},
+		{"id":34,"fieldTypeId":5,"value":{"id":341,"name":"高"}},
+		{"id":35,"fieldTypeId":6,"value":[{"id":351,"name":"UI"},{"id":353,"name":"DB"}]}
+	]}`)
+	want := map[int64]string{31: "取引先 A", 34: "高", 35: "UI, DB"}
+	if len(values) != len(want) {
+		t.Fatalf("カスタム属性 = %+v, want %+v", values, want)
+	}
+	for id, w := range want {
+		if values[id] != w {
+			t.Errorf("定義 %d = %q, want %q", id, values[id], w)
+		}
+	}
+	if got := bulkCustomFieldValues(""); len(got) != 0 {
+		t.Errorf("生 JSON が無い課題 = %+v, want 空", got)
+	}
+	if got := bulkCustomFieldValues("{壊れた JSON"); len(got) != 0 {
+		t.Errorf("壊れた生 JSON = %+v, want 空", got)
+	}
+}

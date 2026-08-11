@@ -14,6 +14,10 @@ package export
 // 「マスタ」(選択候補)の 3 枚。名前列にはマスタシートを参照するデータ入力規則
 // (ドロップダウン)を設定し、生の ID を知らなくても編集できるようにする。
 //
+// カスタム属性(CF3)は固定 13 列の後ろへ「属性:{定義名}」列を定義順で追加する
+// (BulkCustomColumnPrefix)。単一リスト・ラジオはマスタシートの選択肢を参照する
+// ドロップダウンにし、複数リスト・チェックボックスはカンマ区切りで記入してもらう。
+//
 // ヘッダ名と列順は取り込み側(internal/bulk のパーサ)が列を解決するための契約であり、
 // 変更すると取り込みが壊れる。bulk_template_test.go で完全一致を固定している。
 //
@@ -30,6 +34,9 @@ import (
 	"strings"
 
 	"github.com/xuri/excelize/v2"
+
+	"backlog-assistant/internal/customfield"
+	"backlog-assistant/internal/store"
 )
 
 // シート名。
@@ -60,6 +67,19 @@ const ClearMarker = "#CLEAR#"
 // 検証が働かなくなる。
 const BulkProjectIDLabel = "プロジェクトID"
 
+// BulkCustomColumnPrefix はカスタム属性列のヘッダ接頭辞(CF3)。
+//
+// カスタム属性は定義 ID ではなく定義名で列を解決する(利用者が Excel 上で
+// 見て分かる必要があるため)。固定 13 列と衝突しないよう接頭辞を付ける。
+// この文字列は取り込み側(internal/bulk のパーサ)との契約であり、
+// 変更すると記入済み Excel の取り込みが壊れる。
+const BulkCustomColumnPrefix = "属性:"
+
+// BulkCustomHeader はカスタム属性のヘッダ「属性:{定義名}」を作る。
+func BulkCustomHeader(name string) string {
+	return BulkCustomColumnPrefix + name
+}
+
 // BulkTemplateRow はテンプレート 1 行分のデータ。
 //
 // export パッケージは表示・整形のみを責務とするため、store へ依存せず独自に定義する。
@@ -88,6 +108,11 @@ type BulkTemplateRow struct {
 	Description string
 	// BaseUpdated は競合検知の基準となる更新日時(取得時の生値)。整形せずそのまま出力する。
 	BaseUpdated string
+	// CustomFields はカスタム属性の現在値(定義 ID → 表示文字列)。
+	// 値は customfield.FormatValue で整形済みのものを渡す(export は
+	// 表示・整形のみを責務とし、生 JSON の解釈は呼び出し側で行う)。
+	// 定義に無い ID は無視され、値が無い定義は空セルになる。
+	CustomFields map[int64]string
 }
 
 // NamedRef は ID と表示名の組(種別・状態・優先度・担当者の候補 1 件)。
@@ -106,6 +131,10 @@ type BulkTemplateMasters struct {
 	Statuses   []NamedRef
 	Priorities []NamedRef
 	Assignees  []NamedRef
+	// CustomFields はプロジェクトのカスタム属性定義(CF3)。
+	// 定義順にデータシートの末尾へ「属性:{定義名}」列を追加し、
+	// 単一リスト・ラジオはマスタシートの選択肢を参照するドロップダウンにする。
+	CustomFields []customfield.Def
 }
 
 // AssigneeLabel は担当者セルの表記「表示名 (ID)」を作る。
@@ -148,9 +177,10 @@ type bulkColumn struct {
 	width  float64                       // 列幅(文字数目安)
 }
 
-// bulkColumns は一括更新テンプレートの列定義(この並びがそのまま列順になる)。
+// bulkFixedColumns は一括更新テンプレートの固定列定義(この並びがそのまま列順になる)。
 // ヘッダ名・順序は取り込み側との契約のため、変更時は取り込みパーサも同時に更新する。
-var bulkColumns = []bulkColumn{
+// カスタム属性列はこの後ろへ定義順で追加する(bulkColumnsOf)。
+var bulkFixedColumns = []bulkColumn{
 	{"issueKey", func(r *BulkTemplateRow) string { return r.IssueKey }, 14},
 	{"件名", func(r *BulkTemplateRow) string { return r.Summary }, 48},
 	{"種別ID", func(r *BulkTemplateRow) string { return formatID(r.IssueTypeID) }, 10},
@@ -166,8 +196,50 @@ var bulkColumns = []bulkColumn{
 	{BaseUpdatedHeader, func(r *BulkTemplateRow) string { return r.BaseUpdated }, 22},
 }
 
+// bulkColumnsOf は固定列 + カスタム属性列(定義順)の列定義を返す。
+func bulkColumnsOf(defs []customfield.Def) []bulkColumn {
+	cols := make([]bulkColumn, 0, len(bulkFixedColumns)+len(defs))
+	cols = append(cols, bulkFixedColumns...)
+	for _, def := range defs {
+		cols = append(cols, customBulkColumn(def))
+	}
+	return cols
+}
+
+// customBulkColumn はカスタム属性の定義から出力列を作る。
+// 列幅は課題出力(issue.go)と同じ基準で、数値・日付だけ狭くする。
+func customBulkColumn(def customfield.Def) bulkColumn {
+	width := float64(customColumnWidthWide)
+	switch def.TypeID {
+	case customfield.TypeNumeric, customfield.TypeDate:
+		width = customColumnWidthNarrow
+	}
+	id := def.ID
+	return bulkColumn{
+		header: BulkCustomHeader(def.Name),
+		value:  func(r *BulkTemplateRow) string { return r.CustomFields[id] },
+		width:  width,
+	}
+}
+
+// validateBulkCustomFields はカスタム属性の定義名を検証する。
+//
+// 名前が空・重複していると取り込み側でどの定義か決められない。黙って 1 つだけ
+// 出力すると、気付かないまま別の属性を更新しかねないため出力自体をエラーにする
+// (判定は取り込み側と共通の customfield.DefsByName に置いている)。
+// 正規化も取り込み側(internal/bulk の normalizeHeader)と揃える。
+func validateBulkCustomFields(defs []customfield.Def) error {
+	_, err := customfield.DefsByName(defs, normalizeCustomFieldName)
+	return err
+}
+
+// normalizeCustomFieldName は定義名の比較用の正規化(取り込み側と同じ規則)。
+func normalizeCustomFieldName(s string) string {
+	return store.NormalizeSearchText(strings.TrimSpace(s))
+}
+
 // bulkMasterColumn は「マスタ」シートの 1 列。
-// target はドロップダウンを設定するデータシートの列ヘッダ(bulkColumns の header)。
+// target はドロップダウンを設定するデータシートの列ヘッダ(bulkColumn の header)。
 type bulkMasterColumn struct {
 	header string
 	target string
@@ -175,12 +247,47 @@ type bulkMasterColumn struct {
 	values func(BulkTemplateMasters) []string
 }
 
-// bulkMasterColumns はマスタシートの列定義(この並びがそのまま列順になる)。
-var bulkMasterColumns = []bulkMasterColumn{
+// bulkFixedMasterColumns はマスタシートの固定列定義(この並びがそのまま列順になる)。
+var bulkFixedMasterColumns = []bulkMasterColumn{
 	{"種別", "種別名", 20, func(m BulkTemplateMasters) []string { return refNames(m.IssueTypes) }},
 	{"状態", "状態名", 16, func(m BulkTemplateMasters) []string { return refNames(m.Statuses) }},
 	{"優先度", "優先度名", 12, func(m BulkTemplateMasters) []string { return refNames(m.Priorities) }},
 	{"担当者", "担当者名", 28, func(m BulkTemplateMasters) []string { return assigneeLabels(m.Assignees) }},
+}
+
+// bulkMasterColumnsOf は固定 4 列 + 単一選択のカスタム属性列を返す。
+//
+// 単一リスト・ラジオだけをドロップダウンにする。複数リスト・チェックボックスは
+// 1 セルへ複数の選択肢をカンマ区切りで書くため、選択肢 1 件しか選べない
+// ドロップダウンでは記入できない(記法は記入方法シートで案内する)。
+func bulkMasterColumnsOf(defs []customfield.Def) []bulkMasterColumn {
+	cols := make([]bulkMasterColumn, 0, len(bulkFixedMasterColumns)+len(defs))
+	cols = append(cols, bulkFixedMasterColumns...)
+	for _, def := range defs {
+		if def.TypeID != customfield.TypeSingleList && def.TypeID != customfield.TypeRadio {
+			continue
+		}
+		header := BulkCustomHeader(def.Name)
+		items := itemNames(def.Items)
+		cols = append(cols, bulkMasterColumn{
+			header: header,
+			target: header,
+			width:  customColumnWidthWide,
+			values: func(BulkTemplateMasters) []string { return items },
+		})
+	}
+	return cols
+}
+
+// itemNames はリスト系の選択肢名を並べる(名前が空の選択肢は除く)。
+func itemNames(items []customfield.Item) []string {
+	out := make([]string, 0, len(items))
+	for _, it := range items {
+		if it.Name != "" {
+			out = append(out, it.Name)
+		}
+	}
+	return out
 }
 
 // refNames は候補の表示名を並べる(種別・状態・優先度)。
@@ -207,8 +314,8 @@ func assigneeLabels(refs []NamedRef) []string {
 
 // bulkColumnNumber はデータシートの列番号(1 始まり)をヘッダ名から求める。
 // 見つからない場合は 0(ドロップダウンを設定しない)。
-func bulkColumnNumber(header string) int {
-	for i, c := range bulkColumns {
+func bulkColumnNumber(cols []bulkColumn, header string) int {
+	for i, c := range cols {
 		if c.header == header {
 			return i + 1
 		}
@@ -226,9 +333,11 @@ func formatID(id int64) string {
 
 // BulkTemplateHeaders はテンプレートのヘッダを列順に返す
 // (取り込み側が列を解決するための定義。呼び出し側が書き換えても内部に影響しない)。
-func BulkTemplateHeaders() []string {
-	out := make([]string, len(bulkColumns))
-	for i, c := range bulkColumns {
+// defs を渡すと固定列の後ろにカスタム属性列(属性:{定義名})が定義順で並ぶ。
+func BulkTemplateHeaders(defs []customfield.Def) []string {
+	cols := bulkColumnsOf(defs)
+	out := make([]string, len(cols))
+	for i, c := range cols {
 		out[i] = c.header
 	}
 	return out
@@ -246,6 +355,10 @@ var bulkGuideLines = [][2]string{
 	{BaseUpdatedHeader, BaseUpdatedHeader + " 列は編集しないでください。競合検知(取り込み後にリモートが更新されていないかの確認)に使用します。"},
 	{"新規行の必須項目", "件名と種別(種別名または種別ID のどちらか)が必須です(優先度は未入力なら取り込み時に指定する既定値を適用します)。"},
 	{"プロジェクト", "対象プロジェクトはテンプレート出力時に固定されます。行ごとにプロジェクトを変えることはできません。先頭の「" + BulkProjectIDLabel + "」行は編集・削除しないでください(取り込み時に選択したプロジェクトと照合します)。"},
+	{"カスタム属性の列", "「" + BulkCustomColumnPrefix + "定義名」という列がプロジェクトのカスタム属性です(固定列の後ろに並びます)。他の列と同じく、空欄 = 変更しない・" + ClearMarker + " = クリア(実機検証中の機能です)です。"},
+	{"カスタム属性の記法", "文字列・文章はそのまま、数値は数値、日付は yyyy-MM-dd 形式で入力します。単一リスト・ラジオは選択肢名をドロップダウンから選び、複数リスト・チェックボックスは選択肢名をカンマ区切り(例: UI, DB)で入力してください。"},
+	{"カスタム属性の注意", "選択肢に無い値(「その他」の直接入力)は現在未対応です。選択肢名にカンマを含む複数リスト・チェックボックスも、区切りと区別できないため取り込めません。カスタム属性は課題種別ごとに適用が決まっているため、その種別に適用されない属性へ記入するとエラーになります。新規追加行では、その課題種別に適用される必須のカスタム属性が入力必須です。また、文字列として「" + ClearMarker + "」という値そのものを設定する操作は、クリア指示と区別できないため Excel 経由では行えません(既にその値を持つセルは未編集なら変更されません)。"},
+	{"カスタム属性と空白", "取り込み時に各セルの前後の空白は取り除きます。そのため前後の空白だけを足す・削る編集は反映できません(値の前後に空白を残したい場合は Backlog の画面で編集してください)。"},
 	{"行の削除・並べ替え", "不要な行は行ごと削除してください。列の追加・削除・並べ替え、ヘッダ名の変更はしないでください。"},
 	{"実行にかかる時間", "1 件ずつ Backlog へ送信するため、1,000 件でおおよそ 8〜10 分かかります。"},
 }
@@ -257,6 +370,10 @@ var bulkGuideLines = [][2]string{
 // プロジェクト一致検証に使う。0 以下なら埋め込まない)。
 // masters は「マスタ」シートに載せる選択候補(空でも出力できる)。
 func ExportBulkTemplateToFile(path string, projectID int64, rows []BulkTemplateRow, masters BulkTemplateMasters) error {
+	// 列定義の検証はファイル生成前に済ませ、不正な定義で空ファイルを作らない
+	if err := validateBulkCustomFields(masters.CustomFields); err != nil {
+		return err
+	}
 	f, err := os.Create(path)
 	if err != nil {
 		return err
@@ -272,6 +389,9 @@ func ExportBulkTemplateToFile(path string, projectID int64, rows []BulkTemplateR
 // ExportBulkTemplate は一括更新テンプレートを xlsx として w に書き出す。
 // rows が空でも「記入方法」付きの空テンプレート(新規追加専用)として出力する。
 func ExportBulkTemplate(w io.Writer, projectID int64, rows []BulkTemplateRow, masters BulkTemplateMasters) error {
+	if err := validateBulkCustomFields(masters.CustomFields); err != nil {
+		return err
+	}
 	f := excelize.NewFile()
 	defer f.Close()
 
@@ -305,7 +425,7 @@ func writeBulkMasterSheet(f *excelize.File, masters BulkTemplateMasters) error {
 	if err != nil {
 		return err
 	}
-	for i, c := range bulkMasterColumns {
+	for i, c := range bulkMasterColumnsOf(masters.CustomFields) {
 		col, err := excelize.ColumnNumberToName(i + 1)
 		if err != nil {
 			return err
@@ -341,12 +461,13 @@ func addBulkDropDowns(f *excelize.File, masters BulkTemplateMasters, dataRows in
 	if dataRows+1 > lastRow {
 		lastRow = dataRows + 1
 	}
-	for i, c := range bulkMasterColumns {
+	cols := bulkColumnsOf(masters.CustomFields)
+	for i, c := range bulkMasterColumnsOf(masters.CustomFields) {
 		values := c.values(masters)
 		if len(values) == 0 {
 			continue
 		}
-		target := bulkColumnNumber(c.target)
+		target := bulkColumnNumber(cols, c.target)
 		if target == 0 {
 			continue
 		}
@@ -443,10 +564,11 @@ func writeBulkTemplateSheet(f *excelize.File, rows []BulkTemplateRow, masters Bu
 		return err
 	}
 
-	colCount := len(bulkColumns)
+	cols := bulkColumnsOf(masters.CustomFields)
+	colCount := len(cols)
 
 	// 列幅・固定行は最初の SetRow より前に設定する(StreamWriter の制約)。
-	for i, c := range bulkColumns {
+	for i, c := range cols {
 		if err := sw.SetColWidth(i+1, i+1, c.width); err != nil {
 			return err
 		}
@@ -472,7 +594,7 @@ func writeBulkTemplateSheet(f *excelize.File, rows []BulkTemplateRow, masters Bu
 
 	// 1 行目: ヘッダ(取り込み契約)。
 	header := make([]any, 0, colCount)
-	for _, c := range bulkColumns {
+	for _, c := range cols {
 		header = append(header, excelize.Cell{StyleID: headerStyle, Value: c.header})
 	}
 	if err := sw.SetRow("A1", header); err != nil {
@@ -483,7 +605,7 @@ func writeBulkTemplateSheet(f *excelize.File, rows []BulkTemplateRow, masters Bu
 	values := make([]any, colCount)
 	for n := range rows {
 		row := &rows[n]
-		for i, c := range bulkColumns {
+		for i, c := range cols {
 			values[i] = c.value(row)
 		}
 		cell, err := excelize.CoordinatesToCellName(1, n+2)

@@ -309,3 +309,55 @@ func TestFormatValue_ListWithoutNames(t *testing.T) {
 		t.Errorf("複数リスト = %q, want \"選択肢C\"", got)
 	}
 }
+
+// TestItemIDs はリスト系の値から選択肢 ID を取り出せることを確認する
+// (一括更新の差分判定・再送前突合で、表示名ではなく ID で比較するために使う)。
+func TestItemIDs(t *testing.T) {
+	values, err := ParseValues(`{"customFields":[
+		{"id":5,"fieldTypeId":5,"name":"単一リスト項目","value":{"id":51,"name":"選択肢A"}},
+		{"id":6,"fieldTypeId":6,"name":"複数リスト項目","value":[{"id":61,"name":"A"},{"id":62,"name":"B"}]},
+		{"id":1,"fieldTypeId":1,"name":"文字列項目","value":"文字"},
+		{"id":7,"fieldTypeId":6,"name":"値なし","value":null},
+		{"id":8,"fieldTypeId":6,"name":"ID 欠落","value":[{"name":"名前だけ"}]}
+	]}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wants := [][]int64{{51}, {61, 62}, nil, nil, {}}
+	for i, want := range wants {
+		got := ItemIDs(values[i])
+		if len(got) != len(want) {
+			t.Errorf("ItemIDs(%s) = %v, want %v", values[i].Name, got, want)
+			continue
+		}
+		for j := range want {
+			if got[j] != want[j] {
+				t.Errorf("ItemIDs(%s)[%d] = %d, want %d", values[i].Name, j, got[j], want[j])
+			}
+		}
+	}
+}
+
+// TestDefsByName は定義名の索引作りと、名前が空・重複する定義の検知を確認する
+// (一括更新の列ヘッダは定義名で解決するため、曖昧な定義は受け付けない)。
+func TestDefsByName(t *testing.T) {
+	lower := func(s string) string { return strings.ToLower(strings.TrimSpace(s)) }
+
+	byName, err := DefsByName([]Def{
+		{ID: 31, Name: "顧客名"},
+		{ID: 32, Name: " Estimate "}, // 前後の空白・大文字小文字は正規化に従う
+	}, lower)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if byName["顧客名"].ID != 31 || byName["estimate"].ID != 32 {
+		t.Errorf("索引 = %+v", byName)
+	}
+
+	if _, err := DefsByName([]Def{{ID: 31, Name: "顧客名"}, {ID: 32, Name: "顧客名"}}, lower); err == nil {
+		t.Error("重複した定義名がエラーにならなかった")
+	}
+	if _, err := DefsByName([]Def{{ID: 31, Name: "  "}}, lower); err == nil {
+		t.Error("空の定義名がエラーにならなかった")
+	}
+}

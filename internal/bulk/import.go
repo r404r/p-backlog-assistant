@@ -14,6 +14,7 @@ import (
 
 	"github.com/xuri/excelize/v2"
 
+	"backlog-assistant/internal/customfield"
 	"backlog-assistant/internal/export"
 	"backlog-assistant/internal/store"
 )
@@ -88,7 +89,7 @@ func (im *Importer) Import(ctx context.Context, opts ImportOptions) (*ImportResu
 	if opts.ProjectID <= 0 {
 		return nil, errors.New("プロジェクトが指定されていません")
 	}
-	data, err := parseWorkbook(opts.FilePath)
+	data, err := parseWorkbook(opts.FilePath, opts.Master.CustomFields)
 	if err != nil {
 		return nil, err
 	}
@@ -296,6 +297,10 @@ type index struct {
 	userByID        map[int64]string
 	userByName      map[string][]int64
 	userByCode      map[string][]int64
+	// customDefs はカスタム属性の定義(定義順。列の並び・差分の並びに使う)。
+	customDefs []customfield.Def
+	// customItems は定義 ID → 選択肢索引(リスト系のみ意味を持つ)。
+	customItems map[int64]*customItems
 }
 
 func newIndex(master MasterData, users []store.UserRef) *index {
@@ -304,7 +309,12 @@ func newIndex(master MasterData, users []store.UserRef) *index {
 		priorityByID: map[int64]string{}, priorityByName: map[string][]int64{},
 		statusByID: map[int64]string{}, statusByName: map[string][]int64{},
 		userByID: map[int64]string{}, userByName: map[string][]int64{},
-		userByCode: map[string][]int64{},
+		userByCode:  map[string][]int64{},
+		customDefs:  master.CustomFields,
+		customItems: map[int64]*customItems{},
+	}
+	for _, def := range master.CustomFields {
+		idx.customItems[def.ID] = newCustomItems(def)
 	}
 	add := func(byID map[int64]string, byName map[string][]int64, id int64, name string) {
 		byID[id] = name
@@ -434,6 +444,9 @@ func (v *validator) planCreate(r rawRow) (*rowPlan, error) {
 	if desc := r.cell(colDescription); desc != "" {
 		plan.payload.Description = ptrString(desc)
 		plan.changes = append(plan.changes, fmt.Sprintf("詳細: %s", summarize(desc)))
+	}
+	if err := v.planCustomFieldsCreate(r, *issueTypeID, plan); err != nil {
+		return nil, err
 	}
 	plan.payload.Changes = plan.changes
 	return plan, nil
@@ -570,6 +583,10 @@ func (v *validator) planUpdate(ctx context.Context, r rawRow) (*rowPlan, error) 
 			plan.payload.Description = ptrString(desc)
 			plan.changes = append(plan.changes, change("詳細", summarize(cur.Description), summarize(desc)))
 		}
+	}
+	// カスタム属性(定義順。空欄 = 変更しない / #CLEAR# = クリア)
+	if err := v.planCustomFieldsUpdate(r, cur, plan); err != nil {
+		return nil, err
 	}
 
 	if len(plan.changes) == 0 {
@@ -782,21 +799,30 @@ var dueDateLayouts = []string{
 }
 
 // parseDueDate は期限を yyyy-MM-dd へ正規化する(API の送信書式)。
-// Excel が日付として保持しているセル(シリアル値)にも対応する。
 func parseDueDate(v string) (string, error) {
+	normalized, ok := parseDateValue(v)
+	if !ok {
+		return "", fmt.Errorf("期限の書式が不正です(%q)。yyyy-MM-dd 形式で入力してください", strings.TrimSpace(v))
+	}
+	return normalized, nil
+}
+
+// parseDateValue は日付セルを yyyy-MM-dd へ正規化する(期限・日付型のカスタム属性で共用)。
+// Excel が日付として保持しているセル(シリアル値)にも対応する。
+func parseDateValue(v string) (string, bool) {
 	v = strings.TrimSpace(v)
 	for _, layout := range dueDateLayouts {
 		if t, err := time.Parse(layout, v); err == nil {
-			return t.Format("2006-01-02"), nil
+			return t.Format("2006-01-02"), true
 		}
 	}
 	// Excel のシリアル値(日付書式が「標準」のまま入力された場合)
 	if serial, err := strconv.ParseFloat(v, 64); err == nil && serial > 0 && serial < 100000 {
 		if t, terr := excelize.ExcelDateToTime(serial, false); terr == nil {
-			return t.Format("2006-01-02"), nil
+			return t.Format("2006-01-02"), true
 		}
 	}
-	return "", fmt.Errorf("期限の書式が不正です(%q)。yyyy-MM-dd 形式で入力してください", v)
+	return "", false
 }
 
 // normalizeStoredDate はローカル DB の期限(ISO8601 または日付)を yyyy-MM-dd にする。

@@ -10,6 +10,8 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+
+	"backlog-assistant/internal/customfield"
 )
 
 // captured は書き込み系リクエストの記録。
@@ -182,6 +184,79 @@ func TestUpdateIssue_ClearsFields(t *testing.T) {
 		}
 		if len(v) != 1 || v[0] != "" {
 			t.Errorf("form[%s] = %v, want 空文字", key, v)
+		}
+	}
+}
+
+// TestWriteIssue_CustomFields はカスタム属性が customField_{定義ID} として
+// 送信されることを確認する(複数選択は同名パラメータの繰り返し)。
+func TestWriteIssue_CustomFields(t *testing.T) {
+	values := []customfield.InputValue{
+		{ID: 31, TypeID: customfield.TypeText, Text: "取引先 A"},
+		{ID: 32, TypeID: customfield.TypeNumeric, Text: "12.5"},
+		{ID: 33, TypeID: customfield.TypeDate, Text: "2026-05-06"},
+		{ID: 34, TypeID: customfield.TypeSingleList, ItemIDs: []int64{342}},
+		{ID: 35, TypeID: customfield.TypeMultipleList, ItemIDs: []int64{351, 353}},
+	}
+	want := map[string][]string{
+		"customField_31": {"取引先 A"},
+		"customField_32": {"12.5"},
+		"customField_33": {"2026-05-06"},
+		"customField_34": {"342"},
+		"customField_35": {"351", "353"},
+	}
+
+	t.Run("追加", func(t *testing.T) {
+		srv, got := newCapturingServer(t, http.StatusCreated, sampleIssueJSON)
+		if _, err := newFakeClient(srv.URL).CreateIssue(context.Background(), IssueCreate{
+			ProjectID: 1, Summary: "件名", IssueTypeID: 11, PriorityID: 3,
+			CustomFields: values,
+		}); err != nil {
+			t.Fatal(err)
+		}
+		assertFormValues(t, got, want)
+	})
+
+	t.Run("更新", func(t *testing.T) {
+		srv, got := newCapturingServer(t, http.StatusOK, sampleIssueJSON)
+		if _, err := newFakeClient(srv.URL).UpdateIssue(context.Background(), "EXA-1", IssueUpdate{
+			CustomFields: values,
+		}); err != nil {
+			t.Fatal(err)
+		}
+		assertFormValues(t, got, want)
+	})
+
+	t.Run("クリアは空文字", func(t *testing.T) {
+		srv, got := newCapturingServer(t, http.StatusOK, sampleIssueJSON)
+		if _, err := newFakeClient(srv.URL).UpdateIssue(context.Background(), "EXA-1", IssueUpdate{
+			CustomFields: []customfield.InputValue{
+				{ID: 31, TypeID: customfield.TypeText, Clear: true},
+				{ID: 35, TypeID: customfield.TypeMultipleList, Clear: true},
+			},
+		}); err != nil {
+			t.Fatal(err)
+		}
+		assertFormValues(t, got, map[string][]string{
+			"customField_31": {""},
+			"customField_35": {""},
+		})
+	})
+}
+
+// assertFormValues は送信フォームの値を検証する。
+func assertFormValues(t *testing.T, got *captured, want map[string][]string) {
+	t.Helper()
+	for key, values := range want {
+		gotValues := got.form[key]
+		if len(gotValues) != len(values) {
+			t.Errorf("form[%s] = %v, want %v", key, gotValues, values)
+			continue
+		}
+		for i, v := range values {
+			if gotValues[i] != v {
+				t.Errorf("form[%s][%d] = %q, want %q", key, i, gotValues[i], v)
+			}
 		}
 	}
 }

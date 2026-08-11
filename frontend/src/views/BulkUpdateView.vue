@@ -485,6 +485,10 @@ onUnmounted(() => {
         Excel の記入ルール(空欄 = 変更しない、クリアは #CLEAR#、issueKey 空欄 = 新規追加)は、
         テンプレートの「記入方法」シートに記載しています。
       </p>
+      <p class="hint">
+        カスタム属性は「属性:定義名」列に記入します(日付は yyyy-MM-dd、複数リスト・チェックボックスは選択肢名をカンマ区切り)。
+        選択肢に無い値(「その他」の直接入力)は現在未対応です。
+      </p>
     </section>
 
     <p v-if="globalError" class="error">{{ globalError }}</p>

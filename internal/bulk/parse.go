@@ -8,6 +8,7 @@ import (
 
 	"github.com/xuri/excelize/v2"
 
+	"backlog-assistant/internal/customfield"
 	"backlog-assistant/internal/export"
 	"backlog-assistant/internal/store"
 )
@@ -62,6 +63,16 @@ var nameColumnLabels = map[string]string{
 	colAssigneeName:  "担当者名",
 }
 
+// customHeaderPrefix は正規化済みのカスタム属性ヘッダ接頭辞
+// (ヘッダ側も normalizeHeader で正規化してから比較する)。
+var customHeaderPrefix = normalizeHeader(export.BulkCustomColumnPrefix)
+
+// customColKey はカスタム属性の列キー(定義 ID から作る内部表現)。
+// 固定列のキー(issueKey 等)と衝突しないよう接頭辞を付ける。
+func customColKey(defID int64) string {
+	return "customField:" + strconv.FormatInt(defID, 10)
+}
+
 // rawRow は Excel の 1 行(列キー → トリム済みセル値)。
 type rawRow struct {
 	rowNo int // Excel の行番号(ヘッダが 1 行目、データは 2 行目から)
@@ -93,7 +104,8 @@ func normalizeHeader(s string) string {
 //
 // シートは「issueKey 列を持つ最初のシート」を対象にする
 // (抽出 Excel の「情報」シートのような付随シートを自然に読み飛ばせる)。
-func parseWorkbook(path string) (*sheetData, error) {
+// defs はプロジェクトのカスタム属性定義。「属性:{定義名}」列の解決に使う。
+func parseWorkbook(path string, defs []customfield.Def) (*sheetData, error) {
 	f, err := excelize.OpenFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("Excel ファイルを開けません: %w", err)
@@ -106,6 +118,13 @@ func parseWorkbook(path string) (*sheetData, error) {
 	if err != nil {
 		return nil, err
 	}
+	// カスタム属性列は定義名で解決するため、名前の索引を先に作る
+	// (定義名が空・重複しているプロジェクトはここで取り込みを止める)。
+	// 正規化はヘッダ照合と同じ normalizeHeader を使う。
+	customByName, err := customfield.DefsByName(defs, normalizeHeader)
+	if err != nil {
+		return nil, err
+	}
 
 	for _, name := range f.GetSheetList() {
 		rows, err := f.GetRows(name)
@@ -115,7 +134,7 @@ func parseWorkbook(path string) (*sheetData, error) {
 		if len(rows) == 0 {
 			continue
 		}
-		colOf, columns, err := mapHeaders(rows[0])
+		colOf, columns, err := mapHeaders(rows[0], customByName)
 		if err != nil {
 			return nil, err
 		}
@@ -186,13 +205,20 @@ func readTemplateProjectID(f *excelize.File) (int64, error) {
 
 // mapHeaders はヘッダ行から「列インデックス → 列キー」と存在する列の集合を作る。
 // 同じ列キーに対応するヘッダが複数あるファイルは、どちらを使うか決められないためエラーにする。
-func mapHeaders(header []string) (map[int]string, map[string]bool, error) {
+//
+// 「属性:{定義名}」のヘッダはカスタム属性列として定義名で解決する。
+// 定義に無い名前はエラーにする(黙って無視すると、記入した内容が反映されない
+// まま実行され、利用者は更新されたと誤解する)。
+func mapHeaders(header []string, customByName map[string]customfield.Def) (map[int]string, map[string]bool, error) {
 	colOf := map[int]string{}
 	columns := map[string]bool{}
 	seen := map[string]string{} // 列キー → 最初に見つかったヘッダ名
 	for i, h := range header {
-		key, ok := headerAliases[normalizeHeader(h)]
-		if !ok {
+		key, err := headerColumnKey(h, customByName)
+		if err != nil {
+			return nil, nil, err
+		}
+		if key == "" {
 			continue // 未知の列は無視する(作成日時 等)
 		}
 		if first, dup := seen[key]; dup {
@@ -203,4 +229,18 @@ func mapHeaders(header []string) (map[int]string, map[string]bool, error) {
 		columns[key] = true
 	}
 	return colOf, columns, nil
+}
+
+// headerColumnKey はヘッダ 1 つを列キーへ解決する(該当しない列は空文字)。
+func headerColumnKey(header string, customByName map[string]customfield.Def) (string, error) {
+	norm := normalizeHeader(header)
+	if name, ok := strings.CutPrefix(norm, customHeaderPrefix); ok {
+		def, found := customByName[strings.TrimSpace(name)]
+		if !found {
+			return "", fmt.Errorf("カスタム属性「%s」の定義が見つかりません(テンプレートを出力し直してください)",
+				strings.TrimPrefix(strings.TrimSpace(header), export.BulkCustomColumnPrefix))
+		}
+		return customColKey(def.ID), nil
+	}
+	return headerAliases[norm], nil
 }

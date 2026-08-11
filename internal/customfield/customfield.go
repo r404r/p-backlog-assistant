@@ -6,6 +6,10 @@
 // 表示用の文字列化(FormatValue)をこのパッケージに集約し、
 // Excel 出力・画面表示・一括更新が同じ規約を共有できるようにする。
 //
+// 書き込み(課題の追加・更新)で送る値は InputValue として表す。
+// 表示用の Value と分けることで、取り込み時に解決を終えた値だけを
+// 永続化・再送できるようにする。
+//
 // 値は表示・出力のためのものであり、入力の実在性判定には使わない。
 // そのため、個々の値の形の揺れ(null・想定外の型)は極力エラーにせず空文字へ
 // 縮退するが、customFields 自体が配列でない等の構造の破損は、出力が黙って
@@ -100,6 +104,88 @@ type Value struct {
 	// 複数リスト / チェックボックスでは選択肢と併存し得るため表示では末尾に連結し、
 	// 単一リスト / ラジオでは選択肢名が得られない場合のフォールバックとして使う。
 	OtherValue string `json:"otherValue"`
+}
+
+// DefsByName は「正規化した定義名 → 定義」の索引を作る。
+//
+// 一括更新の列ヘッダ(属性:{定義名})は定義名で解決するため、名前が空・重複した
+// プロジェクトではどの定義への入力か決められない。黙って片方を採用すると
+// 意図しない属性を更新しかねないため、テンプレート出力・取り込みの双方で
+// エラーにする(この関数がその判定を一箇所に集める)。
+//
+// normalize には呼び出し側が列ヘッダの照合に使うのと同じ正規化を渡すこと
+// (出力時に通った名前が取り込み時に弾かれる、という食い違いを防ぐ)。
+func DefsByName(defs []Def, normalize func(string) string) (map[string]Def, error) {
+	out := make(map[string]Def, len(defs))
+	for _, def := range defs {
+		key := normalize(def.Name)
+		if key == "" {
+			return nil, fmt.Errorf("カスタム属性の定義名が空です(定義 ID %d)", def.ID)
+		}
+		if first, dup := out[key]; dup {
+			return nil, fmt.Errorf("カスタム属性の定義名が重複しています(%q と %q)。Backlog 側で名前を変更してください",
+				first.Name, def.Name)
+		}
+		out[key] = def
+	}
+	return out, nil
+}
+
+// InputValue は書き込み(課題の追加・更新)で送るカスタム属性の値。
+//
+// 表示用の Value と違い、送信に必要な形へ解決済みの値だけを持つ:
+// リスト系は選択肢 ID、それ以外は API へ送る文字列表現(数値は最短表現、
+// 日付は yyyy-MM-dd)。取り込み時に解決を終えておくことで、
+// 再開時も同じ内容を再送できる(bulk の Payload に JSON で永続化する)。
+//
+// JSON タグは job_rows.payload の保存形式でもあるため、変更すると
+// 保存済みジョブを再開できなくなる(省略可の項目は omitempty で
+// 旧ジョブとの後方互換を保つ)。
+type InputValue struct {
+	ID     int64 `json:"id"`
+	TypeID int   `json:"typeId"`
+	// Text は文字列・文章・数値・日付の送信値(リスト系では空)。
+	Text string `json:"text,omitempty"`
+	// ItemIDs はリスト系で選択された選択肢 ID(定義順に正規化して持つ)。
+	ItemIDs []int64 `json:"itemIds,omitempty"`
+	// Clear は値のクリア(#CLEAR#)。真のとき Text / ItemIDs は使わない。
+	Clear bool `json:"clear,omitempty"`
+}
+
+// ItemIDs はリスト系の値から選択肢 ID を取り出す(選択が無ければ空)。
+//
+// FormatValue が表示名を返すのに対し、こちらは同一性の判定
+// (再送前突合での送信内容との突き合わせ)に使う。
+// 名前は変更されうるが ID は変わらないため、比較には ID を使う。
+func ItemIDs(v Value) []int64 {
+	switch t := v.Value.(type) {
+	case map[string]any:
+		if id, ok := itemID(t); ok {
+			return []int64{id}
+		}
+	case []any:
+		out := make([]int64, 0, len(t))
+		for _, e := range t {
+			m, ok := e.(map[string]any)
+			if !ok {
+				continue
+			}
+			if id, ok := itemID(m); ok {
+				out = append(out, id)
+			}
+		}
+		return out
+	}
+	return nil
+}
+
+// itemID は {id, name} オブジェクトの id を返す(JSON の数値は float64)。
+func itemID(m map[string]any) (int64, bool) {
+	f, ok := m["id"].(float64)
+	if !ok {
+		return 0, false
+	}
+	return int64(f), true
 }
 
 // ParseValues は課題 1 件の生 JSON からカスタム属性の値を取り出す。

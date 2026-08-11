@@ -10,6 +10,8 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+
+	"backlog-assistant/internal/customfield"
 )
 
 // 一括更新・追加(設計書 5 節)で使う書き込み API。
@@ -113,6 +115,8 @@ type IssueCreate struct {
 	Description *string // nil = 送信しない
 	AssigneeID  *int64  // nil = 送信しない
 	DueDate     *string // nil = 送信しない(yyyy-MM-dd)
+	// CustomFields は customField_{定義ID} として送るカスタム属性(空なら送信しない)。
+	CustomFields []customfield.InputValue
 }
 
 // IssueUpdate は課題更新(PATCH /api/v2/issues/:issueIdOrKey)のパラメータ。
@@ -132,6 +136,8 @@ type IssueUpdate struct {
 	StatusID    *int64 // 更新のみ(新規追加では指定できない)
 	AssigneeID  *int64 // 0 = クリア(未割当にする)
 	DueDate     *string
+	// CustomFields は変更するカスタム属性だけを並べる(載っていない属性は変更しない)。
+	CustomFields []customfield.InputValue
 }
 
 // values は更新パラメータをフォーム値へ変換する。
@@ -166,7 +172,34 @@ func (u IssueUpdate) values() url.Values {
 		// 要実機確認(中 5)。検証されるまで #CLEAR#(期限)の結果は保証されない。
 		v.Set("dueDate", *u.DueDate) // "" でクリア
 	}
+	addCustomFields(v, u.CustomFields)
 	return v
+}
+
+// addCustomFields はカスタム属性を customField_{定義ID} パラメータへ展開する。
+//
+// 型ごとの送信規約:
+//   - 文字列 / 文章 / 数値 / 日付 …… 解決済みの文字列(数値は最短表現、日付は yyyy-MM-dd)
+//   - リスト系 ……………………………… 選択肢 ID。複数選択は同名パラメータを繰り返す
+//   - クリア ……………………………… 空文字
+//
+// 空文字によるクリアは assigneeId・dueDate と同じく公式仕様に明記が無いため
+// 要実機確認(中 5)。検証されるまで #CLEAR#(カスタム属性)の結果は保証されない。
+// 「その他」の直接入力(customField_{id}_otherValue)は未対応のため送らない。
+func addCustomFields(v url.Values, fields []customfield.InputValue) {
+	for _, f := range fields {
+		key := "customField_" + strconv.FormatInt(f.ID, 10)
+		switch {
+		case f.Clear:
+			v.Set(key, "")
+		case len(f.ItemIDs) > 0:
+			for _, id := range f.ItemIDs {
+				v.Add(key, strconv.FormatInt(id, 10))
+			}
+		default:
+			v.Set(key, f.Text)
+		}
+	}
 }
 
 // CreateIssue は課題を 1 件追加する(POST /api/v2/issues、form encoding)。
@@ -197,6 +230,7 @@ func (c *Client) CreateIssue(ctx context.Context, in IssueCreate) (*Issue, error
 	if in.DueDate != nil {
 		v.Set("dueDate", *in.DueDate)
 	}
+	addCustomFields(v, in.CustomFields)
 	body, err := c.rawForm(ctx, http.MethodPost, "/api/v2/issues", v)
 	if err != nil {
 		return nil, err

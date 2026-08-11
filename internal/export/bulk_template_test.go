@@ -8,6 +8,8 @@ import (
 	"testing"
 
 	"github.com/xuri/excelize/v2"
+
+	"backlog-assistant/internal/customfield"
 )
 
 // wantBulkHeaders は一括更新テンプレートのヘッダ(固定順)。
@@ -241,8 +243,8 @@ func TestExportBulkTemplate_Headers(t *testing.T) {
 	}
 
 	// 公開しているヘッダ定義も同じ並びであること(取り込み側が参照する)
-	if !equalStrings(BulkTemplateHeaders(), wantBulkHeaders) {
-		t.Errorf("BulkTemplateHeaders() = %v, want %v", BulkTemplateHeaders(), wantBulkHeaders)
+	if !equalStrings(BulkTemplateHeaders(nil), wantBulkHeaders) {
+		t.Errorf("BulkTemplateHeaders() = %v, want %v", BulkTemplateHeaders(nil), wantBulkHeaders)
 	}
 	// base_updated 列名は既存の抽出出力と共通の定数を使う
 	if wantBulkHeaders[len(wantBulkHeaders)-1] != BaseUpdatedHeader {
@@ -251,9 +253,9 @@ func TestExportBulkTemplate_Headers(t *testing.T) {
 }
 
 func TestBulkTemplateHeadersIsCopy(t *testing.T) {
-	a := BulkTemplateHeaders()
+	a := BulkTemplateHeaders(nil)
 	a[0] = "破壊"
-	if BulkTemplateHeaders()[0] == "破壊" {
+	if BulkTemplateHeaders(nil)[0] == "破壊" {
 		t.Errorf("BulkTemplateHeaders が内部スライスを共有している")
 	}
 }
@@ -473,5 +475,213 @@ func TestExportBulkTemplateToFile_InvalidPath(t *testing.T) {
 	// ディレクトリをパスに指定すると os.Create が失敗する
 	if err := ExportBulkTemplateToFile(dir, testTemplateProjectID, sampleBulkRows(), sampleBulkMasters()); err == nil {
 		t.Fatal("ディレクトリへの書き出しが成功してしまった")
+	}
+}
+
+// --- カスタム属性(CF3)---------------------------------------------------
+
+// sampleBulkCustomFields はテスト用のカスタム属性定義(実データではない)。
+// 型ごとの扱い(ドロップダウンの有無・列幅・プリフィル)を網羅する。
+func sampleBulkCustomFields() []customfield.Def {
+	return []customfield.Def{
+		{ID: 31, TypeID: customfield.TypeText, Name: "顧客名"},
+		{
+			ID: 32, TypeID: customfield.TypeSingleList, Name: "重要度",
+			Items: []customfield.Item{{ID: 321, Name: "高"}, {ID: 322, Name: "低"}},
+		},
+		{
+			ID: 33, TypeID: customfield.TypeMultipleList, Name: "タグ",
+			Items: []customfield.Item{{ID: 331, Name: "UI"}, {ID: 332, Name: "API"}, {ID: 333, Name: "DB"}},
+		},
+		{ID: 34, TypeID: customfield.TypeDate, Name: "開始日"},
+	}
+}
+
+// sampleBulkMastersWithCustom はカスタム属性付きの選択候補。
+func sampleBulkMastersWithCustom() BulkTemplateMasters {
+	m := sampleBulkMasters()
+	m.CustomFields = sampleBulkCustomFields()
+	return m
+}
+
+// wantBulkCustomHeaders はカスタム属性列のヘッダ(固定 13 列の後ろに定義順で並ぶ)。
+var wantBulkCustomHeaders = []string{"属性:顧客名", "属性:重要度", "属性:タグ", "属性:開始日"}
+
+// TestExportBulkTemplate_CustomFieldHeaders は固定列の後ろに定義順で
+// 「属性:{定義名}」列が並ぶことを確認する(取り込み契約)。
+func TestExportBulkTemplate_CustomFieldHeaders(t *testing.T) {
+	masters := sampleBulkMastersWithCustom()
+	path := exportBulkToTempFileWith(t, sampleBulkRows(), masters)
+	f := openExported(t, path)
+
+	rows, err := f.GetRows(SheetBulkTemplate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := append(append([]string{}, wantBulkHeaders...), wantBulkCustomHeaders...)
+	if !equalStrings(rows[0], want) {
+		t.Fatalf("ヘッダ = %v, want %v", rows[0], want)
+	}
+	if !equalStrings(BulkTemplateHeaders(masters.CustomFields), want) {
+		t.Errorf("BulkTemplateHeaders = %v, want %v", BulkTemplateHeaders(masters.CustomFields), want)
+	}
+	// 接頭辞は取り込み側との契約
+	if BulkCustomColumnPrefix != "属性:" {
+		t.Errorf("BulkCustomColumnPrefix = %q", BulkCustomColumnPrefix)
+	}
+	if got := BulkCustomHeader("顧客名"); got != "属性:顧客名" {
+		t.Errorf("BulkCustomHeader = %q", got)
+	}
+	// オートフィルタ・列幅も 17 列(A:Q)に広がる
+	if got := autoFilterRef(t, path); got != "A1:Q1" {
+		t.Errorf("オートフィルタ範囲 = %q, want \"A1:Q1\"", got)
+	}
+}
+
+// TestExportBulkTemplate_CustomFieldValues は既存課題行に現在値を
+// プリフィルすることを確認する(利用者が現在値を見ながら編集できるようにする)。
+func TestExportBulkTemplate_CustomFieldValues(t *testing.T) {
+	rows := sampleBulkRows()
+	rows[0].CustomFields = map[int64]string{
+		31: "取引先 A",
+		32: "高",
+		33: "UI, DB",
+		34: "2026-05-06",
+	}
+	path := exportBulkToTempFileWith(t, rows, sampleBulkMastersWithCustom())
+	f := openExported(t, path)
+
+	got, err := f.GetRows(SheetBulkTemplate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"取引先 A", "高", "UI, DB", "2026-05-06"}
+	if !equalStrings(got[1][len(wantBulkHeaders):], want) {
+		t.Errorf("2 行目のカスタム属性 = %v, want %v", got[1][len(wantBulkHeaders):], want)
+	}
+	// 値が無い行は空セル(空欄 = 変更しない)
+	if len(got[2]) > len(wantBulkHeaders) {
+		for _, v := range got[2][len(wantBulkHeaders):] {
+			if v != "" {
+				t.Errorf("3 行目のカスタム属性に値が入った: %v", got[2])
+			}
+		}
+	}
+}
+
+// TestExportBulkTemplate_CustomFieldMasterAndDropDowns は
+// 単一リスト・ラジオにだけ選択肢のドロップダウンを設定することを確認する
+// (複数リスト・チェックボックスはカンマ区切りで複数選ぶためドロップダウンにできない)。
+func TestExportBulkTemplate_CustomFieldMasterAndDropDowns(t *testing.T) {
+	masters := sampleBulkMastersWithCustom()
+	// ラジオも単一選択なのでドロップダウンの対象
+	masters.CustomFields = append(masters.CustomFields, customfield.Def{
+		ID: 35, TypeID: customfield.TypeRadio, Name: "区分",
+		Items: []customfield.Item{{ID: 351, Name: "社内"}, {ID: 352, Name: "社外"}},
+	})
+	path := exportBulkToTempFileWith(t, sampleBulkRows(), masters)
+	f := openExported(t, path)
+
+	// マスタシート: 固定 4 列の後ろに単一選択のカスタム属性が並ぶ
+	rows, err := f.GetRows(SheetBulkMaster)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantHeader := []string{"種別", "状態", "優先度", "担当者", "属性:重要度", "属性:区分"}
+	if !equalStrings(rows[0], wantHeader) {
+		t.Fatalf("マスタ見出し = %v, want %v", rows[0], wantHeader)
+	}
+	wantCols := map[string][]string{
+		"E": {"高", "低"},
+		"F": {"社内", "社外"},
+	}
+	for col, values := range wantCols {
+		for i, want := range values {
+			cell := col + strconv.Itoa(i+2)
+			got, err := f.GetCellValue(SheetBulkMaster, cell)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != want {
+				t.Errorf("マスタ %s = %q, want %q", cell, got, want)
+			}
+		}
+	}
+
+	// データシート: 属性:重要度 = O 列 / 属性:区分 = R 列(属性:タグ・属性:開始日には設定しない)
+	dvs, err := f.GetDataValidations(SheetBulkTemplate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]string{}
+	for _, dv := range dvs {
+		got[dv.Sqref] = dv.Formula1
+	}
+	wants := map[string]string{
+		"O2:O1001": "'" + SheetBulkMaster + "'!$E$2:$E$3",
+		"R2:R1001": "'" + SheetBulkMaster + "'!$F$2:$F$3",
+	}
+	for sqref, formula := range wants {
+		if got[sqref] != formula {
+			t.Errorf("%s の入力規則 = %q, want %q(%+v)", sqref, got[sqref], formula, got)
+		}
+	}
+	// 固定 4 列 + 単一選択 2 列 = 6 件(複数リスト・日付・文字列には設定しない)
+	if len(dvs) != 6 {
+		t.Errorf("データ入力規則の数 = %d, want 6(%+v)", len(dvs), got)
+	}
+}
+
+// TestExportBulkTemplate_RejectsDuplicateCustomFieldName は定義名が重複する
+// プロジェクトでテンプレートを出力しないことを確認する。
+// 列ヘッダは定義名で解決するため、重複したまま出力すると取り込み時に
+// どちらの定義か決められない。
+func TestExportBulkTemplate_RejectsDuplicateCustomFieldName(t *testing.T) {
+	masters := sampleBulkMasters()
+	masters.CustomFields = []customfield.Def{
+		{ID: 31, TypeID: customfield.TypeText, Name: "顧客名"},
+		{ID: 32, TypeID: customfield.TypeText, Name: "顧客名"},
+	}
+	path := filepath.Join(t.TempDir(), "bulk.xlsx")
+	err := ExportBulkTemplateToFile(path, testTemplateProjectID, sampleBulkRows(), masters)
+	if err == nil {
+		t.Fatal("定義名が重複しているのに出力できた")
+	}
+	if !strings.Contains(err.Error(), "顧客名") {
+		t.Errorf("メッセージ = %q", err.Error())
+	}
+}
+
+// TestExportBulkTemplate_CustomFieldGuide は記入方法シートに
+// カスタム属性の記法が載っていることを確認する(唯一の利用者向け仕様書のため)。
+func TestExportBulkTemplate_CustomFieldGuide(t *testing.T) {
+	path := exportBulkToTempFileWith(t, sampleBulkRows(), sampleBulkMastersWithCustom())
+	f := openExported(t, path)
+
+	rows, err := f.GetRows(SheetBulkGuide)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sb strings.Builder
+	for _, r := range rows {
+		for _, c := range r {
+			sb.WriteString(c)
+			sb.WriteString("\n")
+		}
+	}
+	text := sb.String()
+	wantPhrases := []string{
+		BulkCustomColumnPrefix, // 列ヘッダの記法
+		"yyyy-MM-dd",           // 日付
+		"カンマ",                  // 複数リスト・チェックボックスの区切り
+		"その他",                  // 直接入力は未対応
+		"未対応",
+		"前後の空白",        // 取り込み時に落とすため前後空白だけの編集は反映できない
+		"クリア指示と区別できない", // 文字列としての #CLEAR# は設定できない
+	}
+	for _, p := range wantPhrases {
+		if !strings.Contains(text, p) {
+			t.Errorf("記入方法シートに %q の説明が無い:\n%s", p, text)
+		}
 	}
 }

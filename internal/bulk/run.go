@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"backlog-assistant/internal/backlogclient"
+	"backlog-assistant/internal/customfield"
 	"backlog-assistant/internal/store"
 )
 
@@ -486,6 +487,59 @@ func samePayload(p *Payload, issue backlogclient.Issue) bool {
 		return false
 	case normalizeNewlines(valueString(p.Description)) != normalizeNewlines(issue.Description):
 		return false
+	case !sameCustomFields(p.CustomFields, issue):
+		return false
+	}
+	return true
+}
+
+// sameCustomFields は送信したカスタム属性が課題へ反映されているかを返す。
+//
+// 送信していない属性は比較しない(必須属性の既定値など、こちらが指定しない値が
+// 入っていても「別の課題」とは言えないため)。逆に、送信した属性を確認できない
+// 応答(生 JSON が無い)は一致と断定しない。断定を誤って作成済み扱いにすると
+// 必要な追加を取りこぼすため、判断は利用者へ委ねる(matchAmbiguous)。
+func sameCustomFields(fields []customfield.InputValue, issue backlogclient.Issue) bool {
+	if len(fields) == 0 {
+		return true
+	}
+	if issue.RawJSON == "" {
+		return false
+	}
+	values, err := customfield.ParseValues(issue.RawJSON)
+	if err != nil {
+		return false
+	}
+	current := map[int64]customfield.Value{}
+	for _, v := range values {
+		current[v.ID] = v
+	}
+	for _, f := range fields {
+		cur, ok := current[f.ID]
+		display := ""
+		if ok {
+			display = customfield.FormatValue(cur)
+		}
+		switch {
+		case f.Clear:
+			if display != "" {
+				return false
+			}
+		case len(f.ItemIDs) > 0:
+			if !sameInt64Set(f.ItemIDs, customfield.ItemIDs(cur)) {
+				return false
+			}
+			// 「その他」の直接入力は送信非対応のため、こちらが作成した課題には
+			// 残らないはず。残っている候補は別課題の可能性があり、作成済みと
+			// 断定しない(取りこぼし方向へ倒す既存方針)
+			if cur.OtherValue != "" {
+				return false
+			}
+		default:
+			if f.Text != display {
+				return false
+			}
+		}
 	}
 	return true
 }
@@ -548,6 +602,7 @@ func createParamsOf(projectID int64, p *Payload) backlogclient.IssueCreate {
 	in.Description = p.Description
 	in.AssigneeID = p.AssigneeID
 	in.DueDate = p.DueDate
+	in.CustomFields = p.CustomFields
 	return in
 }
 
@@ -555,12 +610,13 @@ func createParamsOf(projectID int64, p *Payload) backlogclient.IssueCreate {
 // (nil = 変更しない / 空値 = クリア の意味をそのまま引き継ぐ)。
 func updateParamsOf(p *Payload) backlogclient.IssueUpdate {
 	return backlogclient.IssueUpdate{
-		Summary:     p.Summary,
-		Description: p.Description,
-		IssueTypeID: p.IssueTypeID,
-		PriorityID:  p.PriorityID,
-		StatusID:    p.StatusID,
-		AssigneeID:  p.AssigneeID,
-		DueDate:     p.DueDate,
+		Summary:      p.Summary,
+		Description:  p.Description,
+		IssueTypeID:  p.IssueTypeID,
+		PriorityID:   p.PriorityID,
+		StatusID:     p.StatusID,
+		AssigneeID:   p.AssigneeID,
+		DueDate:      p.DueDate,
+		CustomFields: p.CustomFields,
 	}
 }

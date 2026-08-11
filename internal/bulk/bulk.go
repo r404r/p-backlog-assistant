@@ -146,6 +146,10 @@ type Payload struct {
 	AssigneeID  *int64   `json:"assigneeId,omitempty"`
 	DueDate     *string  `json:"dueDate,omitempty"`
 	Changes     []string `json:"changes,omitempty"` // dry-run で表示した差分(結果レポート用)
+	// CustomFields は変更するカスタム属性の値(定義順)。
+	// 変更しない属性は載せない(空セル = 変更しない)。
+	// 省略可のため、この項目が無い旧ジョブの payload もそのまま復元できる。
+	CustomFields []customfield.InputValue `json:"customFields,omitempty"`
 }
 
 // EncodePayload は Payload を JSON 文字列にする。

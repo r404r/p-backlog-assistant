@@ -163,6 +163,15 @@ func testMaster() MasterData {
 	}
 }
 
+// testIssueRawJSON は EXA-1 の生 JSON(カスタム属性の現在値を含む)。
+// 定義 ID は testCustomFields に対応する。実データではない。
+const testIssueRawJSON = `{"id":101,"issueKey":"EXA-1","customFields":[
+	{"id":31,"fieldTypeId":1,"name":"顧客名","value":"取引先 A"},
+	{"id":33,"fieldTypeId":4,"name":"開始日","value":"2026-05-06"},
+	{"id":34,"fieldTypeId":5,"name":"重要度","value":{"id":341,"name":"高"}},
+	{"id":35,"fieldTypeId":6,"name":"タグ","value":[{"id":351,"name":"UI"},{"id":353,"name":"DB"}]}
+]}`
+
 // openTestStore は一時ディレクトリの DB を開き、検証用の課題・ユーザを投入する。
 func openTestStore(t *testing.T) *store.Store {
 	t.Helper()
@@ -181,6 +190,8 @@ func openTestStore(t *testing.T) *store.Store {
 			AssigneeID: 501, AssigneeName: "山田 太郎",
 			IssueTypeName: "タスク", PriorityName: "中",
 			DueDate: "2026-09-01T00:00:00Z", Updated: "2026-08-01T00:00:00Z",
+			// カスタム属性の現在値(差分判定に使う。testCustomFields と対応)
+			RawJSON: testIssueRawJSON,
 		},
 		{
 			ID: 102, IssueKey: "EXA-2", ProjectID: testProjectID,
@@ -307,12 +318,19 @@ func importFile(t *testing.T, st *store.Store, rows [][]string) *ImportResult {
 
 func importFileWith(t *testing.T, st *store.Store, headers []string, rows [][]string, defaultPriorityID int64) *ImportResult {
 	t.Helper()
+	return importFileWithMaster(t, st, headers, rows, defaultPriorityID, testMaster())
+}
+
+// importFileWithMaster はマスタを指定して取り込む(カスタム属性の検証用)。
+func importFileWithMaster(t *testing.T, st *store.Store, headers []string, rows [][]string,
+	defaultPriorityID int64, master MasterData) *ImportResult {
+	t.Helper()
 	path := writeXLSX(t, headers, rows)
 	res, err := NewImporter(st).Import(context.Background(), ImportOptions{
 		ProjectID:         testProjectID,
 		FilePath:          path,
 		DefaultPriorityID: defaultPriorityID,
-		Master:            testMaster(),
+		Master:            master,
 	})
 	if err != nil {
 		t.Fatal(err)

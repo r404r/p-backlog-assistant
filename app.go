@@ -864,6 +864,26 @@ func rawIssueIDs(rawJSON string) (issueTypeID, priorityID int64) {
 	return v.IssueType.ID, v.Priority.ID
 }
 
+// bulkCustomFieldValues は課題の raw_json からカスタム属性の現在値を
+// 「定義 ID → 表示文字列」で取り出す(テンプレートのプリフィル用。CF3)。
+//
+// 解釈できない生 JSON は空として扱い、テンプレート出力全体を止めない
+// (課題出力と同じ流儀。異常の検知は同期・customfield 側の責務)。
+func bulkCustomFieldValues(rawJSON string) map[int64]string {
+	if rawJSON == "" {
+		return nil
+	}
+	values, err := customfield.ParseValues(rawJSON)
+	if err != nil {
+		return nil
+	}
+	out := make(map[int64]string, len(values))
+	for _, v := range values {
+		out[v.ID] = customfield.FormatValue(v)
+	}
+	return out
+}
+
 // bulkTemplateMasters はテンプレートの「マスタ」シートに載せる選択候補を集める。
 //
 // 種別・状態・優先度は API のマスタ(取り込み時の検証と同じ内容)、
@@ -882,6 +902,8 @@ func (a *App) bulkTemplateMasters(profileID string, projectID int64) (export.Bul
 	out.IssueTypes = namedRefsOf(master.IssueTypes)
 	out.Statuses = namedRefsOf(master.Statuses)
 	out.Priorities = namedRefsOf(master.Priorities)
+	// カスタム属性は列の生成・選択肢のドロップダウンに使う(CF3)
+	out.CustomFields = master.CustomFields
 
 	users, err := s.ListAssigneeCandidates(a.ctx, profileID, projectID)
 	if err != nil {
@@ -964,6 +986,7 @@ func (a *App) ExportBulkTemplate(profileID string, projectID int64, query store.
 			DueDate:       is.DueDate,
 			Description:   is.Description,
 			BaseUpdated:   is.Updated,
+			CustomFields:  bulkCustomFieldValues(is.RawJSON),
 		})
 	}
 	fileAttr := fileExtAttr(path)
