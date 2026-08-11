@@ -188,27 +188,58 @@ func itemID(m map[string]any) (int64, bool) {
 	return int64(f), true
 }
 
+// ParseResult は ParseValuesDetail の結果。
+type ParseResult struct {
+	// Values は取り出せたカスタム属性の値(常に非 nil)。
+	Values []Value
+	// HasCustomFields は課題の JSON に customFields が配列として存在したか。
+	//
+	// false は「キーが無い」または「null」を意味し、次の 2 つを区別するために使う:
+	//   - 空配列 [] …………… カスタム属性を持たないプロジェクト、またはプラン未対応の
+	//     スペースの正常な応答。値が無いことが確定しているので「値なし」として扱える。
+	//   - キー無し / null … 保存された生 JSON が customFields を含んでいない
+	//     (カスタム属性対応より前に同期した課題等)。値が無いのか、そもそも
+	//     取得していないのかを区別できないため、条件判定の根拠にはできない。
+	//
+	// 表示・出力ではどちらも「空欄」でよいが、絞り込みでは前者を「値なし(不一致)」、
+	// 後者を「判定不能」として扱い分ける必要がある(store.customFieldMatcher)。
+	HasCustomFields bool
+}
+
 // ParseValues は課題 1 件の生 JSON からカスタム属性の値を取り出す。
 //
 // customFields が無い・null の場合(カスタム属性を使わないプロジェクト、
 // またはプランが未対応のスペース)は空スライスを返す。
 // 課題の JSON 自体が壊れている場合のみエラーを返す。
+//
+// 「customFields キーが存在したか」まで必要な場合は ParseValuesDetail を使う。
 func ParseValues(rawJSON string) ([]Value, error) {
+	res, err := ParseValuesDetail(rawJSON)
+	if err != nil {
+		return nil, err
+	}
+	return res.Values, nil
+}
+
+// ParseValuesDetail は ParseValues に「customFields キーの有無」を添えて返す。
+func ParseValuesDetail(rawJSON string) (ParseResult, error) {
 	var envelope struct {
 		CustomFields json.RawMessage `json:"customFields"`
 	}
 	if err := json.Unmarshal([]byte(rawJSON), &envelope); err != nil {
-		return nil, fmt.Errorf("カスタム属性を取り出せません(課題の JSON を解析できません): %w", err)
+		return ParseResult{}, fmt.Errorf("カスタム属性を取り出せません(課題の JSON を解析できません): %w", err)
 	}
 	if len(envelope.CustomFields) == 0 || string(envelope.CustomFields) == "null" {
-		return []Value{}, nil
+		// キーが無い / null。空スライスを返す点は空配列と同じだが、
+		// HasCustomFields で呼び出し側が区別できるようにする。
+		return ParseResult{Values: []Value{}}, nil
 	}
 	var elems []json.RawMessage
 	if err := json.Unmarshal(envelope.CustomFields, &elems); err != nil {
 		// 配列以外(オブジェクト等)は API 仕様の変化かデータ破損。
 		// 黙って「カスタム属性なし」にすると Excel 出力が全て空欄になり
 		// 異常に気づけないため、エラーとして検知させる。
-		return nil, fmt.Errorf("カスタム属性を取り出せません(customFields が配列ではありません): %w", err)
+		return ParseResult{}, fmt.Errorf("カスタム属性を取り出せません(customFields が配列ではありません): %w", err)
 	}
 	out := make([]Value, 0, len(elems))
 	for _, e := range elems {
@@ -220,7 +251,7 @@ func ParseValues(rawJSON string) ([]Value, error) {
 			OtherValue  any     `json:"otherValue"`
 		}
 		if err := json.Unmarshal(e, &v); err != nil {
-			return nil, fmt.Errorf("カスタム属性の値を解析できません: %w", err)
+			return ParseResult{}, fmt.Errorf("カスタム属性の値を解析できません: %w", err)
 		}
 		val := Value{Value: v.Value, OtherValue: otherValueString(v.OtherValue)}
 		if v.ID != nil {
@@ -234,7 +265,7 @@ func ParseValues(rawJSON string) ([]Value, error) {
 		}
 		out = append(out, val)
 	}
-	return out, nil
+	return ParseResult{Values: out, HasCustomFields: true}, nil
 }
 
 // FormatValue は値を表示・Excel 出力用の文字列にする。

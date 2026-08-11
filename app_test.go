@@ -167,6 +167,65 @@ func TestNewMasterDataDTO_NormalizesNilSlices(t *testing.T) {
 	}
 }
 
+// TestIssueRowDTOOf_CustomFields は検索結果 1 行の DTO が、
+// 要求された列(cf_{定義ID})のカスタム属性値だけを表示文字列で持つことを確認する(CF4)。
+// 全属性を詰めると、列を選んでいない利用者にも解析コストと転送量が掛かるため。
+func TestIssueRowDTOOf_CustomFields(t *testing.T) {
+	issue := store.Issue{
+		IssueKey: "EXA-1", Summary: "件名", StatusName: "未対応",
+		RawJSON: `{"id":101,"customFields":[
+			{"id":31,"fieldTypeId":1,"value":"取引先 A"},
+			{"id":34,"fieldTypeId":5,"value":{"id":341,"name":"高"}},
+			{"id":35,"fieldTypeId":3,"value":12.5}
+		]}`,
+	}
+
+	t.Run("要求した列だけを詰める", func(t *testing.T) {
+		row := issueRowDTOOf(&issue, []int64{31, 35})
+		if row.IssueKey != "EXA-1" || row.Summary != "件名" || row.StatusName != "未対応" {
+			t.Errorf("固定項目 = %+v", row)
+		}
+		want := map[string]string{"cf_31": "取引先 A", "cf_35": "12.5"}
+		if len(row.CustomFields) != len(want) {
+			t.Fatalf("customFields = %+v, want %+v", row.CustomFields, want)
+		}
+		for k, w := range want {
+			if row.CustomFields[k] != w {
+				t.Errorf("%s = %q, want %q", k, row.CustomFields[k], w)
+			}
+		}
+	})
+
+	t.Run("値を持たない列は空文字で埋める", func(t *testing.T) {
+		row := issueRowDTOOf(&issue, []int64{99})
+		if got, ok := row.CustomFields["cf_99"]; !ok || got != "" {
+			t.Errorf("cf_99 = %q (ok=%v), want 空文字", got, ok)
+		}
+	})
+
+	t.Run("列を要求しなければ空のマップ", func(t *testing.T) {
+		row := issueRowDTOOf(&issue, nil)
+		// フロント契約で null を返さない(常にオブジェクト)
+		if row.CustomFields == nil {
+			t.Fatal("customFields = nil, want 空のマップ")
+		}
+		if len(row.CustomFields) != 0 {
+			t.Errorf("customFields = %+v, want 空", row.CustomFields)
+		}
+	})
+
+	t.Run("生 JSON が壊れていても行は返る", func(t *testing.T) {
+		broken := store.Issue{IssueKey: "EXA-2", RawJSON: "{壊れた JSON"}
+		row := issueRowDTOOf(&broken, []int64{31})
+		if row.IssueKey != "EXA-2" {
+			t.Errorf("行が壊れた: %+v", row)
+		}
+		if row.CustomFields["cf_31"] != "" {
+			t.Errorf("cf_31 = %q, want 空文字", row.CustomFields["cf_31"])
+		}
+	})
+}
+
 // TestBulkCustomFieldValues は一括更新テンプレートへプリフィルする
 // カスタム属性の現在値(定義 ID → 表示文字列)を確認する(CF3)。
 // 生 JSON を解釈できない課題は、テンプレート出力全体を止めないため空にする。

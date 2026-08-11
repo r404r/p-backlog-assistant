@@ -514,17 +514,61 @@ type IssueRowDTO struct {
 	Created       string `json:"created"`
 	Updated       string `json:"updated"`
 	DueDate       string `json:"dueDate"`
+	// CustomFields は画面で要求されたカスタム属性の表示文字列
+	// (キー = Excel 出力と同じ列キー cf_{定義ID})。
+	// 要求されていない属性は含めない(全属性を詰めると解析コストと
+	// 転送量が課題数 × 属性数で膨らむため)。
+	CustomFields map[string]string `json:"customFields"`
+}
+
+// issueRowDTOOf は課題 1 件を検索結果の DTO へ詰め替える。
+//
+// customFieldIDs で要求されたカスタム属性だけを、Excel 出力と同じ規約で
+// 表示文字列にして載せる(整形は Go 側に寄せ、画面は文字列を並べるだけにする)。
+// 値を持たない定義も空文字で埋め、行ごとにキーの有無が変わらないようにする。
+func issueRowDTOOf(is *store.Issue, customFieldIDs []int64) IssueRowDTO {
+	row := IssueRowDTO{
+		IssueKey:      is.IssueKey,
+		Summary:       is.Summary,
+		StatusName:    is.StatusName,
+		AssigneeName:  is.AssigneeName,
+		IssueTypeName: is.IssueTypeName,
+		PriorityName:  is.PriorityName,
+		Created:       is.Created,
+		Updated:       is.Updated,
+		DueDate:       is.DueDate,
+		// フロント契約では null を返さない(常にオブジェクト)
+		CustomFields: make(map[string]string, len(customFieldIDs)),
+	}
+	if len(customFieldIDs) == 0 {
+		return row
+	}
+	// 生 JSON の解析は 1 行 1 回。解釈できない課題は空欄へ縮退させ、
+	// 1 件のデータ不備で検索結果全体を失わせない(Excel 出力と同じ流儀)。
+	values := bulkCustomFieldValues(is.RawJSON)
+	for _, id := range customFieldIDs {
+		row.CustomFields[export.CustomColumnKey(id)] = values[id]
+	}
+	return row
 }
 
 // IssueSearchDTO は検索結果(表示上限で切っても total は総件数)。
 type IssueSearchDTO struct {
 	Rows  []IssueRowDTO `json:"rows"`
 	Total int           `json:"total"`
+	// Unverifiable はカスタム属性条件を判定できなかった課題の件数
+	// (ローカルの生 JSON が古い・壊れている行)。0 でなければ、結果は
+	// 「条件に合う全件」ではないため、画面はその旨を警告すること。
+	Unverifiable int `json:"unverifiable"`
 }
 
 // SearchIssues はローカル DB から課題を抽出する(store.IssueFilter の json 名は
 // フロント契約 IssueQuery と一致)。
-func (a *App) SearchIssues(profileID string, query store.IssueFilter) (*IssueSearchDTO, error) {
+//
+// columns は画面の一覧に表示する列キー(Excel 出力の列選択と同じ形式)。
+// このうち cf_{定義ID} のものだけを見て、カスタム属性の値を行に載せる。
+// 固定列は常に返すため、固定列キーの有無は結果に影響しない。
+func (a *App) SearchIssues(profileID string, query store.IssueFilter, columns []string) (*IssueSearchDTO, error) {
 	const op = "SearchIssues"
 	attrs := a.searchAttrs(profileID, query)
 	a.logStart(op, attrs...)
@@ -538,30 +582,26 @@ func (a *App) SearchIssues(profileID string, query store.IssueFilter) (*IssueSea
 		a.logEnd(op, err, attrs...)
 		return nil, err
 	}
+	customFieldIDs := export.CustomColumnIDs(columns)
 	rows := make([]IssueRowDTO, 0, len(res.Issues))
-	for _, is := range res.Issues {
-		rows = append(rows, IssueRowDTO{
-			IssueKey:      is.IssueKey,
-			Summary:       is.Summary,
-			StatusName:    is.StatusName,
-			AssigneeName:  is.AssigneeName,
-			IssueTypeName: is.IssueTypeName,
-			PriorityName:  is.PriorityName,
-			Created:       is.Created,
-			Updated:       is.Updated,
-			DueDate:       is.DueDate,
-		})
+	for i := range res.Issues {
+		rows = append(rows, issueRowDTOOf(&res.Issues[i], customFieldIDs))
 	}
 	a.logEnd(op, nil, append(attrs,
 		slog.Int("rows", len(rows)),
 		slog.Int("total", res.Total),
-		slog.Bool("truncated", res.Truncated))...)
-	return &IssueSearchDTO{Rows: rows, Total: res.Total}, nil
+		slog.Bool("truncated", res.Truncated),
+		slog.Int("unverifiable", res.Unverifiable),
+		slog.Int("customFieldColumns", len(customFieldIDs)))...)
+	return &IssueSearchDTO{Rows: rows, Total: res.Total, Unverifiable: res.Unverifiable}, nil
 }
 
 // searchAttrs は検索条件のうち非機密なものだけをログ属性にする。
 // キーワード・状態名・担当者名は課題内容や個人名を含みうるため、
 // 値は記録せず「指定の有無」だけを記録する。
+//
+// カスタム属性の条件も同様に、入力値(顧客名等を含みうる)は記録せず
+// 条件の件数だけを残す(2 段階検索が動いたかを追えるようにするため)。
 func (a *App) searchAttrs(profileID string, query store.IssueFilter) []slog.Attr {
 	return []slog.Attr{
 		slog.String("profileId", profileID),
@@ -571,6 +611,7 @@ func (a *App) searchAttrs(profileID string, query store.IssueFilter) []slog.Attr
 		slog.Bool("hasAssignee", query.AssigneeName != ""),
 		slog.Bool("hasDateRange", query.UpdatedFrom != "" || query.UpdatedTo != "" ||
 			query.CreatedFrom != "" || query.CreatedTo != ""),
+		slog.Int("customFieldFilters", len(customfield.ActiveFilters(query.CustomFieldFilters))),
 		slog.Int("limit", query.Limit),
 	}
 }
@@ -675,6 +716,10 @@ func fileExtAttr(path string) slog.Attr {
 type ExportResultDTO struct {
 	Path string `json:"path"`
 	Rows int    `json:"rows"`
+	// Unverifiable はカスタム属性条件を判定できず、出力対象から外れた課題の件数
+	// (課題抽出の Excel 出力のみ。他の出力では常に 0)。
+	// 出力ファイルは「条件に合う全件」ではないため、0 でなければ画面で警告する。
+	Unverifiable int `json:"unverifiable"`
 }
 
 // exportSearchLimit は Excel 出力時の取得上限。フロント契約では「条件一致全件」
@@ -744,8 +789,10 @@ func (a *App) ExportIssuesExcel(profileID string, query store.IssueFilter, colum
 	}
 	a.logEnd(op, nil, append(attrs,
 		fileAttr,
-		slog.Int("rows", len(res.Issues)))...)
-	return &ExportResultDTO{Path: path, Rows: len(res.Issues)}, nil
+		slog.Int("rows", len(res.Issues)),
+		slog.Int("unverifiable", res.Unverifiable))...)
+	// 判定できず出力から外れた件数も返す(黙って欠落させない)
+	return &ExportResultDTO{Path: path, Rows: len(res.Issues), Unverifiable: res.Unverifiable}, nil
 }
 
 // ---- M3: ユーザ抽出(frontend/src/lib/backend.ts の契約と対) ----

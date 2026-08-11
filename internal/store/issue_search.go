@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+
+	"backlog-assistant/internal/customfield"
 )
 
 // DefaultSearchLimit は SearchIssues の既定の返却上限(UI プレビュー用)。
@@ -26,7 +28,12 @@ type IssueFilter struct {
 	UpdatedTo    string `json:"updatedTo"`    //
 	StatusName   string `json:"statusName"`   // 完全一致
 	AssigneeName string `json:"assigneeName"` // 完全一致
-	Limit        int    `json:"limit"`        // 0 なら DefaultSearchLimit
+	// CustomFieldFilters はカスタム属性の絞り込み条件(定義ごとに 1 条件・AND)。
+	//
+	// カスタム属性の値は issues.raw_json の中にしか無いため SQL では絞り込めない。
+	// この条件は SQL 実行後に Go 側で適用される(SearchIssues の 2 段階検索)。
+	CustomFieldFilters []customfield.Filter `json:"customFieldFilters"`
+	Limit              int                  `json:"limit"` // 0 なら DefaultSearchLimit
 }
 
 // IssueSearchResult は検索結果(上限で切っても総件数を返す)。
@@ -34,6 +41,11 @@ type IssueSearchResult struct {
 	Issues    []Issue `json:"issues"`
 	Total     int     `json:"total"`     // 条件に一致した総件数
 	Truncated bool    `json:"truncated"` // 上限で切り詰めたか
+	// Unverifiable はカスタム属性条件を判定できなかった課題の件数
+	// (生 JSON が空・壊れている行)。0 でなければ結果は「条件に合う全件」では
+	// ないため、呼び出し側は利用者へその旨を伝えること。
+	// カスタム属性条件が無い検索では常に 0(生 JSON を読まないため)。
+	Unverifiable int `json:"unverifiable"`
 }
 
 // FilterOptions は抽出条件の候補値(DISTINCT)。
@@ -170,15 +182,97 @@ func scanIssues(ctx context.Context, q dbtx, query string, args ...any) ([]Issue
 	out := []Issue{}
 	for rows.Next() {
 		var i Issue
-		if err := rows.Scan(&i.ID, &i.IssueKey, &i.ProjectID, &i.Summary, &i.Description,
-			&i.StatusID, &i.StatusName, &i.AssigneeID, &i.AssigneeName,
-			&i.IssueTypeName, &i.PriorityName, &i.Created, &i.Updated, &i.DueDate,
-			&i.RawJSON, &i.FetchedAt); err != nil {
+		if err := scanIssueRow(rows, &i); err != nil {
 			return nil, err
 		}
 		out = append(out, i)
 	}
 	return out, rows.Err()
+}
+
+// scanIssueRow は issueColumns の並びで 1 行を Issue に読み込む
+// (scanIssues と scanIssuesMatching で列の並びを共有するため関数に切り出す)。
+func scanIssueRow(rows *sql.Rows, i *Issue) error {
+	return rows.Scan(&i.ID, &i.IssueKey, &i.ProjectID, &i.Summary, &i.Description,
+		&i.StatusID, &i.StatusName, &i.AssigneeID, &i.AssigneeName,
+		&i.IssueTypeName, &i.PriorityName, &i.Created, &i.Updated, &i.DueDate,
+		&i.RawJSON, &i.FetchedAt)
+}
+
+// issueMatch は 2 段階目(Go 側でのカスタム属性判定)の結果。
+type issueMatch int
+
+const (
+	matchNo           issueMatch = iota // 条件を満たさない
+	matchYes                            // 条件を満たす
+	matchUnverifiable                   // 生 JSON が無い・壊れていて判定できない
+)
+
+// scanIssuesMatching は SQL で絞った行を走査し、match が真の行だけを最大 limit 件
+// 返す。返却は上限で打ち切っても一致件数は数え続け、total として返す
+// (UI の「N 件中 M 件を表示」を SQL 側の COUNT(*) と同じ意味に保つため)。
+// 判定できなかった行は結果に含めず、件数だけを unverifiable として返す。
+//
+// 保持するのは limit 件までなので、一致件数が多くてもメモリは上限で頭打ちになる。
+// ただし SQL 側で LIMIT できない(絞り込みが Go 側でしか行えない)ため、
+// 条件に合う行の判定自体は SQL 一致行の全件に対して行われる。
+func scanIssuesMatching(ctx context.Context, q dbtx, query string,
+	match func(*Issue) issueMatch, limit int, args ...any) (issues []Issue, total, unverifiable int, err error) {
+	rows, err := q.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, 0, 0, err
+	}
+	defer rows.Close()
+	out := []Issue{}
+	for rows.Next() {
+		var i Issue
+		if err := scanIssueRow(rows, &i); err != nil {
+			return nil, 0, 0, err
+		}
+		switch match(&i) {
+		case matchUnverifiable:
+			unverifiable++
+		case matchYes:
+			total++
+			if len(out) < limit {
+				out = append(out, i)
+			}
+		}
+	}
+	return out, total, unverifiable, rows.Err()
+}
+
+// customFieldMatcher は課題 1 件がカスタム属性条件を満たすかを判定する関数を返す。
+// 生 JSON の解析は 1 行につき 1 回だけ行い、全条件で使い回す。
+func customFieldMatcher(filters []customfield.Filter) func(*Issue) issueMatch {
+	return func(i *Issue) issueMatch {
+		parsed, err := customfield.ParseValuesDetail(i.RawJSON)
+		if err != nil {
+			// 生 JSON が空(旧バージョンで同期した課題)・壊れている行は
+			// 条件を満たすか確認できない。結果に含めると利用者は絞り込み結果を
+			// 「条件を満たすものの集合」と誤解するため含めないが、黙って捨てると
+			// 今度は「条件に合う全件」と誤解されるため、件数を呼び出し側へ返す。
+			// 検索全体は失敗させない(1 件のデータ不備で抽出できなくなる方が損失が大きい)。
+			return matchUnverifiable
+		}
+		if !parsed.HasCustomFields {
+			// customFields キーが無い / null の行。空配列 [] とは扱いを分ける:
+			//   - 空配列 …………… 「属性 0 件」という確定した応答なので値なしとして判定する
+			//     (下の MatchValues に進み、条件があれば不一致になる)
+			//   - キー無し / null … 値が無いのか、そもそも取得していないのかを区別できない。
+			//     カスタム属性を保存していなかった頃に同期した課題が該当しうるため、
+			//     「条件を満たさない」と断定せず判定不能として数える。
+			//
+			// なお、この経路はカスタム属性条件が指定されたときにしか通らない。
+			// 条件を出せるのは定義が 1 件以上あるプロジェクトだけなので、
+			// 属性を持たないプロジェクト全件が判定不能になることはない。
+			return matchUnverifiable
+		}
+		if customfield.MatchValues(parsed.Values, filters, NormalizeSearchText) {
+			return matchYes
+		}
+		return matchNo
+	}
 }
 
 // SearchIssues はローカル DB を検索する(設計書 4 節)。
@@ -187,18 +281,51 @@ func scanIssues(ctx context.Context, q dbtx, query string, args ...any) ([]Issue
 // 件数と行の 2 クエリを発行するため、呼び出し側は同一トランザクションを
 // 渡すこと(Store.SearchIssues は WithReadTx で包む)。別々の接続で実行すると
 // 2 クエリの間に同期の書き込みが割り込み、total と行数が食い違う(中 2)。
+//
+// カスタム属性条件(CF4)が指定された場合は 2 段階の検索になる:
+//
+//	(a) SQL で既存条件(プロジェクト・キーワード・期間・状態・担当者)を適用し、
+//	(b) その結果を 1 行ずつ走査しながら、生 JSON から取り出したカスタム属性の値へ
+//	    Go 側で条件を適用する。
+//
+// SQL で JSON を解析しない(json_extract 等を使わない)のは、値の形が型ごとに
+// 異なり選択肢 ID の照合まで SQL で書くと条件が読めなくなること、表示・出力と
+// 判定規約がずれること(customfield パッケージに集約している)を避けるため。
+// この経路では SQL 側で LIMIT / COUNT(*) を使えない(絞り込み前の件数になる)ため、
+// 上限と総件数は Go 側の走査で決める。
 func SearchIssues(ctx context.Context, q dbtx, f IssueFilter) (*IssueSearchResult, error) {
 	where, args, err := f.buildFilter()
 	if err != nil {
 		return nil, err
 	}
-	var total int
-	if err := q.QueryRowContext(ctx, `SELECT COUNT(*) FROM issues WHERE `+where, args...).Scan(&total); err != nil {
-		return nil, err
-	}
 	limit := f.Limit
 	if limit <= 0 {
 		limit = DefaultSearchLimit
+	}
+	// 条件が空のカスタム属性は最初に落とし、条件が実質無いときは
+	// 従来どおり SQL だけで完結させる(生 JSON の解析コストを掛けない)。
+	cfFilters := customfield.ActiveFilters(f.CustomFieldFilters)
+	if err := customfield.ValidateFilters(cfFilters); err != nil {
+		return nil, err
+	}
+	if len(cfFilters) > 0 {
+		issues, total, unverifiable, err := scanIssuesMatching(ctx, q,
+			`SELECT `+issueColumns+` FROM issues WHERE `+where+` ORDER BY id`,
+			customFieldMatcher(cfFilters), limit, args...)
+		if err != nil {
+			return nil, err
+		}
+		return &IssueSearchResult{
+			Issues:       issues,
+			Total:        total,
+			Truncated:    total > len(issues),
+			Unverifiable: unverifiable,
+		}, nil
+	}
+
+	var total int
+	if err := q.QueryRowContext(ctx, `SELECT COUNT(*) FROM issues WHERE `+where, args...).Scan(&total); err != nil {
+		return nil, err
 	}
 	issues, err := scanIssues(ctx, q,
 		`SELECT `+issueColumns+` FROM issues WHERE `+where+` ORDER BY id LIMIT `+strconv.Itoa(limit),

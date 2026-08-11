@@ -106,6 +106,42 @@ export interface SyncResult {
   durationMs: number
 }
 
+/** カスタム属性列の列キーの接頭辞(Go 側 export パッケージの規約 cf_{定義ID} と対) */
+export const CUSTOM_COLUMN_PREFIX = 'cf_'
+
+/**
+ * カスタム属性の定義 ID から列キーを作る。
+ * Excel 出力の列選択・一覧の表示列・IssueRow.customFields のキーで共通に使う。
+ */
+export function customColumnKey(defId: number): string {
+  return `${CUSTOM_COLUMN_PREFIX}${defId}`
+}
+
+/**
+ * カスタム属性 1 定義に対する絞り込み条件(Go 側 customfield.Filter と対)。
+ *
+ * 定義ごとに 1 条件で、型ごとに使うフィールドが決まっている:
+ * - 文字列 / 文章 …………………… text(部分一致)
+ * - 数値 / 日付 …………………… min / max(範囲。境界を含む)
+ * - リスト系 ……………………… itemIds(選択肢 ID のいずれか一致)
+ *
+ * 複数の条件は AND で連結される。すべて未指定の条件は無視される。
+ */
+export interface CustomFieldFilter {
+  /** 対象のカスタム属性定義 ID */
+  defId: number
+  /** 定義の型 ID(比較方法の判断に使う。CustomFieldDef.typeId と同じ値) */
+  typeId: number
+  /** テキスト系の部分一致(空・空白のみは条件なし) */
+  text?: string
+  /** 数値・日付の下限(数値は数値文字列、日付は YYYY-MM-DD) */
+  min?: string
+  /** 数値・日付の上限 */
+  max?: string
+  /** リスト系で選択された選択肢 ID(いずれか 1 つに一致すれば真) */
+  itemIds?: number[]
+}
+
 /** 課題検索条件(ローカル DB に対する検索) */
 export interface IssueQuery {
   /** 対象プロジェクト ID(必須) */
@@ -132,6 +168,12 @@ export interface IssueQuery {
   statusName?: string
   /** 担当者名(完全一致。空ならすべて) */
   assigneeName?: string
+  /**
+   * カスタム属性の絞り込み条件(定義ごとに 1 条件・AND)。
+   * カスタム属性の値はローカル DB の生 JSON にしか無いため、
+   * Go 側では SQL 条件で絞った後に適用される(2 段階検索)
+   */
+  customFieldFilters?: CustomFieldFilter[]
   /** 画面プレビューの取得上限。未指定ならバックエンドの既定値。Excel 出力時は無視される */
   limit?: number
 }
@@ -150,12 +192,24 @@ export interface IssueRow {
   updated: string
   /** 期限(YYYY-MM-DD。未設定なら空文字) */
   dueDate: string
+  /**
+   * カスタム属性の表示文字列(キー = Excel 出力と同じ列キー `cf_{定義ID}`)。
+   * searchIssues に渡した columns で要求した列だけが入る(整形は Go 側で済み)
+   */
+  customFields: Record<string, string>
 }
 
 /** 課題検索の結果。rows は limit で切り詰められるが total は条件に一致する全件数 */
 export interface IssueSearchResult {
   rows: IssueRow[]
   total: number
+  /**
+   * カスタム属性条件を判定できなかった課題の件数
+   * (ローカルに保存された課題データが古い・壊れている行)。
+   * 0 でなければ結果は「条件に合う全件」ではないため、画面で警告すること。
+   * カスタム属性条件を指定しない検索では常に 0
+   */
+  unverifiable: number
 }
 
 /** 条件フォームのセレクト候補(ローカル DB の実データから抽出) */
@@ -227,6 +281,11 @@ export interface SyncStateRow {
 export interface ExportResult {
   path: string
   rows: number
+  /**
+   * カスタム属性条件を判定できず、出力から外れた課題の件数(課題抽出の出力のみ)。
+   * 0 でなければ出力ファイルは「条件に合う全件」ではない
+   */
+  unverifiable: number
 }
 
 // --- 一括更新・追加(画面 3) ---------------------------------------------
@@ -510,8 +569,16 @@ export interface Backend {
   syncProjects(profileId: string): Promise<void>
   /** 指定プロジェクトの課題を同期する(差分 / フル) */
   syncIssues(profileId: string, projectId: number, mode: SyncMode): Promise<SyncResult>
-  /** ローカル DB から課題を検索する(API は呼ばない) */
-  searchIssues(profileId: string, query: IssueQuery): Promise<IssueSearchResult>
+  /**
+   * ローカル DB から課題を検索する(API は呼ばない)。
+   * @param columns 一覧に表示する列キー(Excel 出力と同じ形式)。
+   *                `cf_{定義ID}` を含めると、その属性の値が IssueRow.customFields に入る
+   */
+  searchIssues(
+    profileId: string,
+    query: IssueQuery,
+    columns?: string[],
+  ): Promise<IssueSearchResult>
   /** 条件フォームの状態・担当者候補を返す */
   listFilterOptions(profileId: string, projectId: number): Promise<FilterOptions>
   /** データ種別ごとの同期状態一覧を返す */
@@ -627,7 +694,11 @@ interface WailsApp {
   ListProjects(profileId: string): Promise<Project[]>
   SyncProjects(profileId: string): Promise<void>
   SyncIssues(profileId: string, projectId: number, mode: SyncMode): Promise<SyncResult>
-  SearchIssues(profileId: string, query: IssueQuery): Promise<IssueSearchResult>
+  SearchIssues(
+    profileId: string,
+    query: IssueQuery,
+    columns: string[],
+  ): Promise<IssueSearchResult>
   ListFilterOptions(profileId: string, projectId: number): Promise<FilterOptions>
   GetSyncState(profileId: string): Promise<SyncStateRow[]>
   ExportIssuesExcel(profileId: string, query: IssueQuery, columns: string[]): Promise<ExportResult>
@@ -722,17 +793,22 @@ function createWailsBackend(app: WailsApp): Backend {
         durationMs: r?.durationMs ?? 0,
       }
     },
-    searchIssues: async (profileId, query) => {
-      const r = await app.SearchIssues(profileId, query)
-      return { rows: r?.rows ?? [], total: r?.total ?? 0 }
+    searchIssues: async (profileId, query, columns) => {
+      const r = await app.SearchIssues(profileId, query, columns ?? [])
+      // Go の nil マップは null で届くため、常にオブジェクトへ正規化する
+      // (画面が r.customFields[key] を条件分岐なしで参照できるように)
+      const rows = (r?.rows ?? []).map((row) => ({ ...row, customFields: row.customFields ?? {} }))
+      return { rows, total: r?.total ?? 0, unverifiable: r?.unverifiable ?? 0 }
     },
     listFilterOptions: async (profileId, projectId) => {
       const r = await app.ListFilterOptions(profileId, projectId)
       return { statuses: r?.statuses ?? [], assignees: r?.assignees ?? [] }
     },
     getSyncState: async (profileId) => (await app.GetSyncState(profileId)) ?? [],
-    exportIssuesExcel: (profileId, query, columns) =>
-      app.ExportIssuesExcel(profileId, query, columns),
+    exportIssuesExcel: async (profileId, query, columns) => {
+      const r = await app.ExportIssuesExcel(profileId, query, columns)
+      return { path: r?.path ?? '', rows: r?.rows ?? 0, unverifiable: r?.unverifiable ?? 0 }
+    },
     syncUsers: async (profileId) => {
       const r = await app.SyncUsers(profileId)
       return {
@@ -755,11 +831,14 @@ function createWailsBackend(app: WailsApp): Backend {
       }))
       return { rows, total: r?.total ?? 0 }
     },
-    exportUsersExcel: (profileId, query, columns) =>
-      app.ExportUsersExcel(profileId, query, columns),
+    exportUsersExcel: async (profileId, query, columns) => {
+      const r = await app.ExportUsersExcel(profileId, query, columns)
+      // ユーザ抽出にカスタム属性条件は無いため判定不能は常に 0
+      return { path: r?.path ?? '', rows: r?.rows ?? 0, unverifiable: 0 }
+    },
     exportBulkTemplate: async (profileId, projectId, query) => {
       const r = await app.ExportBulkTemplate(profileId, projectId, query)
-      return { path: r?.path ?? '', rows: r?.rows ?? 0 }
+      return { path: r?.path ?? '', rows: r?.rows ?? 0, unverifiable: 0 }
     },
     importBulkFile: async (profileId, projectId, defaultPriorityId) => {
       const r = await app.ImportBulkFile(profileId, projectId, defaultPriorityId)
@@ -811,7 +890,7 @@ function createWailsBackend(app: WailsApp): Backend {
       })),
     exportBulkResultExcel: async (profileId, jobId) => {
       const r = await app.ExportBulkResultExcel(profileId, jobId)
-      return { path: r?.path ?? '', rows: r?.rows ?? 0 }
+      return { path: r?.path ?? '', rows: r?.rows ?? 0, unverifiable: 0 }
     },
     getMasterData: async (profileId, projectId) => {
       const r = await app.GetMasterData(profileId, projectId)
@@ -883,6 +962,9 @@ const MOCK_ASSIGNEES = ['モック 太郎', 'モック 花子', 'モック 次�
 const MOCK_ISSUE_TYPES = ['タスク', 'バグ', '要望']
 const MOCK_PRIORITIES = ['高', '中', '低']
 const MOCK_SUMMARY_WORDS = ['ログイン', '一覧表示', 'CSV 取り込み', '通知メール', '権限チェック']
+// カスタム属性(文字列)のサンプル値。実在の取引先は含まない。
+// 全角・半角の混在を含め、正規化つき部分一致の動作を手元で確認できるようにする
+const MOCK_CUSTOMERS = ['モック商事', 'ＡＢＣ工業', 'ABC商会', 'サンプル製作所']
 
 const MOCK_PROJECTS: Project[] = [
   { id: 101, projectKey: 'SAMPLE', name: 'サンプル開発プロジェクト', lastSyncedAt: '', syncStateUnknown: false },
@@ -968,6 +1050,35 @@ function ymd(d: Date): string {
   return d.toISOString().slice(0, 10)
 }
 
+/** カスタム属性の型 ID(モックの比較方法の切り替えに使う。Go 側 customfield の定数と対) */
+const CF_TYPE_NUMERIC = 3
+
+/**
+ * モック課題のカスタム属性値(表示文字列)を決定的に組み立てる。
+ *
+ * 50 件に 1 件は空にして「ローカルの課題データが古く、カスタム属性を判定できない」
+ * 課題(Go 側では raw_json が空・破損の行)を再現する。判定不能件数の警告表示を
+ * Wails ランタイム外でも手動確認できるようにするため。
+ */
+function buildMockCustomFields(i: number, dueDate: string): Record<string, string> {
+  if (i % 50 === 49) return {}
+  const impact = MOCK_MASTER.customFields.find((f) => f.id === 3004)?.items ?? []
+  const envs = MOCK_MASTER.customFields.find((f) => f.id === 3005)?.items ?? []
+  return {
+    cf_3001: MOCK_CUSTOMERS[i % MOCK_CUSTOMERS.length],
+    // 数値は Go 側 FormatValue と同じく最短表現の数値文字列
+    cf_3002: String(((i % 8) + 1) * 2.5),
+    // 日付は yyyy-MM-dd(期限が空の課題は未入力にして「値なし」も再現する)
+    cf_3003: dueDate,
+    cf_3004: impact.length > 0 ? impact[i % impact.length].name : '',
+    // 複数リストは選択肢名の ", " 区切り(Go 側 FormatValue と同じ規約)
+    cf_3005: envs
+      .filter((_, n) => (i + n) % 3 !== 0)
+      .map((it) => it.name)
+      .join(', '),
+  }
+}
+
 /** 決定的にダミー課題を生成する(モック専用) */
 function buildMockIssues(project: Project, count: number): IssueRow[] {
   const rows: IssueRow[] = []
@@ -976,6 +1087,7 @@ function buildMockIssues(project: Project, count: number): IssueRow[] {
     const created = new Date(base - (count - i) * 6 * 3600 * 1000)
     const updated = new Date(created.getTime() + ((i % 7) + 1) * 3600 * 1000)
     const due = new Date(updated.getTime() + ((i % 11) + 1) * 24 * 3600 * 1000)
+    const dueDate = i % 3 === 0 ? '' : ymd(due)
     rows.push({
       issueKey: `${project.projectKey}-${i + 1}`,
       summary: `${MOCK_SUMMARY_WORDS[i % MOCK_SUMMARY_WORDS.length]}の対応 #${i + 1}`,
@@ -985,10 +1097,62 @@ function buildMockIssues(project: Project, count: number): IssueRow[] {
       priorityName: MOCK_PRIORITIES[i % MOCK_PRIORITIES.length],
       created: created.toISOString(),
       updated: updated.toISOString(),
-      dueDate: i % 3 === 0 ? '' : ymd(due),
+      dueDate,
+      customFields: buildMockCustomFields(i, dueDate),
     })
   }
   return rows
+}
+
+/**
+ * モック用: リスト系の表示文字列(選択肢名の ", " 区切り)を選択肢 ID へ戻す。
+ * Go 側は生 JSON から ID を直接取り出すが、モックは表示文字列しか持たないため
+ * マスタの選択肢名から引き当てる(既知の簡易化)。
+ */
+function mockItemIdsOf(defId: number, display: string): number[] {
+  if (display === '') return []
+  const def = MOCK_MASTER.customFields.find((f) => f.id === defId)
+  if (!def) return []
+  const names = display.split(', ')
+  return def.items.filter((it) => names.includes(it.name)).map((it) => it.id)
+}
+
+/**
+ * モック用: カスタム属性 1 条件を課題 1 件に適用する
+ * (Go 側 customfield.MatchValues の簡易版。条件内の複数指定は AND)。
+ */
+function matchMockCustomField(row: IssueRow, f: CustomFieldFilter): boolean {
+  // Go 側と同じく、表示文字列に対して判定する
+  const display = row.customFields[customColumnKey(f.defId)] ?? ''
+  const normalize = (s: string) => s.normalize('NFKC').toLowerCase()
+  const text = (f.text ?? '').trim()
+  if (text !== '' && !normalize(display).includes(normalize(text))) return false
+  if (f.min || f.max) {
+    // 未入力の値は、上限だけの条件でも一致させない(Go 側と同じ)
+    if (display === '') return false
+    if (f.typeId === CF_TYPE_NUMERIC) {
+      const n = Number(display)
+      if (Number.isNaN(n)) return false
+      if (f.min && n < Number(f.min)) return false
+      if (f.max && n > Number(f.max)) return false
+    } else {
+      // 日付(YYYY-MM-DD)は桁が揃っているため辞書順 = 時系列順
+      if (f.min && display < f.min) return false
+      if (f.max && display > f.max) return false
+    }
+  }
+  if (f.itemIds && f.itemIds.length > 0) {
+    const selected = mockItemIdsOf(f.defId, display)
+    if (!f.itemIds.some((id) => selected.includes(id))) return false
+  }
+  return true
+}
+
+/** モック検索の結果(Go 側と同じく、判定できなかった件数も返す) */
+interface MockFilterResult {
+  rows: IssueRow[]
+  /** カスタム属性を判定できなかった課題の件数(モックでは値を持たない課題) */
+  unverifiable: number
 }
 
 /**
@@ -996,7 +1160,7 @@ function buildMockIssues(project: Project, count: number): IssueRow[] {
  * Go 側は件名 + 詳細の正規化テキストを検索するが、モックデータは詳細を
  * 持たないため件名のみを対象とする(既知の簡易化)。
  */
-function filterMockIssues(rows: IssueRow[], query: IssueQuery): IssueRow[] {
+function filterMockIssues(rows: IssueRow[], query: IssueQuery): MockFilterResult {
   // Go 側(NFKC + ケースフォールド)に近づけた正規化。
   // toLowerCase は完全な Unicode ケースフォールドではない(ß ≠ ss 等)が、
   // モック(開発時のみ・日本語サンプルデータ)では十分な近似とする(既知の簡易化)
@@ -1007,7 +1171,12 @@ function filterMockIssues(rows: IssueRow[], query: IssueQuery): IssueRow[] {
     .filter((t) => t !== '')
     .map(normalize)
   const orMode = query.keywordMode === 'or'
-  return rows.filter((r) => {
+  // 条件が空のものは Go 側(ActiveFilters)と同じく無視する
+  const customFilters = (query.customFieldFilters ?? []).filter(
+    (f) => (f.text ?? '').trim() !== '' || f.min || f.max || (f.itemIds?.length ?? 0) > 0,
+  )
+  let unverifiable = 0
+  const matched = rows.filter((r) => {
     if (terms.length > 0) {
       const summary = normalize(r.summary)
       const hit = orMode
@@ -1021,8 +1190,35 @@ function filterMockIssues(rows: IssueRow[], query: IssueQuery): IssueRow[] {
     if (query.createdTo && r.created.slice(0, 10) > query.createdTo) return false
     if (query.statusName && r.statusName !== query.statusName) return false
     if (query.assigneeName && r.assigneeName !== query.assigneeName) return false
+    if (customFilters.length > 0) {
+      // 値を持たない課題は判定できない。結果には含めず件数だけ数える(Go 側と同じ)
+      if (Object.keys(r.customFields).length === 0) {
+        unverifiable += 1
+        return false
+      }
+      // カスタム属性条件は AND(Go 側の 2 段階検索と同じ結果になるようにする)
+      if (!customFilters.every((f) => matchMockCustomField(r, f))) return false
+    }
     return true
   })
+  return { rows: matched, unverifiable }
+}
+
+/**
+ * モック用: 要求された列(cf_{定義ID})のカスタム属性だけを残す。
+ * Go 側も要求された列しか詰めないため、モックでも同じ形にして
+ * 「列を選んでいないのに表示される」といった食い違いを防ぐ。
+ */
+function pickMockCustomFields(
+  values: Record<string, string>,
+  columns: string[] | undefined,
+): Record<string, string> {
+  const out: Record<string, string> = {}
+  for (const key of columns ?? []) {
+    if (!key.startsWith(CUSTOM_COLUMN_PREFIX)) continue
+    out[key] = values[key] ?? ''
+  }
+  return out
 }
 
 /** モック用のマスタデータ(実在のプロジェクト設定は含まない) */
@@ -1305,12 +1501,17 @@ function createMockBackend(): Backend {
       }
     },
 
-    async searchIssues(_profileId, query) {
+    async searchIssues(_profileId, query, columns) {
       await delay(300)
       const all = issuesByProject.get(query.projectId) ?? []
-      const matched = filterMockIssues(all, query)
+      const { rows: matched, unverifiable } = filterMockIssues(all, query)
       const limit = query.limit && query.limit > 0 ? query.limit : matched.length
-      return { rows: matched.slice(0, limit).map((r) => ({ ...r })), total: matched.length }
+      const rows = matched.slice(0, limit).map((r) => ({
+        ...r,
+        // Go 側と同じく、要求された列のカスタム属性だけを返す
+        customFields: pickMockCustomFields(r.customFields, columns),
+      }))
+      return { rows, total: matched.length, unverifiable }
     },
 
     async listFilterOptions(_profileId, projectId) {
@@ -1330,9 +1531,13 @@ function createMockBackend(): Backend {
       await delay(800)
       if (columns.length === 0) throw new Error('出力する列を 1 つ以上選択してください')
       const all = issuesByProject.get(query.projectId) ?? []
-      const matched = filterMockIssues(all, query)
+      const { rows: matched, unverifiable } = filterMockIssues(all, query)
       // モックでは保存ダイアログを出せないため、ダミーのパスを返す
-      return { path: '(モック)保存ダイアログは Wails 実行時のみ表示されます', rows: matched.length }
+      return {
+        path: '(モック)保存ダイアログは Wails 実行時のみ表示されます',
+        rows: matched.length,
+        unverifiable,
+      }
     },
 
     async syncUsers() {
@@ -1369,14 +1574,22 @@ function createMockBackend(): Backend {
       if (columns.length === 0) throw new Error('出力する列を 1 つ以上選択してください')
       const matched = filterMockUsers(users, query)
       // モックでは保存ダイアログを出せないため、ダミーのパスを返す
-      return { path: '(モック)保存ダイアログは Wails 実行時のみ表示されます', rows: matched.length }
+      return {
+        path: '(モック)保存ダイアログは Wails 実行時のみ表示されます',
+        rows: matched.length,
+        unverifiable: 0,
+      }
     },
 
     async exportBulkTemplate(_profileId, projectId) {
       await delay(700)
       const all = issuesByProject.get(projectId) ?? []
       // モックでは保存ダイアログを出せないため、ダミーのパスを返す
-      return { path: '(モック)保存ダイアログは Wails 実行時のみ表示されます', rows: all.length }
+      return {
+        path: '(モック)保存ダイアログは Wails 実行時のみ表示されます',
+        rows: all.length,
+        unverifiable: 0,
+      }
     },
 
     async importBulkFile(_profileId, projectId, defaultPriorityId) {
@@ -1576,7 +1789,11 @@ function createMockBackend(): Backend {
       await delay(600)
       const rows = jobRows.get(jobId) ?? []
       // モックでは保存ダイアログを出せないため、ダミーのパスを返す
-      return { path: '(モック)保存ダイアログは Wails 実行時のみ表示されます', rows: rows.length }
+      return {
+        path: '(モック)保存ダイアログは Wails 実行時のみ表示されます',
+        rows: rows.length,
+        unverifiable: 0,
+      }
     },
 
     async getMasterData() {

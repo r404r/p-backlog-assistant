@@ -2,9 +2,11 @@
 // 課題抽出画面。TDD 例外(GUI): フロントエンドにテスト基盤が無いため手動確認で担保する。
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import {
+  customColumnKey,
   getBackend,
   isMockBackend,
   type CustomFieldDef,
+  type CustomFieldFilter,
   type IssueQuery,
   type IssueRow,
   type Project,
@@ -35,6 +37,14 @@ interface ExportColumn {
   key: string
   label: string
 }
+
+/**
+ * カスタム属性の型 ID(Go 側 customfield の定数と対)。
+ * 絞り込み UI の入力方法(テキスト / 範囲 / 選択肢)の切り替えに使う。
+ */
+const CF_TYPE_NUMERIC = 3
+const CF_TYPE_DATE = 4
+const CF_LIST_TYPE_IDS = [5, 6, 7, 8]
 
 /** 固定の出力列(キーは IssueRow のキー。Go 側の列キーと対応) */
 const FIXED_EXPORT_COLUMNS: ExportColumn[] = [
@@ -201,6 +211,121 @@ onMounted(async () => {
 })
 
 // ---------------------------------------------------------------------------
+// カスタム属性(定義の取得・絞り込み条件・表示列)
+// ---------------------------------------------------------------------------
+
+/** 選択中プロジェクトのカスタム属性の定義(取得できない場合は空) */
+const customFields = ref<CustomFieldDef[]>([])
+
+/** カスタム属性の列(定義順。Excel 出力の列選択と一覧の表示列で共用する) */
+const customColumns = computed<ExportColumn[]>(() =>
+  customFields.value.map((f) => ({ key: customColumnKey(f.id), label: f.name })),
+)
+
+/** カスタム属性の取得失敗の表示用メッセージ(空 = 正常) */
+const customFieldsError = ref('')
+
+/** カスタム属性 1 定義ぶんの絞り込み条件(型に応じて使うフィールドが変わる) */
+interface CustomFieldCondition {
+  /** テキスト系の部分一致 */
+  text: string
+  /** 数値・日付の下限 / 上限 */
+  min: string
+  max: string
+  /** リスト系で選択した選択肢 ID */
+  itemIds: number[]
+}
+
+/** 定義 ID → 絞り込み条件。定義の取得・切替のたびに作り直す */
+const cfCond = ref<Record<number, CustomFieldCondition>>({})
+
+/** 絞り込みセクションの開閉(利用者の操作を上書きしないよう ref で保持する) */
+const cfPanelOpen = ref(false)
+
+/** カスタム属性がリスト系(選択肢から選ぶ)かを判定する。
+ * 選択肢が取れない定義は、選びようが無いのでテキストの部分一致へ縮退する。 */
+function isListField(def: CustomFieldDef): boolean {
+  return CF_LIST_TYPE_IDS.includes(def.typeId) && def.items.length > 0
+}
+
+/** 定義に合わせて条件の入れ物を作り直す(前のプロジェクトの条件を残さない) */
+function resetCustomFieldConditions() {
+  const next: Record<number, CustomFieldCondition> = {}
+  for (const f of customFields.value) {
+    next[f.id] = { text: '', min: '', max: '', itemIds: [] }
+  }
+  cfCond.value = next
+}
+
+/** 入力済みの条件だけを検索条件(Go 側 customfield.Filter)へ変換する */
+function buildCustomFieldFilters(): CustomFieldFilter[] {
+  const out: CustomFieldFilter[] = []
+  for (const def of customFields.value) {
+    const c = cfCond.value[def.id]
+    if (!c) continue
+    const filter: CustomFieldFilter = { defId: def.id, typeId: def.typeId }
+    let used = false
+    if (c.text.trim()) {
+      filter.text = c.text.trim()
+      used = true
+    }
+    if (c.min) {
+      filter.min = c.min
+      used = true
+    }
+    if (c.max) {
+      filter.max = c.max
+      used = true
+    }
+    if (c.itemIds.length > 0) {
+      filter.itemIds = [...c.itemIds]
+      used = true
+    }
+    if (used) out.push(filter)
+  }
+  return out
+}
+
+/** 指定中のカスタム属性条件の数(折りたたんだままでも指定に気づけるようにする) */
+const customFieldFilterCount = computed(() => buildCustomFieldFilters().length)
+
+/**
+ * loadCustomFields の世代番号。プロジェクトを A→B→A と素早く切り替えると
+ * projectId の比較だけでは最初の A の古い応答を弾けないため、
+ * 「最後に開始した要求」の応答だけを反映する。
+ */
+let customFieldsRequestSeq = 0
+
+/**
+ * 絞り込み・表示・出力に使うカスタム属性の定義を取得する。
+ *
+ * 未対応プラン・権限不足はバックエンド側で空配列へ縮退済みのため、
+ * ここに届く失敗は通信断等の障害。固定列の検索・出力は妨げず、
+ * 取得できなかった旨の警告と再試行の導線を表示する。
+ */
+async function loadCustomFields() {
+  const seq = ++customFieldsRequestSeq
+  // 前のプロジェクトの定義・条件・列選択が残らないようにしてから取得する
+  customFields.value = []
+  customFieldsError.value = ''
+  resetCustomFieldConditions()
+  pruneUnavailableColumns()
+  if (!profileId.value || !selectedProjectId.value) return
+  try {
+    const master = await backend.getMasterData(profileId.value, selectedProjectId.value)
+    // より新しい要求が開始済みなら、この(古い)応答は反映しない
+    if (seq !== customFieldsRequestSeq) return
+    customFields.value = master.customFields
+    resetCustomFieldConditions()
+  } catch (e) {
+    if (seq !== customFieldsRequestSeq) return
+    customFieldsError.value =
+      'カスタム属性の取得に失敗しました(固定列は検索・出力できます): ' +
+      (e instanceof Error ? e.message : String(e))
+  }
+}
+
+// ---------------------------------------------------------------------------
 // 条件フォーム
 // ---------------------------------------------------------------------------
 
@@ -260,13 +385,21 @@ async function loadFilterOptions() {
 // (初期化中の変化は扱わない。selectionInitialized の説明を参照)
 watch(selectedProjectId, () => {
   if (!selectionInitialized) return
+  // 実行中の検索・同期・出力を失効させてから片付ける。そうしないと、後から届いた
+  // 前のプロジェクトの応答が、ここで消した結果を書き戻してしまう(高 1)
+  invalidatePendingRequests()
   rows.value = []
   total.value = 0
+  unverifiable.value = 0
+  // 表示中のカスタム属性列は前のプロジェクトの定義なので一緒に片付ける
+  shownCustomColumns.value = []
   searched.value = false
   searchError.value = ''
   syncResult.value = null
   syncError.value = ''
   exportPath.value = ''
+  exportUnverifiable.value = 0
+  exportCanceled.value = false
   exportError.value = ''
   void loadFilterOptions()
   void loadCustomFields()
@@ -286,6 +419,10 @@ function buildQuery(withLimit: boolean): IssueQuery {
   if (cond.createdTo) q.createdTo = cond.createdTo
   if (cond.statusName) q.statusName = cond.statusName
   if (cond.assigneeName) q.assigneeName = cond.assigneeName
+  // 未入力のカスタム属性は送らない(空の条件を送っても Go 側で無視されるが、
+  // 送らない方が「カスタム属性条件あり」の 2 段階検索を無駄に起動させない)
+  const customFieldFilters = buildCustomFieldFilters()
+  if (customFieldFilters.length > 0) q.customFieldFilters = customFieldFilters
   if (withLimit) q.limit = PREVIEW_LIMIT
   return q
 }
@@ -299,6 +436,7 @@ function clearConditions() {
   cond.createdTo = ''
   cond.statusName = ''
   cond.assigneeName = ''
+  resetCustomFieldConditions()
 }
 
 // ---------------------------------------------------------------------------
@@ -310,22 +448,83 @@ const total = ref(0)
 const searching = ref(false)
 const searched = ref(false)
 const searchError = ref('')
+/** カスタム属性条件を判定できなかった課題の件数(0 なら警告を出さない) */
+const unverifiable = ref(0)
+
+/**
+ * search の世代番号(loadFilterOptions / loadCustomFields と同じ流儀。高 1)。
+ *
+ * プロジェクト A の検索中に B へ切り替えると、watch が結果を片付けた後に
+ * A の応答が届き、rows・カスタム属性列・件数を書き戻してしまう。
+ * 「最後に開始した要求」の応答だけを反映し、切替時は invalidateSearch で失効させる。
+ */
+let searchRequestSeq = 0
 
 /** 表示件数が上限で切り詰められているか */
 const truncated = computed(() => total.value > rows.value.length)
 
+/** 選択中のカスタム属性列(Excel 出力の列選択と共用) */
+const selectedCustomColumns = computed<ExportColumn[]>(() =>
+  customColumns.value.filter((c) => selectedColumns.value.includes(c.key)),
+)
+
+/**
+ * 結果テーブルに表示中のカスタム属性列。
+ *
+ * 検索した時点の選択を固定する。列選択を変えるたびに見出しだけ増減すると、
+ * 取得済みの行に値が無い(空欄の)列が並び、データが無いのか列が増えただけなのか
+ * 区別できなくなるため、次の検索まで見出しと値を揃えておく。
+ */
+const shownCustomColumns = ref<ExportColumn[]>([])
+
+/** 表示中の列と選択中の列がずれているか(再検索を促す案内に使う) */
+const customColumnsOutOfDate = computed(() => {
+  const shown = shownCustomColumns.value.map((c) => c.key).join(',')
+  return searched.value && shown !== selectedCustomColumns.value.map((c) => c.key).join(',')
+})
+
+/**
+ * プロジェクトに紐づく実行中の要求(検索・同期・Excel 出力)の応答を失効させる。
+ *
+ * 世代番号を進めるだけで、実行中フラグ(searching / syncing / exporting)は
+ * 下ろさない。これらの処理は実行中なら早期 return する多重起動防止付きなので、
+ * フラグは応答が届いた時点の finally で必ず下ろされる。ここで下ろしてしまうと、
+ * 前の要求が飛んでいる最中に次の要求を始められてしまう。
+ *
+ * (候補・カスタム属性の取得は複数箇所から呼ばれ多重起動しうるため、
+ *  そちらは「最新の要求だけが読込中表示を下ろす」方式を採っている)
+ */
+function invalidatePendingRequests() {
+  searchRequestSeq++
+  syncRequestSeq++
+  exportRequestSeq++
+}
+
 async function search() {
   if (!selectedProjectId.value || searching.value) return
+  const seq = ++searchRequestSeq
   searching.value = true
   searchError.value = ''
+  // 値を取得する列は「この検索の時点で選ばれている列」に固定する
+  const requestedColumns = selectedCustomColumns.value
   try {
-    const res = await backend.searchIssues(profileId.value, buildQuery(true))
+    const res = await backend.searchIssues(
+      profileId.value,
+      buildQuery(true),
+      requestedColumns.map((c) => c.key),
+    )
+    // より新しい要求が開始済み、またはプロジェクトが切り替わっていたら反映しない
+    if (seq !== searchRequestSeq) return
     rows.value = res.rows
     total.value = res.total
+    unverifiable.value = res.unverifiable
+    shownCustomColumns.value = requestedColumns
     searched.value = true
   } catch (e) {
+    if (seq !== searchRequestSeq) return
     searchError.value = `検索に失敗しました: ${errorMessage(e)}`
   } finally {
+    // 検索は多重起動しないため、失効済みの応答でもここで必ず下ろす
     searching.value = false
   }
 }
@@ -355,24 +554,33 @@ const syncing = ref(false)
 const syncResult = ref<SyncResult | null>(null)
 const syncError = ref('')
 
+/** runSync の世代番号(検索・出力と同じ理由。プロジェクト切替で失効させる) */
+let syncRequestSeq = 0
+
 const syncModeLabel = (mode: string) => (mode === 'full' ? 'フル同期' : '差分同期')
 
 async function runSync() {
   if (!selectedProjectId.value || syncing.value) return
+  const seq = ++syncRequestSeq
   syncing.value = true
   syncError.value = ''
   syncResult.value = null
   try {
-    syncResult.value = await backend.syncIssues(
+    const result = await backend.syncIssues(
       profileId.value,
       selectedProjectId.value,
       syncMode.value,
     )
+    // プロジェクト切替後なら、前のプロジェクトの同期結果は表示しない
+    if (seq !== syncRequestSeq) return
+    syncResult.value = result
     await loadProjects() // 鮮度表示を更新
     await loadFilterOptions()
   } catch (e) {
+    if (seq !== syncRequestSeq) return
     syncError.value = `同期に失敗しました: ${errorMessage(e)}`
   } finally {
+    // 同期は多重起動しないため、失効済みの応答でもここで必ず下ろす
     syncing.value = false
   }
 }
@@ -380,20 +588,6 @@ async function runSync() {
 // ---------------------------------------------------------------------------
 // Excel 出力
 // ---------------------------------------------------------------------------
-
-/** カスタム属性列の列キーの接頭辞(Go 側 export パッケージの規約 cf_{定義ID} と対) */
-const CUSTOM_COLUMN_PREFIX = 'cf_'
-
-/** カスタム属性の定義 ID から列キーを作る */
-const customColumnKey = (defId: number) => `${CUSTOM_COLUMN_PREFIX}${defId}`
-
-/** 選択中プロジェクトのカスタム属性の定義(取得できない場合は空) */
-const customFields = ref<CustomFieldDef[]>([])
-
-/** カスタム属性の出力列(定義順) */
-const customColumns = computed<ExportColumn[]>(() =>
-  customFields.value.map((f) => ({ key: customColumnKey(f.id), label: f.name })),
-)
 
 /** 出力できる列(固定列 + カスタム属性列) */
 const exportColumns = computed<ExportColumn[]>(() => [
@@ -404,43 +598,6 @@ const exportColumns = computed<ExportColumn[]>(() => [
 // 既定はカスタム属性列オフ(固定列のみ)
 const selectedColumns = ref<string[]>(FIXED_EXPORT_COLUMNS.map((c) => c.key))
 
-/** カスタム属性の取得失敗の表示用メッセージ(空 = 正常) */
-const customFieldsError = ref('')
-
-/**
- * loadCustomFields の世代番号。プロジェクトを A→B→A と素早く切り替えると
- * projectId の比較だけでは最初の A の古い応答を弾けないため、
- * 「最後に開始した要求」の応答だけを反映する。
- */
-let customFieldsRequestSeq = 0
-
-/**
- * 出力列に載せるカスタム属性の定義を取得する。
- *
- * 未対応プラン・権限不足はバックエンド側で空配列へ縮退済みのため、
- * ここに届く失敗は通信断等の障害。固定列の出力は妨げず、
- * 取得できなかった旨の警告と再試行の導線を表示する。
- */
-async function loadCustomFields() {
-  const seq = ++customFieldsRequestSeq
-  // 前のプロジェクトの列が選択に残らないようにしてから取得する
-  customFields.value = []
-  customFieldsError.value = ''
-  pruneUnavailableColumns()
-  if (!profileId.value || !selectedProjectId.value) return
-  try {
-    const master = await backend.getMasterData(profileId.value, selectedProjectId.value)
-    // より新しい要求が開始済みなら、この(古い)応答は反映しない
-    if (seq !== customFieldsRequestSeq) return
-    customFields.value = master.customFields
-  } catch (e) {
-    if (seq !== customFieldsRequestSeq) return
-    customFieldsError.value =
-      'カスタム属性の取得に失敗しました(固定列は出力できます): ' +
-      (e instanceof Error ? e.message : String(e))
-  }
-}
-
 /** 選択済みの列から、現在は選択できない列(切替前のカスタム属性列)を外す */
 function pruneUnavailableColumns() {
   const available = new Set(exportColumns.value.map((c) => c.key))
@@ -450,8 +607,16 @@ function pruneUnavailableColumns() {
 const exporting = ref(false)
 const exportPath = ref('')
 const exportRows = ref(0)
+const exportUnverifiable = ref(0)
 const exportCanceled = ref(false)
 const exportError = ref('')
+
+/**
+ * exportExcel の世代番号(検索と同じ理由。高 1)。
+ * 保存ダイアログを開いている間にプロジェクトを切り替えると、切替後の画面へ
+ * 前のプロジェクトの出力結果・エラーが表示されてしまうため。
+ */
+let exportRequestSeq = 0
 
 const canExport = computed(
   () => !!selectedProjectId.value && selectedColumns.value.length > 0 && !exporting.value,
@@ -459,9 +624,11 @@ const canExport = computed(
 
 async function exportExcel() {
   if (!canExport.value) return
+  const seq = ++exportRequestSeq
   exporting.value = true
   exportError.value = ''
   exportPath.value = ''
+  exportUnverifiable.value = 0
   exportCanceled.value = false
   try {
     // 表示上限は付けない(条件に一致する全件を出力する)
@@ -469,15 +636,20 @@ async function exportExcel() {
       .filter((c) => selectedColumns.value.includes(c.key))
       .map((c) => c.key)
     const res = await backend.exportIssuesExcel(profileId.value, buildQuery(false), columns)
+    // プロジェクト切替後(または再実行後)なら、古い結果は表示しない
+    if (seq !== exportRequestSeq) return
     if (!res.path) {
       exportCanceled.value = true
     } else {
       exportPath.value = res.path
       exportRows.value = res.rows
+      exportUnverifiable.value = res.unverifiable
     }
   } catch (e) {
+    if (seq !== exportRequestSeq) return
     exportError.value = `Excel 出力に失敗しました: ${errorMessage(e)}`
   } finally {
+    // Excel 出力は多重起動しないため、失効済みの応答でもここで必ず下ろす
     exporting.value = false
   }
 }
@@ -651,6 +823,77 @@ async function exportExcel() {
           状態・担当者の候補は同期済みの課題から作成されます。同期後に選択できるようになります。
         </p>
 
+        <!-- カスタム属性の絞り込み(定義があるプロジェクトでのみ表示) -->
+        <details
+          v-if="customFields.length > 0"
+          class="cf-filters"
+          :open="cfPanelOpen"
+          @toggle="cfPanelOpen = ($event.target as HTMLDetailsElement).open"
+        >
+          <summary>
+            カスタム属性で絞り込む
+            <span v-if="customFieldFilterCount > 0" class="cf-count">
+              ({{ customFieldFilterCount }} 件指定中)
+            </span>
+          </summary>
+
+          <div v-for="def in customFields" :key="def.id" class="row cf-row">
+            <label :for="`i-cf-${def.id}`">{{ def.name }}</label>
+            <template v-if="cfCond[def.id]">
+              <!-- リスト系: 選択肢の複数選択(いずれか一致) -->
+              <template v-if="isListField(def)">
+                <label v-for="it in def.items" :key="it.id" class="checkbox">
+                  <input v-model="cfCond[def.id].itemIds" type="checkbox" :value="it.id" />
+                  {{ it.name }}
+                </label>
+              </template>
+              <!-- 数値: 範囲 -->
+              <template v-else-if="def.typeId === CF_TYPE_NUMERIC">
+                <input
+                  :id="`i-cf-${def.id}`"
+                  v-model="cfCond[def.id].min"
+                  type="number"
+                  step="any"
+                  class="narrow"
+                  placeholder="下限"
+                />
+                <span>〜</span>
+                <input
+                  v-model="cfCond[def.id].max"
+                  type="number"
+                  step="any"
+                  class="narrow"
+                  placeholder="上限"
+                />
+              </template>
+              <!-- 日付: 範囲 -->
+              <template v-else-if="def.typeId === CF_TYPE_DATE">
+                <input :id="`i-cf-${def.id}`" v-model="cfCond[def.id].min" type="date" />
+                <span>〜</span>
+                <input v-model="cfCond[def.id].max" type="date" />
+              </template>
+              <!-- 文字列・文章(選択肢が取れないリスト系を含む): 部分一致 -->
+              <template v-else>
+                <input
+                  :id="`i-cf-${def.id}`"
+                  v-model="cfCond[def.id].text"
+                  type="text"
+                  class="wide"
+                  placeholder="部分一致"
+                />
+              </template>
+            </template>
+          </div>
+
+          <p class="hint">
+            複数のカスタム属性を指定した場合はすべてを満たす課題(AND)が対象です。
+            選択肢はいずれか 1 つに一致すれば対象になります。値が未入力の課題は、
+            範囲や部分一致を指定した属性では対象外になります。
+            絞り込みは同期済みのローカルデータに対して行われるため、
+            件数の多いプロジェクトでは他の条件より時間がかかることがあります。
+          </p>
+        </details>
+
         <div class="row buttons">
           <button class="primary" :disabled="searching || !selectedProjectId" @click="search">
             {{ searching ? '検索中...' : '検索' }}
@@ -672,6 +915,15 @@ async function exportExcel() {
           画面表示は {{ PREVIEW_LIMIT }} 件までです。Excel には条件に一致する全 {{ total }} 件が出力されます。
         </p>
 
+        <p v-if="unverifiable > 0" class="notice warn">
+          {{ unverifiable }} 件はローカルの課題データが古く、カスタム属性の条件を判定できませんでした
+          (上の該当件数には含まれていません)。フル同期を実行すると解消します。
+        </p>
+
+        <p v-if="customColumnsOutOfDate" class="hint warn">
+          カスタム属性の列選択が変わりました。表示に反映するには再度検索してください。
+        </p>
+
         <p v-if="rows.length === 0" class="notice">条件に一致する課題はありませんでした。</p>
 
         <div v-else class="table-wrap">
@@ -687,6 +939,8 @@ async function exportExcel() {
                 <th>作成日</th>
                 <th>更新日</th>
                 <th>期限</th>
+                <!-- カスタム属性列は「Excel 出力」の列選択に連動する -->
+                <th v-for="c in shownCustomColumns" :key="c.key">{{ c.label }}</th>
               </tr>
             </thead>
             <tbody>
@@ -700,10 +954,15 @@ async function exportExcel() {
                 <td class="nowrap">{{ formatDateTime(r.created) }}</td>
                 <td class="nowrap">{{ formatDateTime(r.updated) }}</td>
                 <td class="nowrap">{{ r.dueDate || '-' }}</td>
+                <td v-for="c in shownCustomColumns" :key="c.key">{{ r.customFields[c.key] }}</td>
               </tr>
             </tbody>
           </table>
         </div>
+
+        <p v-if="customColumns.length > 0" class="hint">
+          一覧に表示するカスタム属性は、下の「Excel 出力」で選んだ列に連動します。
+        </p>
       </section>
 
       <!-- Excel 出力 -->
@@ -717,7 +976,9 @@ async function exportExcel() {
           </label>
         </div>
         <template v-if="customColumns.length > 0">
-          <p class="hint">カスタム属性(既定では出力しません)</p>
+          <p class="hint">
+            カスタム属性(既定では出力しません)。ここで選んだ列は検索結果の一覧にも表示されます。
+          </p>
           <div class="columns">
             <label v-for="c in customColumns" :key="c.key" class="checkbox">
               <input v-model="selectedColumns" type="checkbox" :value="c.key" />
@@ -741,6 +1002,10 @@ async function exportExcel() {
         <div v-if="exportPath" class="result ok">
           <p class="result-title">Excel 出力が完了しました({{ exportRows }} 件)</p>
           <p class="path">{{ exportPath }}</p>
+          <p v-if="exportUnverifiable > 0" class="warnings">
+            {{ exportUnverifiable }} 件はローカルの課題データが古く、カスタム属性の条件を判定できず
+            出力に含まれていません。フル同期を実行すると解消します。
+          </p>
         </div>
       </section>
     </template>
@@ -842,6 +1107,39 @@ select {
 
 input.wide {
   width: 320px;
+}
+
+input.narrow {
+  width: 120px;
+}
+
+/* カスタム属性の絞り込み(折りたたみ) */
+.cf-filters {
+  border: 1px solid #d0d7de;
+  border-radius: 4px;
+  padding: 0.5rem 0.75rem;
+  margin-bottom: 0.75rem;
+  background: #f6f8fa;
+}
+
+.cf-filters > summary {
+  cursor: pointer;
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+.cf-filters[open] > summary {
+  margin-bottom: 0.75rem;
+}
+
+.cf-count {
+  font-weight: 400;
+  color: #0b5cad;
+}
+
+/* 属性名は幅を揃えて、入力欄の左端を縦に並べる */
+.cf-row > label {
+  min-width: 10rem;
 }
 
 input:disabled,

@@ -666,6 +666,36 @@ func TestHasCustomColumns(t *testing.T) {
 	}
 }
 
+// TestCustomColumnIDs は列キー列からカスタム属性の定義 ID を取り出せることを確認する
+// (画面プレビューに載せる列を app.go が判断するために使う。CF4)。
+func TestCustomColumnIDs(t *testing.T) {
+	cases := []struct {
+		name string
+		keys []string
+		want []int64
+	}{
+		{"カスタム列なし", []string{"issueKey", "summary"}, nil},
+		{"混在(指定順を保つ)", []string{"issueKey", "cf_202", "summary", "cf_101"}, []int64{202, 101}},
+		{"接頭辞が一致するだけの列は拾わない", []string{"cfx_101"}, nil},
+		{"ID が数値でない列は拾わない", []string{"cf_abc"}, nil},
+		{"重複は 1 度だけ", []string{"cf_101", "cf_101"}, []int64{101}},
+		{"nil", nil, nil},
+	}
+	for _, c := range cases {
+		got := CustomColumnIDs(c.keys)
+		if len(got) != len(c.want) {
+			t.Errorf("%s: CustomColumnIDs(%v) = %v, want %v", c.name, c.keys, got, c.want)
+			continue
+		}
+		for i := range got {
+			if got[i] != c.want[i] {
+				t.Errorf("%s: CustomColumnIDs(%v) = %v, want %v", c.name, c.keys, got, c.want)
+				break
+			}
+		}
+	}
+}
+
 // equalStrings は文字列スライスの一致を判定する。
 func equalStrings(a, b []string) bool {
 	if len(a) != len(b) {

@@ -153,6 +153,26 @@ func HasCustomColumns(keys []string) bool {
 	return false
 }
 
+// CustomColumnIDs は列キー列からカスタム属性の定義 ID を指定順に取り出す
+// (固定列・カスタム属性以外の列は無視。同じ ID は 1 度だけ)。
+//
+// 画面プレビュー(App.SearchIssues)が「どのカスタム属性の値を返すか」を
+// 決めるために使う。cf_{定義ID} という列キーの規約をこのパッケージに閉じたまま、
+// 呼び出し側が Excel 出力と同じ列指定を使い回せるようにする。
+func CustomColumnIDs(keys []string) []int64 {
+	var out []int64
+	seen := make(map[int64]bool, len(keys))
+	for _, k := range keys {
+		id, ok := parseCustomColumnKey(k)
+		if !ok || seen[id] {
+			continue
+		}
+		seen[id] = true
+		out = append(out, id)
+	}
+	return out
+}
+
 // parseCustomColumnKey は列キーからカスタム属性の定義 ID を取り出す。
 // 接頭辞が無い・ID が数値でない場合は ok=false(固定列として扱われ、
 // 最終的に ErrUnknownColumn になる)。

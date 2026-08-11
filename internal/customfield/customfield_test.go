@@ -112,6 +112,63 @@ func TestParseValues_MissingOrNullCustomFields(t *testing.T) {
 	}
 }
 
+// TestParseValuesDetail_HasCustomFields は「customFields キーが配列として
+// 存在したか」を区別できることを確認する。
+//
+// 空配列 [] はプラン未対応・属性 0 件のプロジェクトの正常応答だが、
+// キーの欠落・null は同期データが古い(customFields を保存していない頃の生 JSON)
+// 可能性がある。絞り込みでは前者を「値なし」、後者を「判定不能」として扱うため、
+// この 2 つを取り違えないことが重要。
+func TestParseValuesDetail_HasCustomFields(t *testing.T) {
+	cases := []struct {
+		name       string
+		raw        string
+		wantHas    bool
+		wantValues int
+	}{
+		{"空配列(属性 0 件の正常応答)", `{"id":101,"customFields":[]}`, true, 0},
+		{"値あり", `{"id":101,"customFields":[{"id":1,"fieldTypeId":1,"value":"あ"}]}`, true, 1},
+		{"キーが無い", `{"id":101,"issueKey":"EXA-1"}`, false, 0},
+		{"null", `{"id":101,"customFields":null}`, false, 0},
+		{"空オブジェクト", `{}`, false, 0},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got, err := ParseValuesDetail(c.raw)
+			if err != nil {
+				t.Fatalf("エラーになった: %v", err)
+			}
+			if got.HasCustomFields != c.wantHas {
+				t.Errorf("HasCustomFields = %v, want %v", got.HasCustomFields, c.wantHas)
+			}
+			if got.Values == nil {
+				t.Fatal("Values が nil(空スライスを返すこと)")
+			}
+			if len(got.Values) != c.wantValues {
+				t.Errorf("件数 = %d, want %d", len(got.Values), c.wantValues)
+			}
+			// ParseValues は従来どおりの結果(互換を壊さない)
+			values, err := ParseValues(c.raw)
+			if err != nil {
+				t.Fatalf("ParseValues がエラーになった: %v", err)
+			}
+			if len(values) != c.wantValues {
+				t.Errorf("ParseValues の件数 = %d, want %d", len(values), c.wantValues)
+			}
+		})
+	}
+}
+
+// TestParseValuesDetail_BrokenJSON は壊れた JSON が
+// ParseValues と同じくエラーになることを確認する。
+func TestParseValuesDetail_BrokenJSON(t *testing.T) {
+	for _, raw := range []string{"", "{壊れた JSON", `{"customFields":{"id":1}}`} {
+		if _, err := ParseValuesDetail(raw); err == nil {
+			t.Errorf("ParseValuesDetail(%q) がエラーにならなかった", raw)
+		}
+	}
+}
+
 // TestParseValues_NullValues は値が null の属性でも落ちず、空文字になることを確認する。
 func TestParseValues_NullValues(t *testing.T) {
 	raw := `{"customFields":[
