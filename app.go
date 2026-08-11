@@ -106,6 +106,45 @@ func (a *App) GetLogInfo() (*LogInfo, error) {
 	return &LogInfo{Path: a.log.Path(), Enabled: a.log.Enabled()}, nil
 }
 
+// StorageInfo は保存データの所在(frontend/src/lib/backend.ts の StorageInfo と対)。
+// 設定・ローカル DB(service 層が解決)と動作ログ(applog)を 1 つにまとめ、
+// 画面側の呼び出しを 1 回で済ませる。
+type StorageInfo struct {
+	ConfigDir string                 `json:"configDir"`
+	Databases []service.DatabaseInfo `json:"databases"`
+	// LogPath / LogEnabled は GetLogInfo と同じ情報(アプリ情報画面での再取得を避ける)
+	LogPath    string `json:"logPath"`
+	LogEnabled bool   `json:"logEnabled"`
+}
+
+// GetStorageInfo は設定ディレクトリ・プロファイルごとのローカル DB・動作ログの
+// 所在を返す(アプリ情報画面の「保存データ」表示用)。
+//
+// 動作ログにはパスを記録しない(パスにはユーザ名が含まれうるため。既存の
+// maskPathInError と同じ方針)。記録するのは件数と有効・無効のみ。
+func (a *App) GetStorageInfo() (*StorageInfo, error) {
+	const op = "GetStorageInfo"
+	a.logStart(op)
+	s, err := a.svc()
+	if err != nil {
+		a.logEnd(op, err)
+		return nil, err
+	}
+	info, err := s.GetStorageInfo()
+	if err != nil {
+		a.logEnd(op, err)
+		return nil, err
+	}
+	out := &StorageInfo{
+		ConfigDir:  info.ConfigDir,
+		Databases:  info.Databases,
+		LogPath:    a.log.Path(),
+		LogEnabled: a.log.Enabled(),
+	}
+	a.logEnd(op, nil, slog.Int("count", len(out.Databases)), slog.Bool("logEnabled", out.LogEnabled))
+	return out, nil
+}
+
 // AppVersionInfo はアプリのバージョン情報(frontend/src/lib/backend.ts の AppVersion と対)。
 type AppVersionInfo struct {
 	Version string `json:"version"`

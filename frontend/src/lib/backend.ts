@@ -433,6 +433,35 @@ export interface LogInfo {
   enabled: boolean
 }
 
+/** 1 プロファイル分のローカル DB の所在(Go 側 service.DatabaseInfo と対) */
+export interface StorageDatabase {
+  profileId: string
+  profileName: string
+  /** DB ファイルのパス(未接続・URL 不正で特定できない場合は空文字) */
+  path: string
+  /** DB 本体 + WAL + SHM のうち存在するファイルの合計バイト数(未作成なら 0) */
+  sizeBytes: number
+  /** DB 本体(.db)が作成済みか。WAL / SHM のみ残存の場合は false */
+  exists: boolean
+  /**
+   * 所在・サイズを確認できなかった理由(正常時は空文字)。
+   * 「未作成」(exists = false・error = 空)とは区別して表示すること。
+   */
+  error: string
+}
+
+/** 保存データの所在(Go 側 main.StorageInfo と対) */
+export interface StorageInfo {
+  /** 設定ファイル(config.json)の置き場所 */
+  configDir: string
+  /** プロファイルごとのローカル DB */
+  databases: StorageDatabase[]
+  /** 動作ログのパス(無効な場合は空文字) */
+  logPath: string
+  /** 動作ログが有効かどうか */
+  logEnabled: boolean
+}
+
 // ---------------------------------------------------------------------------
 // バックエンドインターフェース
 // ---------------------------------------------------------------------------
@@ -557,6 +586,11 @@ export interface Backend {
   /** 動作ログの出力先パスと有効・無効を返す */
   getLogInfo(): Promise<LogInfo>
 
+  // --- 保存データ -----------------------------------------------------------
+
+  /** 設定ディレクトリ・ローカル DB・動作ログの所在を返す(アプリ情報画面用) */
+  getStorageInfo(): Promise<StorageInfo>
+
   // --- レート制限 -----------------------------------------------------------
 
   /**
@@ -610,6 +644,7 @@ interface WailsApp {
   ExportBulkResultExcel(profileId: string, jobId: number): Promise<ExportResult>
   GetMasterData(profileId: string, projectId: number): Promise<MasterData>
   GetLogInfo(): Promise<LogInfo>
+  GetStorageInfo(): Promise<StorageInfo>
   GetRateLimitStatus(profileId: string): Promise<RateLimitStatus>
   GetAppVersion(): Promise<AppVersion>
 }
@@ -785,6 +820,30 @@ function createWailsBackend(app: WailsApp): Backend {
       if (typeof app.GetLogInfo !== 'function') return { path: '', enabled: false }
       const r = await app.GetLogInfo()
       return { path: r?.path ?? '', enabled: r?.enabled ?? false }
+    },
+    getStorageInfo: async () => {
+      // 旧バージョンのバインディング(GetStorageInfo 未実装)では空データを
+      // 返さない(「プロファイルなし・ログ無効」と誤読させるため)。
+      // 呼び出し側のエラー表示に載せる。
+      if (typeof app.GetStorageInfo !== 'function') {
+        throw new Error(
+          '保存データの情報はこのバージョンのアプリでは取得できません(アプリを更新してください)',
+        )
+      }
+      const r = await app.GetStorageInfo()
+      return {
+        configDir: r?.configDir ?? '',
+        databases: (r?.databases ?? []).map((d) => ({
+          profileId: d?.profileId ?? '',
+          profileName: d?.profileName ?? '',
+          path: d?.path ?? '',
+          sizeBytes: d?.sizeBytes ?? 0,
+          exists: d?.exists ?? false,
+          error: d?.error ?? '',
+        })),
+        logPath: r?.logPath ?? '',
+        logEnabled: r?.logEnabled ?? false,
+      }
     },
     getRateLimitStatus: async (profileId) => {
       const r = await app.GetRateLimitStatus(profileId)
@@ -1511,6 +1570,25 @@ function createMockBackend(): Backend {
       await delay(50)
       // モックでは実ファイルを作らないため、ダミーのパスを返す
       return { path: '(モック)logs/backlog-assistant-YYYYMMDD.log', enabled: true }
+    },
+
+    async getStorageInfo() {
+      await delay(50)
+      // モックでは実ファイルを作らないため、ダミーのパス・サイズを返す
+      return {
+        configDir: '(モック)~/.config/backlog-assistant',
+        databases: profiles.map((p, i) => ({
+          profileId: p.id,
+          profileName: p.name,
+          path: `(モック)~/.config/backlog-assistant/data/mock-${i + 1}.backlog.jp_42.db`,
+          // 先頭のプロファイルだけ作成済みに見せる(未作成表示も確認できるようにする)
+          sizeBytes: i === 0 ? 3_145_728 : 0,
+          exists: i === 0,
+          error: '',
+        })),
+        logPath: '(モック)logs/backlog-assistant-YYYYMMDD.log',
+        logEnabled: true,
+      }
     },
 
     async getAppVersion() {
