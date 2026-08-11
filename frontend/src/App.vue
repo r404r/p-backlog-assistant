@@ -1,5 +1,7 @@
 <script lang="ts" setup>
-import { onErrorCaptured, ref, type Component } from 'vue'
+// アプリ外枠(サイドバー + コンテンツ)。TDD 例外(GUI): フロントエンドにテスト基盤が
+// 無いため手動確認で担保する。
+import { computed, onErrorCaptured, ref, type Component } from 'vue'
 import SettingsView from './views/SettingsView.vue'
 import IssuesView from './views/IssuesView.vue'
 import BulkUpdateView from './views/BulkUpdateView.vue'
@@ -11,16 +13,46 @@ type ScreenId = 'settings' | 'issues' | 'bulkUpdate' | 'users' | 'syncStatus'
 interface Screen {
   id: ScreenId
   label: string
+  /** サイドバー折りたたみ時に表示する 1〜2 文字の短縮ラベル */
+  short: string
   component: Component
 }
 
 const screens: Screen[] = [
-  { id: 'settings', label: '接続設定', component: SettingsView },
-  { id: 'issues', label: '課題抽出', component: IssuesView },
-  { id: 'bulkUpdate', label: '一括更新・追加', component: BulkUpdateView },
-  { id: 'users', label: 'ユーザ抽出', component: UsersView },
-  { id: 'syncStatus', label: '同期状態', component: SyncStatusView },
+  { id: 'settings', label: '接続設定', short: '接', component: SettingsView },
+  { id: 'issues', label: '課題抽出', short: '課', component: IssuesView },
+  { id: 'bulkUpdate', label: '一括更新・追加', short: '一', component: BulkUpdateView },
+  { id: 'users', label: 'ユーザ抽出', short: 'ユ', component: UsersView },
+  { id: 'syncStatus', label: '同期状態', short: '同', component: SyncStatusView },
 ]
+
+/** サイドバーの折りたたみ状態の保存先(次回起動時も維持する) */
+const SIDEBAR_COLLAPSED_KEY = 'ba.sidebarCollapsed'
+
+function loadCollapsed(): boolean {
+  // localStorage は WebView の設定によっては参照時に例外になり得るため、
+  // 失敗しても既定値(展開)で起動を継続する。
+  try {
+    return localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === '1'
+  } catch {
+    return false
+  }
+}
+
+const collapsed = ref(loadCollapsed())
+
+const toggleTitle = computed(() =>
+  collapsed.value ? 'メニューを展開する' : 'メニューを折りたたむ',
+)
+
+function toggleSidebar(): void {
+  collapsed.value = !collapsed.value
+  try {
+    localStorage.setItem(SIDEBAR_COLLAPSED_KEY, collapsed.value ? '1' : '0')
+  } catch {
+    // 保存できなくても表示の切り替え自体は成立するため無視する
+  }
+}
 
 // 初期表示は接続設定。初回起動(プロファイル 0 件)時は SettingsView 側が
 // ウィザード表示になる。他画面が未実装のため、プロファイル有無に関わらず
@@ -38,15 +70,29 @@ onErrorCaptured((err) => {
 
 <template>
   <div class="layout">
-    <nav class="sidebar">
-      <div class="app-title">Backlog Assistant</div>
+    <nav class="sidebar" :class="{ collapsed }">
+      <button
+        class="sidebar-toggle"
+        type="button"
+        :title="toggleTitle"
+        :aria-label="toggleTitle"
+        :aria-expanded="!collapsed"
+        @click="toggleSidebar"
+      >
+        ≡
+      </button>
+      <div class="app-title" title="Backlog Assistant">
+        {{ collapsed ? 'BA' : 'Backlog Assistant' }}
+      </div>
       <ul>
         <li v-for="s in screens" :key="s.id">
           <button
             :class="{ active: current === s.id }"
+            :title="s.label"
+            :aria-label="s.label"
             @click="((current = s.id), (fatalError = ''))"
           >
-            {{ s.label }}
+            {{ collapsed ? s.short : s.label }}
           </button>
         </li>
       </ul>
@@ -67,6 +113,7 @@ onErrorCaptured((err) => {
 .layout {
   display: flex;
   height: 100vh;
+  width: 100%;
   overflow: hidden;
 }
 
@@ -77,6 +124,35 @@ onErrorCaptured((err) => {
   border-right: 1px solid #d0d7de;
   padding: 1rem 0;
   box-sizing: border-box;
+  overflow: hidden;
+  transition: width 0.2s ease;
+}
+
+.sidebar.collapsed {
+  width: 48px;
+}
+
+/* 折りたたみトグル。折りたたみ時は中央寄せにして 48px 幅に収める */
+.sidebar-toggle {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 0 1rem 0.5rem;
+  border: none;
+  background: transparent;
+  font-size: 1.15rem;
+  line-height: 1.2;
+  color: #57606a;
+  cursor: pointer;
+}
+
+.sidebar-toggle:hover {
+  color: #1f2328;
+}
+
+.sidebar.collapsed .sidebar-toggle {
+  text-align: center;
+  padding: 0 0 0.5rem;
 }
 
 .app-title {
@@ -84,6 +160,12 @@ onErrorCaptured((err) => {
   font-size: 1rem;
   padding: 0 1rem 1rem;
   color: #1f2328;
+  white-space: nowrap;
+}
+
+.sidebar.collapsed .app-title {
+  padding: 0 0 1rem;
+  text-align: center;
 }
 
 .sidebar ul {
@@ -95,6 +177,7 @@ onErrorCaptured((err) => {
 .sidebar li button {
   display: block;
   width: 100%;
+  box-sizing: border-box; /* アクティブ罫線がサイドバー外へはみ出さないように */
   text-align: left;
   padding: 0.55rem 1rem;
   border: none;
@@ -102,6 +185,13 @@ onErrorCaptured((err) => {
   font-size: 0.95rem;
   color: #1f2328;
   cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.sidebar.collapsed li button {
+  text-align: center;
+  padding: 0.55rem 0;
 }
 
 .sidebar li button:hover {
@@ -114,12 +204,24 @@ onErrorCaptured((err) => {
   border-right: 3px solid #0b5cad;
 }
 
+/* 残り幅を全て使う。min-width: 0 が無いと中身の広いテーブルで
+   フレックス項目が縮まずウインドウ外にはみ出す。 */
 .content {
-  flex: 1;
+  flex: 1 1 auto;
+  min-width: 0;
   overflow-y: auto;
+  /* 固定幅の入力欄などが狭いウインドウで操作不能にならないよう、
+     クリップではなく横スクロールで逃がす */
+  overflow-x: auto;
   padding: 1.5rem 2rem;
   box-sizing: border-box;
   background: #fff;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sidebar {
+    transition: none;
+  }
 }
 </style>
 

@@ -289,30 +289,32 @@ async function confirmDelete() {
       <!-- プロファイル一覧 -->
       <section v-if="profiles.length > 0" class="profile-list">
         <h2>プロファイル一覧</h2>
-        <table>
-          <thead>
-            <tr>
-              <th>プロファイル名</th>
-              <th>スペース URL</th>
-              <th>接続ユーザ</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="p in profiles" :key="p.id" :class="{ active: p.id === activeProfileId }">
-              <td>
-                {{ p.name }}
-                <span v-if="p.id === activeProfileId" class="badge">接続中</span>
-              </td>
-              <td>{{ p.spaceUrl }}</td>
-              <td>{{ p.lastUserName || '未接続' }}</td>
-              <td class="actions">
-                <button @click="openEditForm(p)">変更</button>
-                <button class="danger" @click="openDeleteDialog(p)">削除</button>
-              </td>
-            </tr>
-          </tbody>
-        </table>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>プロファイル名</th>
+                <th>スペース URL</th>
+                <th>接続ユーザ</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="p in profiles" :key="p.id" :class="{ active: p.id === activeProfileId }">
+                <td>
+                  {{ p.name }}
+                  <span v-if="p.id === activeProfileId" class="badge">接続中</span>
+                </td>
+                <td>{{ p.spaceUrl }}</td>
+                <td>{{ p.lastUserName || '未接続' }}</td>
+                <td class="actions">
+                  <button @click="openEditForm(p)">変更</button>
+                  <button class="danger" @click="openDeleteDialog(p)">削除</button>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
         <div class="list-footer">
           <button @click="openCreateForm">新規登録</button>
         </div>
@@ -436,8 +438,11 @@ async function confirmDelete() {
 </template>
 
 <style scoped>
+/* ウインドウ幅に追従させる(右側に空白を作らない) */
 .settings {
-  max-width: 760px;
+  max-width: none;
+  width: 100%;
+  box-sizing: border-box;
 }
 
 h1 {
@@ -477,6 +482,12 @@ section {
 
 .selector-row select {
   min-width: 280px;
+}
+
+/* 幅が足りないときだけ横スクロールさせる(パネル自体は全幅を保つ) */
+.table-wrap {
+  width: 100%;
+  overflow-x: auto;
 }
 
 .profile-list table {

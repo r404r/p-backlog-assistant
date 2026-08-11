@@ -565,8 +565,11 @@ async function exportExcel() {
 </template>
 
 <style scoped>
+/* ウインドウ幅に追従させる(右側に空白を作らない) */
 .issues {
-  max-width: 960px;
+  max-width: none;
+  width: 100%;
+  box-sizing: border-box;
 }
 
 h1 {

@@ -872,8 +872,11 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
+/* ウインドウ幅に追従させる(右側に空白を作らない) */
 .bulk {
-  max-width: 1040px;
+  max-width: none;
+  width: 100%;
+  box-sizing: border-box;
 }
 
 h1 {

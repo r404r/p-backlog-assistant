@@ -290,24 +290,26 @@ async function runProjectSync() {
           同期の記録がありません。下の「手動同期」から同期を実行してください。
         </p>
 
-        <table v-else>
-          <thead>
-            <tr>
-              <th>データ種別</th>
-              <th>プロジェクト</th>
-              <th>最終同期時刻</th>
-              <th>経過</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="s in states" :key="`${s.dataKind}-${s.projectId}`">
-              <td>{{ dataKindLabel(s.dataKind) }}</td>
-              <td>{{ projectLabel(s.projectId) }}</td>
-              <td>{{ s.lastSyncedAt ? formatDateTime(s.lastSyncedAt) : '未同期' }}</td>
-              <td>{{ s.lastSyncedAt ? formatElapsed(s.lastSyncedAt) : '-' }}</td>
-            </tr>
-          </tbody>
-        </table>
+        <div v-else class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>データ種別</th>
+                <th>プロジェクト</th>
+                <th>最終同期時刻</th>
+                <th>経過</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="s in states" :key="`${s.dataKind}-${s.projectId}`">
+                <td>{{ dataKindLabel(s.dataKind) }}</td>
+                <td>{{ projectLabel(s.projectId) }}</td>
+                <td>{{ s.lastSyncedAt ? formatDateTime(s.lastSyncedAt) : '未同期' }}</td>
+                <td>{{ s.lastSyncedAt ? formatElapsed(s.lastSyncedAt) : '-' }}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
 
         <div class="row buttons">
           <button :disabled="busy" @click="reload">再読込</button>
@@ -384,32 +386,34 @@ async function runProjectSync() {
       <!-- レート制限の残量(観測値のみ。10 秒間隔で自動更新) -->
       <section class="panel">
         <h2>レート制限の残量</h2>
-        <table v-if="rateLimit" class="rate-table">
-          <thead>
-            <tr>
-              <th>区分</th>
-              <th>残量 / 上限(毎分)</th>
-              <th>リセット時刻</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="c in rateLimit.categories" :key="c.name">
-              <td>{{ RATE_CATEGORY_LABELS[c.name] ?? c.name }}</td>
-              <template v-if="c.observed">
-                <td>
-                  <span :class="{ 'rate-low': c.limit > 0 && c.remaining < c.limit * 0.2 }">
-                    {{ c.remaining }}
-                  </span>
-                  / {{ c.limit }}
-                </td>
-                <td>{{ formatResetTime(c.resetUnix) }}</td>
-              </template>
-              <template v-else>
-                <td colspan="2" class="rate-unknown">未取得(API 利用後に表示されます)</td>
-              </template>
-            </tr>
-          </tbody>
-        </table>
+        <div v-if="rateLimit" class="table-wrap">
+          <table class="rate-table">
+            <thead>
+              <tr>
+                <th>区分</th>
+                <th>残量 / 上限(毎分)</th>
+                <th>リセット時刻</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="c in rateLimit.categories" :key="c.name">
+                <td>{{ RATE_CATEGORY_LABELS[c.name] ?? c.name }}</td>
+                <template v-if="c.observed">
+                  <td>
+                    <span :class="{ 'rate-low': c.limit > 0 && c.remaining < c.limit * 0.2 }">
+                      {{ c.remaining }}
+                    </span>
+                    / {{ c.limit }}
+                  </td>
+                  <td>{{ formatResetTime(c.resetUnix) }}</td>
+                </template>
+                <template v-else>
+                  <td colspan="2" class="rate-unknown">未取得(API 利用後に表示されます)</td>
+                </template>
+              </tr>
+            </tbody>
+          </table>
+        </div>
         <p v-else class="hint">残量情報を取得できませんでした。</p>
         <p class="hint">
           サーバから観測した実測値を表示します(表示の更新に API は消費しません)。課題検索の同期は「検索」、一括更新の書き込みは「更新」の枠を使用します。
@@ -428,8 +432,11 @@ async function runProjectSync() {
 </template>
 
 <style scoped>
+/* ウインドウ幅に追従させる(右側に空白を作らない) */
 .sync-status {
-  max-width: 820px;
+  max-width: none;
+  width: 100%;
+  box-sizing: border-box;
 }
 
 h1 {
@@ -471,6 +478,12 @@ h2 {
   background: #fff8e1;
   border-color: #e6c96a;
   color: #9a6700;
+}
+
+/* 幅が足りないときだけ横スクロールさせる(パネル自体は全幅を保つ) */
+.table-wrap {
+  width: 100%;
+  overflow-x: auto;
 }
 
 table {
