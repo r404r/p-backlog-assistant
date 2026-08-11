@@ -11,9 +11,21 @@ import {
   type SyncResult,
   type SyncStateRow,
 } from '../lib/backend'
+import {
+  resolveProjectSelection,
+  restoreProjectSelection,
+  selectedProjectId,
+  useProjectSelectionGuard,
+} from '../lib/projectSelection'
 
 const backend = getBackend()
 const mock = isMockBackend()
+
+/**
+ * 破棄済み・プロファイル切替後の画面が、後から届いた古い応答で
+ * 共有のプロジェクト選択を書き換えてしまうのを防ぐガード(高 1)。
+ */
+const selectionGuard = useProjectSelectionGuard()
 
 /** データ種別の日本語表記 */
 const DATA_KIND_LABELS: Record<string, string> = {
@@ -63,7 +75,8 @@ const globalError = ref('')
 
 const states = ref<SyncStateRow[]>([])
 const projects = ref<Project[]>([])
-const selectedProjectId = ref<number>(0)
+// プロジェクト選択は画面をまたいで共有する(projectSelection モジュールが保持し、
+// プロファイルごとに localStorage へ保存する)
 /** プロジェクト一覧の最新化に失敗した場合の警告(キャッシュ表示は継続する) */
 const projectsWarning = ref('')
 
@@ -79,6 +92,7 @@ async function reload() {
   await loadLogInfo()
   if (!profileId.value) return
   await loadRateLimit()
+  const token = selectionGuard.begin()
   loading.value = true
   globalError.value = ''
   try {
@@ -86,11 +100,13 @@ async function reload() {
       backend.getSyncState(profileId.value),
       backend.listProjects(profileId.value),
     ])
+    // 画面が破棄済み、またはプロファイルが切り替わっていたら反映しない
+    // (古い応答で共有のプロジェクト選択を書き換えないため)
+    if (!selectionGuard.isCurrent(token)) return
     states.value = s
     projects.value = p
-    if (!projects.value.some((x) => x.id === selectedProjectId.value)) {
-      selectedProjectId.value = projects.value.length > 0 ? projects.value[0].id : 0
-    }
+    // 復元した(または選択中の)プロジェクトが一覧に無ければ先頭へフォールバックする
+    selectedProjectId.value = resolveProjectSelection(projects.value, selectedProjectId.value)
   } catch (e) {
     globalError.value = `同期状態の取得に失敗しました: ${errorMessage(e)}`
   } finally {
@@ -200,7 +216,13 @@ onMounted(async () => {
     initializing.value = false
   }
   await loadLogInfo()
-  if (profileId.value) {
+  // getActiveProfile・loadLogInfo の待機中にアンマウントされていたら、共有状態には触れない(高 1)。
+  // 触ると、既に別プロファイルで表示中の新しい画面の選択を古いプロファイルへ
+  // 巻き戻してしまう。この時点ではプロファイルが未確定でトークン照合ができないため、
+  // 生存確認のみを行う(画面は同時に 1 つしか表示されないため、生存 = 現在の画面)。
+  if (profileId.value && selectionGuard.isAlive()) {
+    // 保存済みの選択(他画面で選んだ値・前回起動時の値)を先に復元してから一覧を読む
+    restoreProjectSelection(profileId.value)
     await refreshProjects()
     // 残量は 10 秒間隔で自動更新(追加の API 通信は発生しない)。
     // ここまでの await 中にアンマウントされている可能性があるため、

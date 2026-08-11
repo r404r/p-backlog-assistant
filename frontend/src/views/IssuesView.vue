@@ -11,9 +11,21 @@ import {
   type SyncMode,
   type SyncResult,
 } from '../lib/backend'
+import {
+  resolveProjectSelection,
+  restoreProjectSelection,
+  selectedProjectId,
+  useProjectSelectionGuard,
+} from '../lib/projectSelection'
 
 const backend = getBackend()
 const mock = isMockBackend()
+
+/**
+ * 破棄済み・プロファイル切替後の画面が、後から届いた古い応答で
+ * 共有のプロジェクト選択を書き換えてしまうのを防ぐガード(高 1)。
+ */
+const selectionGuard = useProjectSelectionGuard()
 
 /** 画面に表示する最大件数(Excel 出力は条件に一致する全件が対象) */
 const PREVIEW_LIMIT = 200
@@ -72,7 +84,8 @@ const initializing = ref(true)
 const globalError = ref('')
 
 const projects = ref<Project[]>([])
-const selectedProjectId = ref<number>(0)
+// プロジェクト選択は画面をまたいで共有する(サイドバー切替で破棄されないよう
+// projectSelection モジュールが保持し、プロファイルごとに localStorage へ保存する)
 const projectsLoading = ref(false)
 const projectsSyncing = ref(false)
 /** プロジェクト一覧の最新化に失敗した場合の警告(キャッシュ表示は継続する) */
@@ -95,13 +108,17 @@ const neverSynced = computed(
 
 async function loadProjects() {
   if (!profileId.value) return
+  const token = selectionGuard.begin()
   projectsLoading.value = true
   globalError.value = ''
   try {
-    projects.value = await backend.listProjects(profileId.value)
-    if (!projects.value.some((p) => p.id === selectedProjectId.value)) {
-      selectedProjectId.value = projects.value.length > 0 ? projects.value[0].id : 0
-    }
+    const list = await backend.listProjects(profileId.value)
+    // 画面が破棄済み、またはプロファイルが切り替わっていたら反映しない
+    // (古い応答で共有のプロジェクト選択を書き換えないため)
+    if (!selectionGuard.isCurrent(token)) return
+    projects.value = list
+    // 復元した(または選択中の)プロジェクトが一覧に無ければ先頭へフォールバックする
+    selectedProjectId.value = resolveProjectSelection(projects.value, selectedProjectId.value)
   } catch (e) {
     globalError.value = `プロジェクト一覧の取得に失敗しました: ${errorMessage(e)}`
   } finally {
@@ -147,6 +164,18 @@ async function refreshProjects() {
   await loadProjects()
 }
 
+/**
+ * 初期化(プロジェクト選択の復元 → 一覧取得 → 選択の解決)が完了したか。
+ *
+ * 初期化中は選択が「保存値 → 一覧に無ければ先頭」と 2 段階で動き得るため、
+ * 途中の値で候補・カスタム属性を取りに行くと二重取得になり、
+ * 古い ID の応答が後着して表示を上書きする余地も残る(中 2)。
+ * そのため初期化中の変化は watch(selectedProjectId) では扱わず、
+ * 選択が確定してから下の onMounted で 1 回だけ読み込む。
+ * 初期化後のユーザ操作によるプロジェクト切替は、従来どおり watch が担う。
+ */
+let selectionInitialized = false
+
 onMounted(async () => {
   try {
     profileId.value = await backend.getActiveProfile()
@@ -155,7 +184,20 @@ onMounted(async () => {
   } finally {
     initializing.value = false
   }
-  if (profileId.value) await refreshProjects()
+  // getActiveProfile の待機中にアンマウントされていたら、共有状態には触れない(高 1)。
+  // 触ると、既に別プロファイルで表示中の新しい画面の選択を古いプロファイルへ
+  // 巻き戻してしまう。この時点ではプロファイルが未確定でトークン照合ができないため、
+  // 生存確認のみを行う(画面は同時に 1 つしか表示されないため、生存 = 現在の画面)。
+  if (!profileId.value || !selectionGuard.isAlive()) return
+  // 保存済みの選択(他画面で選んだ値・前回起動時の値)を復元し、
+  // 一覧の取得とフォールバックまで済ませてから、選択に依存するデータを 1 回だけ読む。
+  restoreProjectSelection(profileId.value)
+  const token = selectionGuard.begin()
+  await refreshProjects()
+  if (!selectionGuard.isCurrent(token)) return
+  selectionInitialized = true
+  void loadFilterOptions()
+  void loadCustomFields()
 })
 
 // ---------------------------------------------------------------------------
@@ -176,27 +218,46 @@ const statusOptions = ref<string[]>([])
 const assigneeOptions = ref<string[]>([])
 const optionsLoading = ref(false)
 
+/**
+ * loadFilterOptions の世代番号(loadCustomFields の customFieldsRequestSeq と同じ流儀。中 2)。
+ * プロジェクトを素早く切り替えると古い応答が後着して候補・エラー表示を上書きし得るため、
+ * 「最後に開始した要求」の応答だけを反映する。
+ */
+let filterOptionsRequestSeq = 0
+
 async function loadFilterOptions() {
+  const seq = ++filterOptionsRequestSeq
   statusOptions.value = []
   assigneeOptions.value = []
-  if (!profileId.value || !selectedProjectId.value) return
+  if (!profileId.value || !selectedProjectId.value) {
+    // 世代を進めた後の早期 return。先行要求が下ろせなくなるため、
+    // 最新要求であるこの経路で読込中表示を下ろす(低 1)。
+    if (seq === filterOptionsRequestSeq) optionsLoading.value = false
+    return
+  }
   optionsLoading.value = true
   try {
     const opts = await backend.listFilterOptions(profileId.value, selectedProjectId.value)
+    // より新しい要求が開始済みなら、この(古い)応答は反映しない
+    if (seq !== filterOptionsRequestSeq) return
     statusOptions.value = opts.statuses
     assigneeOptions.value = opts.assignees
     // 選択済みの値が候補に無くなった場合は「すべて」へ戻す
     if (cond.statusName && !opts.statuses.includes(cond.statusName)) cond.statusName = ''
     if (cond.assigneeName && !opts.assignees.includes(cond.assigneeName)) cond.assigneeName = ''
   } catch (e) {
+    if (seq !== filterOptionsRequestSeq) return
     globalError.value = `絞り込み候補の取得に失敗しました: ${errorMessage(e)}`
   } finally {
-    optionsLoading.value = false
+    // 読込中表示は最新の要求だけが下ろす(古い応答が新しい要求の表示を消さないため)
+    if (seq === filterOptionsRequestSeq) optionsLoading.value = false
   }
 }
 
 // プロジェクトを切り替えたら候補と結果をリセットする
+// (初期化中の変化は扱わない。selectionInitialized の説明を参照)
 watch(selectedProjectId, () => {
+  if (!selectionInitialized) return
   rows.value = []
   total.value = 0
   searched.value = false

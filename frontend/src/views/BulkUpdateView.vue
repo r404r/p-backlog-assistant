@@ -20,9 +20,21 @@ import {
   type MasterItem,
   type Project,
 } from '../lib/backend'
+import {
+  resolveProjectSelection,
+  restoreProjectSelection,
+  selectedProjectId,
+  useProjectSelectionGuard,
+} from '../lib/projectSelection'
 
 const backend = getBackend()
 const mock = isMockBackend()
+
+/**
+ * 破棄済み・プロファイル切替後の画面が、後から届いた古い応答で
+ * 共有のプロジェクト選択を書き換えてしまうのを防ぐガード(高 1)。
+ */
+const selectionGuard = useProjectSelectionGuard()
 
 /** 実行時間の目安(設計書 5 節: 1,000 件で 8〜10 分) */
 const MINUTES_PER_1000 = 9
@@ -74,18 +86,23 @@ const initializing = ref(true)
 const globalError = ref('')
 
 const projects = ref<Project[]>([])
-const selectedProjectId = ref(0)
+// プロジェクト選択は画面をまたいで共有する(projectSelection モジュールが保持し、
+// プロファイルごとに localStorage へ保存する)
 const projectsLoading = ref(false)
 
 async function loadProjects() {
   if (!profileId.value) return
+  const token = selectionGuard.begin()
   projectsLoading.value = true
   globalError.value = ''
   try {
-    projects.value = await backend.listProjects(profileId.value)
-    if (!projects.value.some((p) => p.id === selectedProjectId.value)) {
-      selectedProjectId.value = projects.value.length > 0 ? projects.value[0].id : 0
-    }
+    const list = await backend.listProjects(profileId.value)
+    // 画面が破棄済み、またはプロファイルが切り替わっていたら反映しない
+    // (古い応答で共有のプロジェクト選択を書き換えないため)
+    if (!selectionGuard.isCurrent(token)) return
+    projects.value = list
+    // 復元した(または選択中の)プロジェクトが一覧に無ければ先頭へフォールバックする
+    selectedProjectId.value = resolveProjectSelection(projects.value, selectedProjectId.value)
   } catch (e) {
     globalError.value = `プロジェクト一覧の取得に失敗しました: ${errorMessage(e)}`
   } finally {
@@ -115,7 +132,16 @@ const priorities = ref<MasterItem[]>([])
 const defaultPriorityId = ref(0)
 const masterError = ref('')
 
+/**
+ * loadMaster の世代番号。ガードのトークンはプロファイル単位のため、
+ * 同一プロファイル内でプロジェクトを A→B と切り替えた場合の古い応答を弾けない(中 1)。
+ * 「最後に開始した要求」の応答だけを反映する。
+ */
+let masterRequestSeq = 0
+
 async function loadMaster() {
+  const seq = ++masterRequestSeq
+  const token = selectionGuard.begin()
   if (!profileId.value || !selectedProjectId.value) {
     priorities.value = []
     defaultPriorityId.value = 0
@@ -124,11 +150,14 @@ async function loadMaster() {
   masterError.value = ''
   try {
     const m = await backend.getMasterData(profileId.value, selectedProjectId.value)
+    // 破棄済み・プロファイル切替後、または後発の要求がある場合は反映しない
+    if (!selectionGuard.isCurrent(token) || seq !== masterRequestSeq) return
     priorities.value = m.priorities
     // 既定値は設計書 5 節に合わせて「中」。見つからなければ先頭を選ぶ。
     const middle = m.priorities.find((p) => p.name === '中')
     defaultPriorityId.value = middle?.id ?? m.priorities[0]?.id ?? 0
   } catch (e) {
+    if (!selectionGuard.isCurrent(token) || seq !== masterRequestSeq) return
     priorities.value = []
     defaultPriorityId.value = 0
     masterError.value = `マスタデータの取得に失敗しました: ${errorMessage(e)}`
@@ -445,8 +474,14 @@ onMounted(async () => {
   } finally {
     initializing.value = false
   }
-  if (profileId.value) {
-    await loadProjects()
+  // getActiveProfile の待機中にアンマウントされていたら、共有状態には触れない(高 1)。
+  // 触ると、既に別プロファイルで表示中の新しい画面の選択を古いプロファイルへ
+  // 巻き戻してしまう。この時点ではプロファイルが未確定でトークン照合ができないため、
+  // 生存確認のみを行う(画面は同時に 1 つしか表示されないため、生存 = 現在の画面)。
+  if (profileId.value && selectionGuard.isAlive()) {
+    // 保存済みの選択(他画面で選んだ値・前回起動時の値)を先に復元してから一覧を読む
+    restoreProjectSelection(profileId.value)
+    await loadProjects() // 末尾で loadMaster を呼ぶため、選択に応じたマスタも読み込まれる
     await loadJobs()
   }
 })
