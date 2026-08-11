@@ -44,9 +44,9 @@ Nulab [Backlog](https://backlog.com/ja/) の課題とユーザ情報を、ロー
 
 | データ | 場所 |
 |---|---|
-| 設定(プロファイル。キーは含まない) | `ユーザ設定ディレクトリ/backlog-assistant/config.json`(Windows: `%AppData%\backlog-assistant\`) |
+| 設定(プロファイル。キーは含まない) | `ユーザ設定ディレクトリ/backlog-assistant/config.json`(Windows: `%AppData%\backlog-assistant\config.json`、通常は `C:\Users\<ユーザ名>\AppData\Roaming\backlog-assistant\config.json`) |
 | API キー | OS キーチェーンのみ |
-| ローカル DB(取得データ) | 同上 `data/<スペースホスト>_<ユーザID>.db`(Unix 系では権限 0600、Windows はユーザディレクトリの ACL に従う) |
+| ローカル DB(取得データ・SQLite) | 同上 `data\<スペースホスト>_<ユーザID>.db`(Windows: `%AppData%\backlog-assistant\data\`、通常は `C:\Users\<ユーザ名>\AppData\Roaming\backlog-assistant\data\`。Unix 系では権限 0600、Windows はユーザディレクトリの ACL に従う) |
 | 動作ログ | EXE と同じフォルダの `logs\`(書込不可の場合はユーザ設定ディレクトリへ自動フォールバック) |
 
 ## セキュリティ方針
