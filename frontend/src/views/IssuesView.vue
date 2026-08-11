@@ -206,6 +206,8 @@ onMounted(async () => {
 
 const cond = reactive({
   keyword: '',
+  /** 複数キーワードの連結方法(既定は AND = すべて含む) */
+  keywordMode: 'and' as 'and' | 'or',
   updatedFrom: '',
   updatedTo: '',
   createdFrom: '',
@@ -273,7 +275,11 @@ watch(selectedProjectId, () => {
 /** 現在の条件を IssueQuery に変換する(空文字の条件は送らない) */
 function buildQuery(withLimit: boolean): IssueQuery {
   const q: IssueQuery = { projectId: selectedProjectId.value }
-  if (cond.keyword.trim()) q.keyword = cond.keyword.trim()
+  if (cond.keyword.trim()) {
+    q.keyword = cond.keyword.trim()
+    // キーワードが空なら連結方法は意味を持たないため送らない
+    q.keywordMode = cond.keywordMode
+  }
   if (cond.updatedFrom) q.updatedFrom = cond.updatedFrom
   if (cond.updatedTo) q.updatedTo = cond.updatedTo
   if (cond.createdFrom) q.createdFrom = cond.createdFrom
@@ -286,6 +292,7 @@ function buildQuery(withLimit: boolean): IssueQuery {
 
 function clearConditions() {
   cond.keyword = ''
+  cond.keywordMode = 'and'
   cond.updatedFrom = ''
   cond.updatedTo = ''
   cond.createdFrom = ''
@@ -321,6 +328,21 @@ async function search() {
   } finally {
     searching.value = false
   }
+}
+
+/**
+ * キーワード欄で Enter が押されたときに検索する。
+ *
+ * IME(日本語入力)の変換確定 Enter で検索してしまわないよう、次の場合は無視する:
+ * - `e.isComposing === true`: 変換中であることを示す標準プロパティ(WebView2 等)
+ * - `e.keyCode === 229`: isComposing が立たない旧 WebKit 系(WKWebView)で、
+ *   変換確定のキーイベントに現れる値。両方見ることで Windows / macOS 双方に対応する
+ *
+ * 検索可否の判定(プロジェクト未選択・検索中は実行しない)は search() 側と同じ。
+ */
+function onKeywordEnter(e: KeyboardEvent) {
+  if (e.isComposing || e.keyCode === 229) return
+  void search()
 }
 
 // ---------------------------------------------------------------------------
@@ -577,12 +599,26 @@ async function exportExcel() {
             v-model="cond.keyword"
             type="text"
             class="wide"
-            placeholder="件名 + 詳細の部分一致"
+            placeholder="件名 + 詳細の部分一致(スペース区切りで複数指定)"
+            @keydown.enter="onKeywordEnter"
           />
+        </div>
+        <div class="row">
+          <label>複数キーワード</label>
+          <label class="radio">
+            <input v-model="cond.keywordMode" type="radio" value="and" :disabled="searching" />
+            すべて含む(AND)
+          </label>
+          <label class="radio">
+            <input v-model="cond.keywordMode" type="radio" value="or" :disabled="searching" />
+            いずれかを含む(OR)
+          </label>
         </div>
         <p class="hint">
           キーワード検索はローカル DB に保存された<strong>件名と詳細</strong>に対する部分一致です。
           コメント・添付ファイル等は対象外で、Backlog サイト上のキーワード検索とは範囲が異なります。
+          スペース(半角・全角)で区切ると複数キーワードになります(スペースを含む語句そのものの検索はできません)。
+          キーワード欄で Enter を押すと検索します。
         </p>
 
         <div class="row">

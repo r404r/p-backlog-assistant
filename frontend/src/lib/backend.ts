@@ -110,8 +110,16 @@ export interface SyncResult {
 export interface IssueQuery {
   /** 対象プロジェクト ID(必須) */
   projectId: number
-  /** キーワード(件名 + 詳細の部分一致。Go 側で NFKC + ケースフォールド正規化) */
+  /**
+   * キーワード(件名 + 詳細の部分一致。Go 側で NFKC + ケースフォールド正規化)。
+   * 半角・全角スペース区切りで複数語を指定できる(連結方法は keywordMode)
+   */
   keyword?: string
+  /**
+   * 複数キーワードの連結方法('and' = すべて含む / 'or' = いずれかを含む)。
+   * 未指定・未知の値は 'and'(既定)として扱われる
+   */
+  keywordMode?: 'and' | 'or'
   /** 更新日の下限(YYYY-MM-DD) */
   updatedFrom?: string
   /** 更新日の上限(YYYY-MM-DD) */
@@ -983,11 +991,30 @@ function buildMockIssues(project: Project, count: number): IssueRow[] {
   return rows
 }
 
-/** モックのローカル検索(Go 側の LIKE 部分一致に相当する簡易版) */
+/**
+ * モックのローカル検索(Go 側の LIKE 部分一致に相当する簡易版)。
+ * Go 側は件名 + 詳細の正規化テキストを検索するが、モックデータは詳細を
+ * 持たないため件名のみを対象とする(既知の簡易化)。
+ */
 function filterMockIssues(rows: IssueRow[], query: IssueQuery): IssueRow[] {
-  const keyword = (query.keyword ?? '').trim().toLowerCase()
+  // Go 側(NFKC + ケースフォールド)に近づけた正規化。
+  // toLowerCase は完全な Unicode ケースフォールドではない(ß ≠ ss 等)が、
+  // モック(開発時のみ・日本語サンプルデータ)では十分な近似とする(既知の簡易化)
+  const normalize = (s: string) => s.normalize('NFKC').toLowerCase()
+  // Go 側と同じ規則で空白(全角スペースを含む)区切りの複数語に分割する
+  const terms = (query.keyword ?? '')
+    .split(/\s+/)
+    .filter((t) => t !== '')
+    .map(normalize)
+  const orMode = query.keywordMode === 'or'
   return rows.filter((r) => {
-    if (keyword && !r.summary.toLowerCase().includes(keyword)) return false
+    if (terms.length > 0) {
+      const summary = normalize(r.summary)
+      const hit = orMode
+        ? terms.some((t) => summary.includes(t))
+        : terms.every((t) => summary.includes(t))
+      if (!hit) return false
+    }
     if (query.updatedFrom && r.updated.slice(0, 10) < query.updatedFrom) return false
     if (query.updatedTo && r.updated.slice(0, 10) > query.updatedTo) return false
     if (query.createdFrom && r.created.slice(0, 10) < query.createdFrom) return false

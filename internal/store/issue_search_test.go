@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 )
 
@@ -79,6 +80,103 @@ func TestSearchIssues_Keyword(t *testing.T) {
 	}
 	if res.Total != 0 {
 		t.Errorf("%% の検索結果 = %d 件, want 0", res.Total)
+	}
+}
+
+// TestBuildFilter_KeywordSplit はキーワードが半角・全角スペースで分割され、
+// 語ごとに LIKE 条件が組み立てられること(既定は AND)を確認する。
+func TestBuildFilter_KeywordSplit(t *testing.T) {
+	where, args, err := IssueFilter{ProjectID: 1, Keyword: "ログイン　timeout 改善"}.buildFilter()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := strings.Count(where, "search_text LIKE ?"); n != 3 {
+		t.Errorf("LIKE 条件の数 = %d, want 3 (where = %q)", n, where)
+	}
+	if strings.Contains(where, " OR ") {
+		t.Errorf("既定モードで OR が使われている: %q", where)
+	}
+	// project_id の引数に続いて語ごとのパターンが並ぶ
+	want := []any{int64(1), "%ログイン%", "%timeout%", "%改善%"}
+	if len(args) != len(want) {
+		t.Fatalf("引数 = %v, want %v", args, want)
+	}
+	for i := range want {
+		if args[i] != want[i] {
+			t.Errorf("args[%d] = %v, want %v", i, args[i], want[i])
+		}
+	}
+}
+
+// TestBuildFilter_KeywordOrIsParenthesized は OR 連結が括弧で括られ、
+// project_id 等の他条件と正しく AND 結合されることを確認する
+// (括弧が無いと OR が全体に広がり、別プロジェクトの課題が混入する)。
+func TestBuildFilter_KeywordOrIsParenthesized(t *testing.T) {
+	where, _, err := IssueFilter{ProjectID: 1, Keyword: "ログイン 改善", KeywordMode: "or"}.buildFilter()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(where, `(search_text LIKE ? ESCAPE '\' OR search_text LIKE ? ESCAPE '\')`) {
+		t.Errorf("OR 条件が括弧で括られていない: %q", where)
+	}
+	if !strings.HasPrefix(where, "deleted = 0 AND project_id = ? AND (") {
+		t.Errorf("他条件との結合が AND になっていない: %q", where)
+	}
+}
+
+// TestBuildFilter_KeywordBlank は空文字・スペースのみのキーワードで
+// LIKE 条件が付かないことを確認する。
+func TestBuildFilter_KeywordBlank(t *testing.T) {
+	for _, kw := range []string{"", "   ", "　", " 　 "} {
+		where, args, err := IssueFilter{ProjectID: 1, Keyword: kw, KeywordMode: "or"}.buildFilter()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(where, "search_text") {
+			t.Errorf("キーワード %q で LIKE 条件が付いた: %q", kw, where)
+		}
+		if len(args) != 1 {
+			t.Errorf("キーワード %q の引数 = %v, want [1]", kw, args)
+		}
+	}
+}
+
+// TestSearchIssues_KeywordAndOr は複数キーワードの AND / OR の結果件数を確認する。
+func TestSearchIssues_KeywordAndOr(t *testing.T) {
+	s := openTempStore(t)
+	seedIssues(t, s)
+	ctx := context.Background()
+
+	tests := []struct {
+		name    string
+		keyword string
+		mode    string
+		want    int
+	}{
+		// 課題 1 = 「ログイン不具合 / TIMEOUT」、課題 3 = 「ログイン改善」
+		{"AND(既定)は全語を含む課題だけ", "ログイン timeout", "", 1},
+		{"AND で一致しない組み合わせ", "ログイン レイアウト", "and", 0},
+		{"全角スペースでも分割される", "ログイン　timeout", "", 1},
+		{"OR はいずれかを含む課題", "ログイン レイアウト", "or", 3},
+		{"未知のモードは AND に縮退する", "ログイン レイアウト", "xyz", 0},
+		{"語ごとに LIKE メタ文字をエスケープする", "% _", "or", 0},
+		{"1 語のみの OR も動作する", "ログイン", "or", 2},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			res, err := s.SearchIssues(ctx, IssueFilter{ProjectID: 1, Keyword: tt.keyword, KeywordMode: tt.mode})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if res.Total != tt.want || len(res.Issues) != tt.want {
+				t.Errorf("件数 = %d / total %d, want %d", len(res.Issues), res.Total, tt.want)
+			}
+			for _, i := range res.Issues {
+				if i.ProjectID != 1 {
+					t.Errorf("別プロジェクトの課題が混入: %+v", i)
+				}
+			}
+		})
 	}
 }
 

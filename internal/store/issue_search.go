@@ -15,8 +15,11 @@ const DefaultSearchLimit = 5000
 // IssueFilter は課題抽出(画面 2)の検索条件。
 // ProjectID は必須(スペース横断検索は行わない)。
 type IssueFilter struct {
-	ProjectID    int64  `json:"projectId"`    // 必須
-	Keyword      string `json:"keyword"`      // 件名 + 詳細の部分一致(search_text へ LIKE)
+	ProjectID int64  `json:"projectId"` // 必須
+	Keyword   string `json:"keyword"`   // 件名 + 詳細の部分一致(search_text へ LIKE)。空白区切りで複数語
+	// KeywordMode は複数語の連結方法("and" = 全語を含む / "or" = いずれかを含む)。
+	// 空文字・未知の値は "and" として扱う。
+	KeywordMode  string `json:"keywordMode"`
 	CreatedFrom  string `json:"createdFrom"`  // yyyy-MM-dd または ISO8601
 	CreatedTo    string `json:"createdTo"`    //
 	UpdatedFrom  string `json:"updatedFrom"`  //
@@ -47,10 +50,19 @@ func (f IssueFilter) buildFilter() (string, []any, error) {
 	where := []string{"deleted = 0", "project_id = ?"}
 	args := []any{f.ProjectID}
 
-	if kw := strings.TrimSpace(f.Keyword); kw != "" {
-		// 保存時と同じ正規化を検索語にも適用する(設計書 4 節の補足)
-		where = append(where, `search_text LIKE ? ESCAPE '\'`)
-		args = append(args, "%"+escapeLike(NormalizeSearchText(kw))+"%")
+	if terms := splitKeywords(f.Keyword); len(terms) > 0 {
+		conds := make([]string, 0, len(terms))
+		for _, t := range terms {
+			conds = append(conds, `search_text LIKE ? ESCAPE '\'`)
+			args = append(args, "%"+escapeLike(t)+"%")
+		}
+		if isOrKeywordMode(f.KeywordMode) {
+			// OR は必ず括弧で括る。括らないと project_id 等の他条件まで
+			// OR の被演算子になり、別プロジェクトの課題が混入する。
+			where = append(where, "("+strings.Join(conds, " OR ")+")")
+		} else {
+			where = append(where, conds...)
+		}
 	}
 	addRange := func(col, from, to string) {
 		if from != "" {
@@ -74,6 +86,37 @@ func (f IssueFilter) buildFilter() (string, []any, error) {
 		args = append(args, f.AssigneeName)
 	}
 	return strings.Join(where, " AND "), args, nil
+}
+
+// KeywordMode の値(IssueFilter.KeywordMode)。
+const (
+	KeywordModeAnd = "and" // 全語を含む(既定)
+	KeywordModeOr  = "or"  // いずれかを含む
+)
+
+// splitKeywords はキーワード入力を空白で語に分割し、保存時と同じ正規化を
+// 語ごとに適用して返す(空要素は除去)。strings.Fields は unicode.IsSpace で
+// 分割するため、半角スペースだけでなく全角スペース(U+3000)・タブも区切りになる。
+// 正規化後に空になる語(制御文字のみ等)は検索対象から外す。
+// 残さないと "%%" となり、その語が全件一致してしまう。
+func splitKeywords(keyword string) []string {
+	fields := strings.Fields(keyword)
+	terms := make([]string, 0, len(fields))
+	for _, f := range fields {
+		// 保存時と同じ正規化を検索語にも適用する(設計書 4 節の補足)
+		if t := NormalizeSearchText(f); t != "" {
+			terms = append(terms, t)
+		}
+	}
+	return terms
+}
+
+// isOrKeywordMode は複数キーワードを OR で連結するかを判定する。
+// 契約上の許可値は "and" / "or" のみ(フロントは小文字で送る)。
+// "or" と完全一致した場合だけ OR とし、空文字・大文字・空白付きを含む
+// それ以外の値はすべて既定の AND として扱う(寛容に受理しない)。
+func isOrKeywordMode(mode string) bool {
+	return mode == KeywordModeOr
 }
 
 // rangeStart は日付のみ(yyyy-MM-dd)の下限をその日の 00:00:00Z に展開する。
