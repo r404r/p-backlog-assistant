@@ -46,12 +46,20 @@ var headerAliases = map[string]string{
 	"base_updated": colBaseUpdated,
 }
 
-// 名前列 → ID 列(エラーメッセージで「ID を指定してください」と案内するため)。
+// idColumnLabels / nameColumnLabels は列キー → テンプレート上の見出し
+// (エラーメッセージでどのセルを直せばよいかを示すため)。
 var idColumnLabels = map[string]string{
 	colIssueTypeID: "種別ID",
 	colStatusID:    "状態ID",
 	colPriorityID:  "優先度ID",
 	colAssigneeID:  "担当者ID",
+}
+
+var nameColumnLabels = map[string]string{
+	colIssueTypeName: "種別名",
+	colStatusName:    "状態名",
+	colPriorityName:  "優先度名",
+	colAssigneeName:  "担当者名",
 }
 
 // rawRow は Excel の 1 行(列キー → トリム済みセル値)。

@@ -3,6 +3,7 @@ package export
 import (
 	"bytes"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -50,11 +51,27 @@ func sampleBulkRows() []BulkTemplateRow {
 // testTemplateProjectID は検証用のプロジェクト ID(実データではない)。
 const testTemplateProjectID = int64(42)
 
+// sampleBulkMasters はテスト用の選択候補(実データは含めない)。
+func sampleBulkMasters() BulkTemplateMasters {
+	return BulkTemplateMasters{
+		IssueTypes: []NamedRef{{ID: 11, Name: "バグ"}, {ID: 12, Name: "タスク"}},
+		Statuses:   []NamedRef{{ID: 1, Name: "未対応"}, {ID: 2, Name: "処理中"}, {ID: 4, Name: "完了"}},
+		Priorities: []NamedRef{{ID: 2, Name: "高"}, {ID: 3, Name: "中"}},
+		Assignees:  []NamedRef{{ID: 12345, Name: "テスト太郎"}, {ID: 12346, Name: "テスト花子"}},
+	}
+}
+
 // exportBulkToTempFile は一時ディレクトリへテンプレートを生成してパスを返す。
 func exportBulkToTempFile(t *testing.T, rows []BulkTemplateRow) string {
 	t.Helper()
+	return exportBulkToTempFileWith(t, rows, sampleBulkMasters())
+}
+
+// exportBulkToTempFileWith はマスタを指定してテンプレートを生成する。
+func exportBulkToTempFileWith(t *testing.T, rows []BulkTemplateRow, masters BulkTemplateMasters) string {
+	t.Helper()
 	path := filepath.Join(t.TempDir(), "bulk.xlsx")
-	if err := ExportBulkTemplateToFile(path, testTemplateProjectID, rows); err != nil {
+	if err := ExportBulkTemplateToFile(path, testTemplateProjectID, rows, masters); err != nil {
 		t.Fatalf("ExportBulkTemplateToFile: %v", err)
 	}
 	return path
@@ -65,8 +82,145 @@ func TestExportBulkTemplate_Sheets(t *testing.T) {
 	f := openExported(t, path)
 
 	sheets := f.GetSheetList()
-	if len(sheets) != 2 || sheets[0] != SheetBulkTemplate || sheets[1] != SheetBulkGuide {
-		t.Fatalf("シート一覧 = %v, want [%s %s]", sheets, SheetBulkTemplate, SheetBulkGuide)
+	want := []string{SheetBulkTemplate, SheetBulkGuide, SheetBulkMaster}
+	if !equalStrings(sheets, want) {
+		t.Fatalf("シート一覧 = %v, want %v", sheets, want)
+	}
+}
+
+// TestExportBulkTemplate_MasterSheet は「マスタ」シートに選択候補が並ぶことを確認する。
+// 利用者はここから名前で選ぶため、列の並び・見出し・担当者の表記を固定する。
+func TestExportBulkTemplate_MasterSheet(t *testing.T) {
+	path := exportBulkToTempFile(t, sampleBulkRows())
+	f := openExported(t, path)
+
+	rows, err := f.GetRows(SheetBulkMaster)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) == 0 {
+		t.Fatal("マスタシートが空")
+	}
+	wantHeader := []string{"種別", "状態", "優先度", "担当者"}
+	if !equalStrings(rows[0], wantHeader) {
+		t.Fatalf("マスタ見出し = %v, want %v", rows[0], wantHeader)
+	}
+
+	// 列ごとの候補(担当者は同名対策で「表示名 (ID)」形式)
+	wantCols := map[string][]string{
+		"A": {"バグ", "タスク"},
+		"B": {"未対応", "処理中", "完了"},
+		"C": {"高", "中"},
+		"D": {"テスト太郎 (12345)", "テスト花子 (12346)"},
+	}
+	for col, values := range wantCols {
+		for i, want := range values {
+			cell := col + strconv.Itoa(i+2)
+			got, err := f.GetCellValue(SheetBulkMaster, cell)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != want {
+				t.Errorf("マスタ %s = %q, want %q", cell, got, want)
+			}
+		}
+	}
+}
+
+// TestExportBulkTemplate_DropDowns は名前列にマスタシート参照のドロップダウン
+// (データ入力規則)が設定されることを確認する。
+func TestExportBulkTemplate_DropDowns(t *testing.T) {
+	path := exportBulkToTempFile(t, sampleBulkRows())
+	f := openExported(t, path)
+
+	dvs, err := f.GetDataValidations(SheetBulkTemplate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]string{}
+	for _, dv := range dvs {
+		got[dv.Sqref] = dv.Formula1
+	}
+	// 種別名 = D 列 / 状態名 = F 列 / 優先度名 = H 列 / 担当者名 = J 列
+	wants := map[string]string{
+		"D2:D1001": "'" + SheetBulkMaster + "'!$A$2:$A$3",
+		"F2:F1001": "'" + SheetBulkMaster + "'!$B$2:$B$4",
+		"H2:H1001": "'" + SheetBulkMaster + "'!$C$2:$C$3",
+		"J2:J1001": "'" + SheetBulkMaster + "'!$D$2:$D$3",
+	}
+	if len(dvs) != len(wants) {
+		t.Errorf("データ入力規則の数 = %d, want %d(%+v)", len(dvs), len(wants), got)
+	}
+	for sqref, formula := range wants {
+		if got[sqref] != formula {
+			t.Errorf("%s の入力規則 = %q, want %q", sqref, got[sqref], formula)
+		}
+	}
+	// #CLEAR# や ID の直接入力を妨げないよう、規則違反はエラーにしない
+	for _, dv := range dvs {
+		if dv.ShowErrorMessage {
+			t.Errorf("入力規則が入力を拒否する設定になっている: %+v", dv)
+		}
+	}
+}
+
+// TestExportBulkTemplate_DropDownsSkippedWhenNoMaster は候補が無い場合に
+// 入力規則を設定しない(不正な参照範囲を書かない)ことを確認する。
+func TestExportBulkTemplate_DropDownsSkippedWhenNoMaster(t *testing.T) {
+	path := exportBulkToTempFileWith(t, sampleBulkRows(), BulkTemplateMasters{})
+	f := openExported(t, path)
+
+	dvs, err := f.GetDataValidations(SheetBulkTemplate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(dvs) != 0 {
+		t.Errorf("候補が無いのに入力規則が設定された: %+v", dvs)
+	}
+	rows, err := f.GetRows(SheetBulkMaster)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 {
+		t.Errorf("マスタシートの行数 = %d, want 1(見出しのみ)", len(rows))
+	}
+}
+
+// TestAssigneeLabel は担当者セルの表記「表示名 (ID)」の生成と解析を確認する。
+// 同名ユーザを区別する唯一の手段のため、往復できることを固定する。
+func TestAssigneeLabel(t *testing.T) {
+	if got := AssigneeLabel("テスト太郎", 12345); got != "テスト太郎 (12345)" {
+		t.Errorf("AssigneeLabel = %q", got)
+	}
+	if got := AssigneeLabel("テスト太郎", 0); got != "テスト太郎" {
+		t.Errorf("ID 0 の AssigneeLabel = %q, want \"テスト太郎\"", got)
+	}
+	if got := AssigneeLabel("", 0); got != "" {
+		t.Errorf("未設定の AssigneeLabel = %q, want \"\"", got)
+	}
+	if got := AssigneeLabel("", 12345); got != "(12345)" {
+		t.Errorf("名前が無い場合の AssigneeLabel = %q", got)
+	}
+
+	cases := []struct {
+		in     string
+		id     int64
+		parsed bool
+	}{
+		{"テスト太郎 (12345)", 12345, true},
+		{"テスト太郎(12345)", 12345, true}, // 空白なし
+		{"テスト太郎（12345）", 12345, true}, // 全角括弧(手入力対策)
+		{"(12345)", 12345, true},      // 名前が無い場合
+		{"テスト太郎", 0, false},           // 名前のみ
+		{"重複 名前", 0, false},           // 名前のみ(空白入り)
+		{"テスト太郎 (abc)", 0, false},     // ID が数値でない
+		{"", 0, false},
+	}
+	for _, c := range cases {
+		id, ok := ParseAssigneeLabel(c.in)
+		if ok != c.parsed || id != c.id {
+			t.Errorf("ParseAssigneeLabel(%q) = (%d, %v), want (%d, %v)", c.in, id, ok, c.id, c.parsed)
+		}
 	}
 }
 
@@ -121,7 +275,8 @@ func TestExportBulkTemplate_Values(t *testing.T) {
 		"11", "バグ",
 		"1", "未対応",
 		"2", "中",
-		"12345", "テスト太郎",
+		// 担当者名は同名を区別できるよう「表示名 (ID)」形式で出力する
+		"12345", "テスト太郎 (12345)",
 		"2026-03-04", "詳細本文 1",
 		"2026-02-03T04:05:06Z",
 	}
@@ -225,13 +380,17 @@ func TestExportBulkTemplate_GuideSheet(t *testing.T) {
 		ClearMarker,    // クリア指定
 		"base_updated", // 編集しない
 		"競合",           // 競合検知に使う旨
-		"ID",           // ID 列が正
-		"件名",           // 新規行の必須項目
-		"種別ID",         // 同上
-		// 名前列は「使わない」のではなく、ID が空のときの補完に使う(2 回目 低 2)
-		"ID 列が正です",
-		"ID が空の場合のみ",
-		"一意に特定できるとき",
+		"種別名または種別ID のどちらか", // 新規行の必須項目(名前でもよいことを明示。文言の後退をテストで防ぐ)
+		"種別", // 同上
+		// 編集は名前列のドロップダウンで行う(ID 列は参考情報)
+		SheetBulkMaster,
+		"ドロップダウン",
+		"名前列",
+		"ID 列は参考情報です",
+		"名前列が優先されます", // 名前列と ID 列が食い違う場合の扱い
+		"食い違",
+		"警告",
+		"表示名 (ID)", // 担当者の表記
 	}
 	for _, p := range wantPhrases {
 		if !strings.Contains(text, p) {
@@ -275,7 +434,7 @@ func TestExportBulkTemplate_EmbedsProjectID(t *testing.T) {
 // 行を出力しないことを確認する(取り込み側は「メタ情報無し」として扱う)。
 func TestExportBulkTemplate_OmitsUnknownProjectID(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "bulk.xlsx")
-	if err := ExportBulkTemplateToFile(path, 0, sampleBulkRows()); err != nil {
+	if err := ExportBulkTemplateToFile(path, 0, sampleBulkRows(), sampleBulkMasters()); err != nil {
 		t.Fatal(err)
 	}
 	f := openExported(t, path)
@@ -290,7 +449,7 @@ func TestExportBulkTemplate_OmitsUnknownProjectID(t *testing.T) {
 
 func TestExportBulkTemplate_WriterOutput(t *testing.T) {
 	var buf bytes.Buffer
-	if err := ExportBulkTemplate(&buf, testTemplateProjectID, sampleBulkRows()); err != nil {
+	if err := ExportBulkTemplate(&buf, testTemplateProjectID, sampleBulkRows(), sampleBulkMasters()); err != nil {
 		t.Fatal(err)
 	}
 	f, err := excelize.OpenReader(bytes.NewReader(buf.Bytes()))
@@ -312,7 +471,7 @@ func TestExportBulkTemplate_WriterOutput(t *testing.T) {
 func TestExportBulkTemplateToFile_InvalidPath(t *testing.T) {
 	dir := t.TempDir()
 	// ディレクトリをパスに指定すると os.Create が失敗する
-	if err := ExportBulkTemplateToFile(dir, testTemplateProjectID, sampleBulkRows()); err == nil {
+	if err := ExportBulkTemplateToFile(dir, testTemplateProjectID, sampleBulkRows(), sampleBulkMasters()); err == nil {
 		t.Fatal("ディレクトリへの書き出しが成功してしまった")
 	}
 }

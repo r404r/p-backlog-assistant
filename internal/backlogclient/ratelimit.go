@@ -73,6 +73,9 @@ type bucket struct {
 	// サーバ報告値を保持している間は、それより古い reset での上書きを拒否する
 	// (単調性の保証。低 1)。
 	resetFromServer bool
+	// observed はサーバ報告値(GET /rateLimit またはレスポンスヘッダ)を
+	// 一度でも反映したかどうか。UI へ「実測値かどうか」を伝えるために使う。
+	observed bool
 }
 
 // rollover は reset 時刻を過ぎていたら次のウィンドウへ進め、トークンを全回復する。
@@ -103,17 +106,19 @@ func NewRateLimiter() *RateLimiter {
 
 // Configure は区分ごとの毎分上限を設定する(0 以下の区分はパススルーのまま)。
 // 残量・リセット時刻が不明な場合の設定用(満枠 + 1 分後リセットで開始)。
+// サーバ報告値ではないため observed は立てない。
 func (r *RateLimiter) Configure(limits map[Category]int) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	for cat, limit := range limits {
-		r.configureLocked(cat, limit, -1, time.Time{})
+		r.configureLocked(cat, limit, -1, time.Time{}, false)
 	}
 }
 
 // configureLocked は 1 区分を設定する(mu 保持前提)。
 // remaining < 0 は「残量不明(=満枠扱い)」、reset のゼロ値は「不明(=1 分後)」。
-func (r *RateLimiter) configureLocked(cat Category, limit, remaining int, reset time.Time) {
+// observed はこの設定値がサーバ報告由来かどうか。
+func (r *RateLimiter) configureLocked(cat Category, limit, remaining int, reset time.Time, observed bool) {
 	if limit <= 0 {
 		delete(r.buckets, cat)
 		return
@@ -128,7 +133,13 @@ func (r *RateLimiter) configureLocked(cat Category, limit, remaining int, reset 
 		reset = now.Add(time.Minute)
 		fromServer = false // ローカル推定値(後続のサーバ報告で上書き可)
 	}
-	r.buckets[cat] = &bucket{limit: float64(limit), tokens: tokens, reset: reset, resetFromServer: fromServer}
+	r.buckets[cat] = &bucket{
+		limit:           float64(limit),
+		tokens:          tokens,
+		reset:           reset,
+		resetFromServer: fromServer,
+		observed:        observed,
+	}
 }
 
 // ConfigureFromRateLimit はライブラリの RateLimit レスポンスから設定する。
@@ -152,7 +163,8 @@ func (r *RateLimiter) ConfigureFromRateLimit(rl *backlog.RateLimit) {
 		if ls.Reset != nil {
 			reset = time.Unix(int64(*ls.Reset), 0)
 		}
-		r.configureLocked(cat, *ls.Limit, remaining, reset)
+		// GET /rateLimit の応答はサーバ報告値なので observed を立てる
+		r.configureLocked(cat, *ls.Limit, remaining, reset, true)
 	}
 	set(CategoryRead, rl.Read)
 	set(CategoryUpdate, rl.Update)
@@ -212,6 +224,9 @@ func (r *RateLimiter) observe(cat Category, remaining int, reset time.Time) {
 	}
 	now := r.now()
 	b.rollover(now)
+	if remaining >= 0 || !reset.IsZero() {
+		b.observed = true // サーバ報告値を反映した(推定ではない)
+	}
 	// サーバ報告のリセット時刻でウィンドウ境界を補正する。
 	// 単調性チェック: サーバ報告値を保持している場合、現在の reset より
 	// 古い(小さい)reset は拒否する(遅延して届いた旧ウィンドウの応答で
@@ -248,15 +263,39 @@ func (r *RateLimiter) ObserveHeaders(cat Category, h http.Header) {
 	r.observe(cat, remaining, reset)
 }
 
-// Snapshot は UI 表示用に区分ごとの現在残量(概算)を返す。
-func (r *RateLimiter) Snapshot() map[Category]int {
+// CategoryStatus は 1 区分のレート制限残量(UI 表示用)。
+// Observed が false の区分は「サーバから実値を取得できていない」ことを示し、
+// Limit / Remaining / ResetUnix は参考値にならない(未初期化なら 0)。
+type CategoryStatus struct {
+	Category  Category
+	Limit     int
+	Remaining int
+	ResetUnix int64 // 現在ウィンドウのリセット時刻(Unix 秒。未初期化は 0)
+	Observed  bool
+}
+
+// snapshotCategories はスナップショットで返す区分と順序(UI の表示順)。
+var snapshotCategories = []Category{CategoryRead, CategoryUpdate, CategorySearch, CategoryIcon}
+
+// Snapshot は区分ごとの現在残量を返す(常に 4 区分・固定順)。
+// 値は「サーバ観測値」と「固定ウィンドウの経過による自然回復」のみを反映し、
+// 推定による補正は行わない。未初期化(GET /rateLimit 未取得)の区分は
+// Observed = false かつ各値 0 で返す。
+func (r *RateLimiter) Snapshot() []CategoryStatus {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	out := map[Category]int{}
 	now := r.now()
-	for cat, b := range r.buckets {
-		b.rollover(now)
-		out[cat] = int(b.tokens)
+	out := make([]CategoryStatus, 0, len(snapshotCategories))
+	for _, cat := range snapshotCategories {
+		st := CategoryStatus{Category: cat}
+		if b, ok := r.buckets[cat]; ok {
+			b.rollover(now) // 経過したウィンドウぶんだけ自然回復させる
+			st.Limit = int(b.limit)
+			st.Remaining = int(b.tokens)
+			st.ResetUnix = b.reset.Unix()
+			st.Observed = b.observed
+		}
+		out = append(out, st)
 	}
 	return out
 }

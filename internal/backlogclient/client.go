@@ -59,6 +59,10 @@ func (c *Client) Host() string { return c.host }
 // RateLimiter はレート制限の状態(UI 残量表示用)を返す。
 func (c *Client) RateLimiter() *RateLimiter { return c.limiter }
 
+// RateLimitSnapshot は区分別のレート制限残量を返す(UI 表示用)。
+// 追加の API 呼び出しは行わず、これまでの観測値と経過時間だけで算出する。
+func (c *Client) RateLimitSnapshot() []CategoryStatus { return c.limiter.Snapshot() }
+
 // InitRateLimit は GET /api/v2/rateLimit で区分別の実上限を取得し、
 // トークンバケットを構成する(上限値はハードコードしない)。
 func (c *Client) InitRateLimit(ctx context.Context) error {

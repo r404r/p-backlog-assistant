@@ -79,6 +79,44 @@ func TestGetMasterData(t *testing.T) {
 	}
 }
 
+// TestListAssigneeCandidates はテンプレートの担当者候補が
+// プロジェクト参加者(未同期ならスペース全体)になることを確認する。
+func TestListAssigneeCandidates(t *testing.T) {
+	s, id, _ := newBulkTestService(t)
+	ctx := context.Background()
+	st, err := s.storeForProfile(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.ReplaceUsers(ctx, []*store.User{
+		{ID: 501, UserCode: "taro", Name: "山田 太郎"},
+		{ID: 502, UserCode: "hanako", Name: "山田 花子"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// 参加者が未同期のうちはスペース全体へ縮退する
+	all, err := s.ListAssigneeCandidates(ctx, id, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(all) != 2 {
+		t.Fatalf("候補 = %+v, want 2 件", all)
+	}
+
+	// 参加者が同期済みならプロジェクト参加者に限定する
+	if err := st.ReplaceProjectUsers(ctx, 1, []store.ProjectUser{{UserID: 501}}); err != nil {
+		t.Fatal(err)
+	}
+	members, err := s.ListAssigneeCandidates(ctx, id, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(members) != 1 || members[0].ID != 501 {
+		t.Errorf("候補 = %+v, want [501]", members)
+	}
+}
+
 func TestImportAndRunBulkJob(t *testing.T) {
 	s, id, fake := newBulkTestService(t)
 	ctx := context.Background()

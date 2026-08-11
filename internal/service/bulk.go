@@ -33,6 +33,21 @@ func (s *ProfileService) masterDataLocked(ctx context.Context, profileID string,
 	return bulk.FetchMasterData(ctx, client, projectID)
 }
 
+// ListAssigneeCandidates は担当者として指定できるユーザを返す
+// (テンプレートの「マスタ」シートに載せる候補。取り込み時の検証と同じ集合)。
+// 対象プロジェクトの参加者が未同期(0 件)の場合はスペース全体のユーザを返す。
+func (s *ProfileService) ListAssigneeCandidates(ctx context.Context, profileID string, projectID int64) ([]store.UserRef, error) {
+	// store を使う操作はプロファイルの削除・保存と排他する(高 2)
+	s.profileMu.RLock()
+	defer s.profileMu.RUnlock()
+	st, err := s.storeForProfile(profileID)
+	if err != nil {
+		return nil, err
+	}
+	users, _, err := bulk.AssigneeCandidates(ctx, st, projectID)
+	return users, err
+}
+
 // ImportBulkFile は記入済み Excel を取り込み、検証・dry-run 差分を行って
 // ジョブを作成する(設計書 5 節)。エラー行がある場合はジョブを作らず、
 // 行番号付きのエラー一覧を返す。

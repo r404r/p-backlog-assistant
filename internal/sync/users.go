@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	stdsync "sync"
 	"time"
 
 	"backlog-assistant/internal/backlogclient"
@@ -152,6 +153,25 @@ func (e *Engine) SyncUsers(ctx context.Context) (*Result, error) {
 	return res, nil
 }
 
+// projectFetchConcurrency はプロジェクト単位取得の並列度。
+// API 側は read 区分のレートリミッタ(スレッドセーフ)が流量を抑えるため、
+// ここでは「待ち時間を隠せる程度」の小さな上限に留める。
+const projectFetchConcurrency = 4
+
+// projectFetchOutcome は 1 プロジェクトぶんの取得で生じた副作用
+// (警告・失敗の別)をワーカー goroutine の外へ持ち出すための値。
+// Result や集計カウンタを goroutine から直接触らず(共有ミューテーション禁止)、
+// 呼び出し元がプロジェクト順にまとめて反映する。
+type projectFetchOutcome struct {
+	userFailed bool
+	teamFailed bool
+	warnings   []string
+}
+
+func (o *projectFetchOutcome) warn(format string, args ...any) {
+	o.warnings = append(o.warnings, fmt.Sprintf(format, args...))
+}
+
 // fetchProjectMembers は各プロジェクトの参加者と管理者(needTeams ならチームも)を
 // 取得する。
 // 参加者の取得に失敗したプロジェクトは警告を付けて飛ばす(既存キャッシュは据え置く)。
@@ -160,43 +180,94 @@ func (e *Engine) SyncUsers(ctx context.Context) (*Result, error) {
 //
 // チームの取得は参加者の取得結果に依存させない(高 1)。参加者が取れなかった
 // プロジェクトでもチームは取得を試み、取れた分は反映対象に含める。
+//
+// 並行設計の意図:
+//   - プロジェクト間には依存が無く待ち時間の大半が API 応答待ちなので、
+//     projectFetchConcurrency 本のワーカーで有界並列に取得する。
+//     並列度を絞るのは、レートリミッタ待ちのリクエストを大量に積まないため。
+//   - 各ワーカーは自分の担当インデックスの要素だけに書き込むため、
+//     結果の並びは常にプロジェクト一覧の元順どおりになる。
+//   - 警告・失敗件数は goroutine 内で共有せず outcome に溜め、
+//     全ワーカーの終了後に元順で集約する。したがって並列化しても
+//     警告の内容・順序・件数は直列実行時と一致する。
 func (e *Engine) fetchProjectMembers(ctx context.Context, projects []store.Project, res *Result, needTeams bool) ([]projectMembers, projectFetchStats) {
 	stats := projectFetchStats{targets: len(projects)}
-	out := make([]projectMembers, 0, len(projects))
-	for _, p := range projects {
-		pm := projectMembers{projectID: p.ID, projectKey: p.ProjectKey}
+	out := make([]projectMembers, len(projects))
+	outcomes := make([]projectFetchOutcome, len(projects))
 
-		users, err := e.api.GetProjectUsers(ctx, p.ID)
-		if err != nil {
+	workers := projectFetchConcurrency
+	if len(projects) < workers {
+		workers = len(projects)
+	}
+	if workers > 0 {
+		indexes := make(chan int)
+		var wg stdsync.WaitGroup
+		for w := 0; w < workers; w++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				for i := range indexes {
+					// 書き込み先はインデックスごとに排他(共有状態を持たない)
+					out[i], outcomes[i] = e.fetchOneProjectMembers(ctx, projects[i], needTeams)
+				}
+			}()
+		}
+		for i := range projects {
+			indexes <- i
+		}
+		close(indexes)
+		wg.Wait()
+	}
+
+	// 集約は呼び出し元 goroutine で元順に行う(順序・件数を直列実行と揃える)
+	for _, oc := range outcomes {
+		if oc.userFailed {
 			stats.userFailed++
-			res.warn("プロジェクト %s の参加者を取得できませんでした(このプロジェクトの参加情報は更新していません): %v", p.ProjectKey, err)
-		} else {
-			e.fillProjectMembers(ctx, &pm, users, res)
 		}
-
-		// スペース /teams が取得できない場合のみプロジェクト単位で補う(高 1)。
-		// 取得できている場合は完全な一覧があるため呼ばない。
-		if needTeams {
-			teams, terr := e.api.GetProjectTeams(ctx, p.ID)
-			if terr != nil {
-				stats.teamFailed++
-				res.warn("プロジェクト %s のチーム一覧を取得できませんでした(このプロジェクトのチーム情報は更新していません): %v", p.ProjectKey, terr)
-			} else {
-				pm.teams = teams
-			}
+		if oc.teamFailed {
+			stats.teamFailed++
 		}
-		out = append(out, pm)
+		res.Warnings = append(res.Warnings, oc.warnings...)
 	}
 	return out, stats
+}
+
+// fetchOneProjectMembers は 1 プロジェクトぶんの取得を行う(ワーカーの本体)。
+// 共有状態には触れず、結果と副作用(警告・失敗)を値で返す。
+func (e *Engine) fetchOneProjectMembers(ctx context.Context, p store.Project, needTeams bool) (projectMembers, projectFetchOutcome) {
+	pm := projectMembers{projectID: p.ID, projectKey: p.ProjectKey}
+	var oc projectFetchOutcome
+
+	users, err := e.api.GetProjectUsers(ctx, p.ID)
+	if err != nil {
+		oc.userFailed = true
+		oc.warn("プロジェクト %s の参加者を取得できませんでした(このプロジェクトの参加情報は更新していません): %v", p.ProjectKey, err)
+	} else {
+		e.fillProjectMembers(ctx, &pm, users, &oc)
+	}
+
+	// スペース /teams が取得できない場合のみプロジェクト単位で補う(高 1)。
+	// 取得できている場合は完全な一覧があるため呼ばない。
+	if needTeams {
+		teams, terr := e.api.GetProjectTeams(ctx, p.ID)
+		if terr != nil {
+			oc.teamFailed = true
+			oc.warn("プロジェクト %s のチーム一覧を取得できませんでした(このプロジェクトのチーム情報は更新していません): %v", p.ProjectKey, terr)
+		} else {
+			pm.teams = teams
+		}
+	}
+	return pm, oc
 }
 
 // fillProjectMembers は取得済みの参加者と管理者一覧から pm の users / members を
 // 組み立てる。管理者一覧の取得に失敗した場合は membersComplete を偽のままにし、
 // project_users を据え置かせる(中 1)。
-func (e *Engine) fillProjectMembers(ctx context.Context, pm *projectMembers, users []backlogclient.User, res *Result) {
+// 警告は呼び出し元(ワーカー)の outcome へ溜める。
+func (e *Engine) fillProjectMembers(ctx context.Context, pm *projectMembers, users []backlogclient.User, oc *projectFetchOutcome) {
 	admins, aerr := e.api.GetProjectAdministrators(ctx, pm.projectID)
 	if aerr != nil {
-		res.warn("プロジェクト %s の管理者一覧を取得できませんでした(このプロジェクトの参加情報は据え置きます): %v", pm.projectKey, aerr)
+		oc.warn("プロジェクト %s の管理者一覧を取得できませんでした(このプロジェクトの参加情報は据え置きます): %v", pm.projectKey, aerr)
 		admins = nil
 	}
 	pm.membersComplete = aerr == nil

@@ -1,11 +1,12 @@
 <script lang="ts" setup>
 // 同期状態画面。TDD 例外(GUI): フロントエンドにテスト基盤が無いため手動確認で担保する。
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import {
   getBackend,
   isMockBackend,
   type LogInfo,
   type Project,
+  type RateLimitStatus,
   type SyncMode,
   type SyncResult,
   type SyncStateRow,
@@ -77,6 +78,7 @@ async function reload() {
   // マウント時に取得した出力先を表示し続けないよう再読込のたびに取り直す(低 2)。
   await loadLogInfo()
   if (!profileId.value) return
+  await loadRateLimit()
   loading.value = true
   globalError.value = ''
   try {
@@ -120,6 +122,61 @@ async function refreshProjects() {
 }
 
 // ---------------------------------------------------------------------------
+// レート制限の残量
+// ---------------------------------------------------------------------------
+
+const RATE_CATEGORY_LABELS: Record<string, string> = {
+  read: '読み込み',
+  update: '更新',
+  search: '検索',
+  icon: 'アイコン',
+}
+
+/** 残量の自動更新間隔(ミリ秒)。バックエンド呼び出しは追加の API 通信を伴わない */
+const RATE_REFRESH_MS = 10_000
+
+const rateLimit = ref<RateLimitStatus | null>(null)
+let rateTimer: ReturnType<typeof setInterval> | null = null
+/**
+ * 画面が破棄済みかどうか。
+ * onMounted は await を挟むため、その待機中にアンマウントされると
+ * onUnmounted(破棄処理)が先に走り、後からタイマーが生成されて残り続ける。
+ * タイマー生成前にこの旗を確認して、破棄済みなら生成しない。
+ */
+let unmounted = false
+
+/** 残量の自動更新タイマーを開始する(破棄済み・生成済みなら何もしない) */
+function startRateTimer() {
+  if (unmounted || rateTimer) return
+  rateTimer = setInterval(loadRateLimit, RATE_REFRESH_MS)
+}
+
+async function loadRateLimit() {
+  if (!profileId.value) return
+  try {
+    rateLimit.value = await backend.getRateLimitStatus(profileId.value)
+  } catch {
+    // 補助情報のため、失敗しても画面全体のエラーにはしない
+    rateLimit.value = null
+  }
+}
+
+function formatResetTime(unix: number): string {
+  if (!unix) return '-'
+  const d = new Date(unix * 1000)
+  const p = (n: number) => String(n).padStart(2, '0')
+  return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`
+}
+
+onUnmounted(() => {
+  unmounted = true
+  if (rateTimer) {
+    clearInterval(rateTimer)
+    rateTimer = null
+  }
+})
+
+// ---------------------------------------------------------------------------
 // 動作ログ
 // ---------------------------------------------------------------------------
 
@@ -143,7 +200,13 @@ onMounted(async () => {
     initializing.value = false
   }
   await loadLogInfo()
-  if (profileId.value) await refreshProjects()
+  if (profileId.value) {
+    await refreshProjects()
+    // 残量は 10 秒間隔で自動更新(追加の API 通信は発生しない)。
+    // ここまでの await 中にアンマウントされている可能性があるため、
+    // startRateTimer 側で破棄済み・二重生成を確認する
+    startRateTimer()
+  }
 })
 
 // ---------------------------------------------------------------------------
@@ -318,7 +381,40 @@ async function runProjectSync() {
         </div>
       </section>
 
-      <p class="hint">レート制限の残量表示は未実装です(今後のマイルストーンで対応予定)。</p>
+      <!-- レート制限の残量(観測値のみ。10 秒間隔で自動更新) -->
+      <section class="panel">
+        <h2>レート制限の残量</h2>
+        <table v-if="rateLimit" class="rate-table">
+          <thead>
+            <tr>
+              <th>区分</th>
+              <th>残量 / 上限(毎分)</th>
+              <th>リセット時刻</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="c in rateLimit.categories" :key="c.name">
+              <td>{{ RATE_CATEGORY_LABELS[c.name] ?? c.name }}</td>
+              <template v-if="c.observed">
+                <td>
+                  <span :class="{ 'rate-low': c.limit > 0 && c.remaining < c.limit * 0.2 }">
+                    {{ c.remaining }}
+                  </span>
+                  / {{ c.limit }}
+                </td>
+                <td>{{ formatResetTime(c.resetUnix) }}</td>
+              </template>
+              <template v-else>
+                <td colspan="2" class="rate-unknown">未取得(API 利用後に表示されます)</td>
+              </template>
+            </tr>
+          </tbody>
+        </table>
+        <p v-else class="hint">残量情報を取得できませんでした。</p>
+        <p class="hint">
+          サーバから観測した実測値を表示します(表示の更新に API は消費しません)。課題検索の同期は「検索」、一括更新の書き込みは「更新」の枠を使用します。
+        </p>
+      </section>
     </template>
 
     <!-- 動作ログの出力先(プロファイル未選択でも表示する) -->
@@ -530,5 +626,28 @@ button.primary:hover:not(:disabled) {
 .log-path {
   font-family: monospace;
   word-break: break-all;
+}
+</style>
+
+<style scoped>
+.rate-table {
+  border-collapse: collapse;
+  min-width: 420px;
+}
+.rate-table th,
+.rate-table td {
+  border: 1px solid #d0d7de;
+  padding: 6px 12px;
+  text-align: left;
+}
+.rate-table th {
+  background: #f6f8fa;
+}
+.rate-low {
+  color: #d1242f;
+  font-weight: 600;
+}
+.rate-unknown {
+  color: #57606a;
 }
 </style>

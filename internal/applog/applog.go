@@ -13,16 +13,20 @@
 package applog
 
 import (
+	"compress/gzip"
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode"
 	"unicode/utf8"
@@ -33,20 +37,36 @@ const (
 	logFilePrefix = "backlog-assistant-"
 	// logFileExt はログファイルの拡張子。
 	logFileExt = ".log"
-	// retentionDays は保持日数。「当日 + 直前 13 日 = 14 日分」を保持し、
-	// それより古い自ファイルは起動時とローテーション時に削除する。
+	// retentionDays は平文ログの保持日数。「当日 + 直前 13 日 = 14 日分」を保持し、
+	// それより古い自ファイルは起動時とローテーション時に gzip 圧縮して
+	// archive/ へ移動する(削除はしない)。
 	retentionDays = 14
+	// archiveRetentionDays はアーカイブの保持日数。「当日 + 直前 89 日 = 90 日分」を
+	// 保持し、それより古いアーカイブは削除する。
+	archiveRetentionDays = 90
 	// appDirName はフォールバック先(ユーザ設定ディレクトリ配下)のフォルダ名。
 	appDirName = "backlog-assistant"
 	// logDirName はログ保存フォルダ名。
 	logDirName = "logs"
+	// archiveDirName はアーカイブ保存フォルダ名(ログ保存フォルダの直下)。
+	archiveDirName = "archive"
+	// gzipExt はアーカイブの拡張子。
+	gzipExt = ".gz"
 	// dayLayout は日付キー(ログファイル名の日付部)のレイアウト。
 	dayLayout = "20060102"
+	// maxArchiveSequence は同名アーカイブの連番の上限(衝突回避の試行回数)。
+	maxArchiveSequence = 100
 )
 
 // logFilePattern は自アプリのログファイル名(backlog-assistant-YYYYMMDD.log)。
-// 削除対象はこのパターンに一致するファイルのみに限定する(他ファイルは温存)。
+// アーカイブ対象はこのパターンに一致するファイルのみに限定する(他ファイルは温存)。
 var logFilePattern = regexp.MustCompile(`^` + regexp.QuoteMeta(logFilePrefix) + `(\d{8})` + regexp.QuoteMeta(logFileExt) + `$`)
+
+// archiveFilePattern は自アプリのアーカイブ名
+// (backlog-assistant-YYYYMMDD.log.gz、衝突時は backlog-assistant-YYYYMMDD.log.N.gz)。
+// アーカイブの削除対象はこのパターンに一致するファイルのみに限定する。
+var archiveFilePattern = regexp.MustCompile(`^` + regexp.QuoteMeta(logFilePrefix) + `(\d{8})` +
+	regexp.QuoteMeta(logFileExt) + `(?:\.\d+)?` + regexp.QuoteMeta(gzipExt) + `$`)
 
 // apiKeyPattern は URL・エラーメッセージ中の apiKey パラメータ値にマッチする
 // (internal/backlogclient の MaskAPIKey と同等。applog を単体で完結させるため再定義)。
@@ -194,6 +214,14 @@ type Logger struct {
 	// rotateErrDay はローテーション失敗を記録済みの日付キー。
 	// 失敗のたびに同じエラー行を量産しないための抑制用。
 	rotateErrDay string
+
+	// archive はアーカイブ処理本体(テスト差し替え用。生成時に archiveLogsFn を取り込む)。
+	archive func(dir string, now time.Time, retentionDays, archiveDays int) (archiveResult, error)
+	// archiving はアーカイブ実行中フラグ(二重起動防止)。
+	// mu とは独立に扱う(アーカイブ中もログ出力を止めないため)。
+	archiving atomic.Bool
+	// archiveWG は実行中のアーカイブ goroutine の待機用(テストから完了を待つ)。
+	archiveWG sync.WaitGroup
 }
 
 // Init はログ保存先を決定してログファイルを開く。
@@ -313,12 +341,13 @@ func newLogger(dir string, now func() time.Time, fallbackReason string) (*Logger
 		return nil, err
 	}
 	l := &Logger{
-		logger: slog.New(slog.NewTextHandler(f, &slog.HandlerOptions{Level: slog.LevelInfo})),
-		file:   f,
-		path:   path,
-		dir:    dir,
-		day:    at.Format(dayLayout),
-		now:    now,
+		logger:  slog.New(slog.NewTextHandler(f, &slog.HandlerOptions{Level: slog.LevelInfo})),
+		file:    f,
+		path:    path,
+		dir:     dir,
+		day:     at.Format(dayLayout),
+		now:     now,
+		archive: archiveLogsFn,
 	}
 
 	l.mu.Lock()
@@ -332,27 +361,157 @@ func newLogger(dir string, now func() time.Time, fallbackReason string) (*Logger
 		startAttrs = append(startAttrs, slog.String("fallbackReason", fallbackReason))
 	}
 	l.logAttrsLocked(slog.LevelInfo, "動作ログを開始しました", startAttrs...)
-	// 起動時の保持期間超過ファイル削除(失敗してもログ出力は継続する)
-	l.cleanOldLocked(at)
+	// 起動時のアーカイブ(バックグラウンド実行。失敗してもログ出力は継続する)
+	l.startArchive(at)
 	return l, nil
 }
 
-// cleanOldLocked は保持期間を過ぎたログを削除し、結果を記録する(mu 保持前提)。
-func (l *Logger) cleanOldLocked(at time.Time) {
-	removed, cerr := cleanOldLogFiles(l.dir, at, retentionDays)
-	switch {
-	case cerr != nil:
-		l.logAttrsLocked(slog.LevelInfo, "古いログの削除に失敗しました", slog.String("error", cerr.Error()))
-	case len(removed) > 0:
-		l.logAttrsLocked(slog.LevelInfo, "古いログを削除しました",
-			slog.Int("count", len(removed)), slog.Int("retentionDays", retentionDays))
+// ---- ログの定期アーカイブ ----------------------------------------------------
+//
+// 保持期間(retentionDays)を過ぎた平文ログは削除せず、gzip 圧縮して
+// logs/archive/ へ移動し、アーカイブは archiveRetentionDays 保持する。
+// 起動時と日付ローテーション時にバックグラウンド(goroutine)で実行し、
+// 利用者の操作を待たせない。失敗はログ 1 行の記録に留め、アプリの動作には
+// 影響させない(パニックも回復する)。
+
+// archiveResult はアーカイブ処理の結果件数。
+type archiveResult struct {
+	archived int // gzip 圧縮して archive/ へ移したファイル数
+	removed  int // 保持期間を過ぎて削除したアーカイブ数
+	// skipped は処理全体を見送った理由(空なら通常実行)。
+	// アーカイブ先が想定外の状態(シンボリックリンク・非ディレクトリ)の場合に入る。
+	skipped string
+}
+
+// archiveLogsFn はアーカイブ処理本体(テスト差し替え用。Logger 生成時に取り込む)。
+var archiveLogsFn = archiveOldLogs
+
+// startArchive はアーカイブをバックグラウンドで開始する。
+// すでに実行中の場合は何もしない(二重起動防止)。
+func (l *Logger) startArchive(at time.Time) {
+	if l == nil || l.dir == "" || l.archive == nil {
+		return
+	}
+	if !l.archiving.CompareAndSwap(false, true) {
+		return // 実行中(前回の処理が長引いている)
+	}
+	fn := l.archive
+	l.archiveWG.Add(1)
+	go func() {
+		// defer は登録の逆順に実行される。パニック回復 → 実行中フラグ解除 の順に
+		// することで、回復ログを書き終える前に次の起動が始まらないようにする。
+		defer l.archiveWG.Done()
+		defer l.archiving.Store(false)
+		defer func() {
+			if rec := recover(); rec != nil {
+				l.write(slog.LevelError, "ログのアーカイブで想定外のエラーが発生しました",
+					slog.String("panic", fmt.Sprint(rec)))
+			}
+		}()
+		res, err := fn(l.dir, at, retentionDays, archiveRetentionDays)
+		l.logArchiveResult(res, err)
+	}()
+}
+
+// logArchiveResult はアーカイブ結果を 1 行だけ記録する。
+// 何も対象が無かった場合は記録しない(毎起動でログを増やさないため)。
+func (l *Logger) logArchiveResult(res archiveResult, err error) {
+	if res.skipped != "" {
+		// アーカイブ先が想定外の状態(中 3)。利用者が気づけるよう 1 行だけ残す
+		l.write(slog.LevelWarn, "ログのアーカイブをスキップしました",
+			slog.String("reason", res.skipped))
+		return
+	}
+	attrs := []slog.Attr{
+		slog.Int("archived", res.archived),
+		slog.Int("removed", res.removed),
+		slog.Int("retentionDays", retentionDays),
+		slog.Int("archiveRetentionDays", archiveRetentionDays),
+	}
+	if err != nil {
+		l.write(slog.LevelError, "ログのアーカイブに失敗しました",
+			append(attrs, slog.String("error", err.Error()))...)
+		return
+	}
+	if res.archived > 0 || res.removed > 0 {
+		l.write(slog.LevelInfo, "ログをアーカイブしました", attrs...)
 	}
 }
 
-// cleanOldLogFiles は dir 内の「自アプリのログファイル」のうち、
-// 保持日数より古い日付のものだけを削除し、削除したファイル名を返す。
-// 他アプリのファイル・命名パターン外のファイル・ディレクトリは対象外。
-func cleanOldLogFiles(dir string, now time.Time, days int) ([]string, error) {
+// waitArchive は実行中のアーカイブの完了を待つ(テスト用)。
+func (l *Logger) waitArchive() {
+	if l == nil {
+		return
+	}
+	l.archiveWG.Wait()
+}
+
+// archiveOldLogs は dir 内の保持期間超過ログを gzip 圧縮して dir/archive/ へ移し、
+// さらに保持期間を過ぎたアーカイブを削除する。
+// 他アプリのファイル・命名パターン外のファイル・ディレクトリ・シンボリックリンクは
+// 一切触らない。個々のファイルの失敗は他のファイルの処理を止めず、最初のエラーを返す。
+// アーカイブ先が想定外の状態(シンボリックリンク・非ディレクトリ)の場合は
+// 処理全体を見送り、理由を結果に入れて返す(中 3)。
+func archiveOldLogs(dir string, now time.Time, retentionDays, archiveDays int) (archiveResult, error) {
+	var res archiveResult
+	archiveDir := filepath.Join(dir, archiveDirName)
+	if reason, unusable := unusableArchiveDir(archiveDir); unusable {
+		res.skipped = reason
+		return res, nil
+	}
+	targets, err := expiredFiles(dir, now, retentionDays, logFilePattern)
+	if err != nil {
+		return res, err
+	}
+	var firstErr error
+	if len(targets) > 0 {
+		// 対象があるときだけ作成する(不要なフォルダを作らない)
+		if merr := os.MkdirAll(archiveDir, 0o700); merr != nil {
+			return res, fmt.Errorf("アーカイブ先フォルダを作成できません: %w", merr)
+		}
+		for _, name := range targets {
+			if aerr := archiveOne(dir, archiveDir, name); aerr != nil {
+				if firstErr == nil {
+					firstErr = aerr
+				}
+				continue
+			}
+			res.archived++
+		}
+	}
+	removed, rerr := removeExpiredArchives(archiveDir, now, archiveDays)
+	res.removed = removed
+	if rerr != nil && firstErr == nil {
+		firstErr = rerr
+	}
+	return res, firstErr
+}
+
+// unusableArchiveDir はアーカイブ先が使えない状態かを判定し、その理由を返す。
+// シンボリックリンクを辿ると、リンク先の任意のフォルダへログを移動したり、
+// そこにある命名パターン一致ファイルを保持期間判定で削除したりしうるため、
+// os.Lstat でリンクを辿らずに確認する(中 3)。
+// 存在しない場合(これから作る)と確認できない場合は「使える」として扱い、
+// 実際の失敗は作成時のエラーで拾う。
+func unusableArchiveDir(archiveDir string) (reason string, unusable bool) {
+	fi, err := os.Lstat(archiveDir)
+	if err != nil {
+		return "", false
+	}
+	switch {
+	case fi.Mode()&os.ModeSymlink != 0:
+		return "アーカイブ先がシンボリックリンクです", true
+	case !fi.IsDir():
+		return "アーカイブ先がフォルダではありません", true
+	}
+	return "", false
+}
+
+// expiredFiles は dir 内で pattern に一致し、かつ保持日数より古い日付の
+// 通常ファイル名を返す。保持するのは「当日 + 直前 (days-1) 日 = days 日分」で、
+// 境界日ちょうどは保持する(当日のファイルは常に対象外)。
+// ディレクトリ・シンボリックリンク・その他の特殊ファイルは対象にしない(中 3)。
+func expiredFiles(dir string, now time.Time, days int, pattern *regexp.Regexp) ([]string, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -360,36 +519,129 @@ func cleanOldLogFiles(dir string, now time.Time, days int) ([]string, error) {
 		}
 		return nil, err
 	}
-	// 保持するのは「当日 + 直前 (days-1) 日 = days 日分」。
-	// 当日を含めて days 日分になるよう境界日は today-(days-1) とし、
-	// それより古い日付を削除する(境界日ちょうどは残す)。
 	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.Local)
 	cutoff := today.AddDate(0, 0, -(days - 1))
 
-	var removed []string
-	var firstErr error
+	var out []string
 	for _, e := range entries {
 		if e.IsDir() {
 			continue
 		}
-		m := logFilePattern.FindStringSubmatch(e.Name())
+		m := pattern.FindStringSubmatch(e.Name())
 		if m == nil {
+			continue
+		}
+		// 通常ファイルのみを対象にする(シンボリックリンクを辿って
+		// リンク先の実体を圧縮・削除しないため。os.Lstat はリンクを辿らない)
+		fi, lerr := os.Lstat(filepath.Join(dir, e.Name()))
+		if lerr != nil || !fi.Mode().IsRegular() {
 			continue
 		}
 		day, perr := time.ParseInLocation(dayLayout, m[1], time.Local)
 		if perr != nil {
 			continue // 日付として解釈できないものは触らない
 		}
-		if !day.Before(cutoff) {
-			continue
+		if day.Before(cutoff) {
+			out = append(out, e.Name())
 		}
-		if rerr := os.Remove(filepath.Join(dir, e.Name())); rerr != nil {
+	}
+	return out, nil
+}
+
+// archiveOne は 1 ファイルを gzip 圧縮して archiveDir へ移す。
+// 「圧縮の書き込み成功 → fsync → 元ファイル削除」の順で行うため、
+// 途中で失敗しても元ファイルは失われない。
+func archiveOne(dir, archiveDir, name string) error {
+	dst, err := uniqueArchivePath(archiveDir, name)
+	if err != nil {
+		return err
+	}
+	if err := compressFile(filepath.Join(dir, name), dst); err != nil {
+		return err
+	}
+	// ここまで来ればアーカイブは永続化済み。削除に失敗した場合は元ファイルが
+	// 残るだけで(次回実行時に連番付きで再アーカイブされる)、ログは失われない。
+	if err := os.Remove(filepath.Join(dir, name)); err != nil {
+		return fmt.Errorf("圧縮済みの元ログを削除できません: %w", err)
+	}
+	return nil
+}
+
+// uniqueArchivePath は未使用のアーカイブパスを返す。
+// 既に同名がある場合は上書きせず ".N" の連番を付ける(name.log.1.gz)。
+func uniqueArchivePath(archiveDir, name string) (string, error) {
+	candidate := filepath.Join(archiveDir, name+gzipExt)
+	for i := 0; i < maxArchiveSequence; i++ {
+		if i > 0 {
+			candidate = filepath.Join(archiveDir, name+"."+strconv.Itoa(i)+gzipExt)
+		}
+		_, err := os.Lstat(candidate)
+		if os.IsNotExist(err) {
+			return candidate, nil
+		}
+		if err != nil {
+			return "", err
+		}
+	}
+	return "", fmt.Errorf("アーカイブ名が重複しています: %s", name+gzipExt)
+}
+
+// compressFile は src を gzip 圧縮して dst へ書き出す。
+// dst は新規作成のみ(既存があれば失敗)。途中で失敗した場合は書きかけの
+// dst を削除し、src には一切触れない。
+func compressFile(src, dst string) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	out, err := os.OpenFile(dst, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	if err != nil {
+		return err
+	}
+	if werr := writeGzip(out, in); werr != nil {
+		_ = out.Close() // 二重 Close のエラーは無視してよい(後始末が目的)
+		_ = os.Remove(dst)
+		return werr
+	}
+	return nil
+}
+
+// writeGzip は in の内容を gzip 圧縮して out へ書き、fsync してから閉じる。
+// 元ファイルの削除前に fsync することで、電源断でアーカイブだけが失われる
+// 事態を避ける。
+func writeGzip(out *os.File, in io.Reader) error {
+	zw := gzip.NewWriter(out)
+	if _, err := io.Copy(zw, in); err != nil {
+		_ = zw.Close()
+		return err
+	}
+	if err := zw.Close(); err != nil { // 残りのバッファとフッタを書き出す
+		return err
+	}
+	if err := out.Sync(); err != nil {
+		return err
+	}
+	return out.Close()
+}
+
+// removeExpiredArchives は archiveDir 内の自アプリのアーカイブのうち、
+// 保持日数より古い日付のものを削除し、削除件数を返す。
+func removeExpiredArchives(archiveDir string, now time.Time, days int) (int, error) {
+	targets, err := expiredFiles(archiveDir, now, days, archiveFilePattern)
+	if err != nil {
+		return 0, err
+	}
+	removed := 0
+	var firstErr error
+	for _, name := range targets {
+		if rerr := os.Remove(filepath.Join(archiveDir, name)); rerr != nil {
 			if firstErr == nil {
 				firstErr = rerr
 			}
 			continue
 		}
-		removed = append(removed, e.Name())
+		removed++
 	}
 	return removed, firstErr
 }
@@ -444,7 +696,7 @@ func (l *Logger) write(level slog.Level, msg string, attrs ...slog.Attr) {
 
 // rotateIfNeededLocked は日付が変わっていればログファイルを切り替える(mu 保持前提。高 2)。
 // 長時間起動したままでも日付ごとにファイルが分かれるようにする。
-// 切り替え後は保持期間超過ファイルの削除も再実行する。
+// 切り替え後は保持期間超過ファイルのアーカイブも再実行する(バックグラウンド)。
 func (l *Logger) rotateIfNeededLocked() {
 	if l.logger == nil || l.file == nil {
 		return
@@ -475,7 +727,7 @@ func (l *Logger) rotateIfNeededLocked() {
 	_ = old.Close()
 	l.logAttrsLocked(slog.LevelInfo, "日付が変わったためログファイルを切り替えました",
 		slog.String("previousFile", oldName))
-	l.cleanOldLocked(at)
+	l.startArchive(at)
 }
 
 // logAttrsLocked は属性値の再マスクを行って 1 行書き出す(mu 保持前提)。

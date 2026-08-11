@@ -14,6 +14,7 @@ import (
 
 	"github.com/xuri/excelize/v2"
 
+	"backlog-assistant/internal/export"
 	"backlog-assistant/internal/store"
 )
 
@@ -52,7 +53,8 @@ type ImportResult struct {
 	Errors    []RowError   `json:"errors"`
 	Previews  []RowPreview `json:"previews"`
 	// Warnings は取り込みを止めないが利用者へ伝えるべき注意
-	//(プロジェクト ID メタが無い旧テンプレート・担当者検証の縮退 等)。
+	//(プロジェクト ID メタが無い旧テンプレート・担当者検証の縮退・
+	// 名前列と食い違う ID 列を無視した行 等)。
 	Warnings []string `json:"warnings"`
 }
 
@@ -145,6 +147,9 @@ func (im *Importer) Import(ctx context.Context, opts ImportOptions) (*ImportResu
 			continue
 		}
 		plans = append(plans, plan)
+		// 行の警告(名前列と食い違う ID 列を無視した等)は、行が受理された
+		// 場合のみ報告する(エラー行の警告は利用者の注意を分散させるだけ)
+		res.Warnings = append(res.Warnings, plan.warnings...)
 		switch plan.action {
 		case ActionCreate:
 			res.Creates++
@@ -176,27 +181,42 @@ func (im *Importer) Import(ctx context.Context, opts ImportOptions) (*ImportResu
 	return res, nil
 }
 
-// assigneeCandidates は担当者検証に使うユーザ候補を返す(中 1)。
+// AssigneeCandidates は担当者として指定できるユーザを返す(中 1)。
 //
 // 候補は対象プロジェクトの参加者に限定する(参加していないユーザを担当者に
 // 指定しても API が拒否するため、送信前に弾いたほうが早く気づける)。
 // ユーザ同期が未実施で参加者が 0 件の場合は、担当者名の解決が一切できなく
-// なってしまうためスペース全体のユーザへフォールバックし、警告を残す。
-func (im *Importer) assigneeCandidates(ctx context.Context, projectID int64, res *ImportResult) ([]store.UserRef, error) {
-	members, err := im.st.ListProjectUserRefs(ctx, projectID)
+// なってしまうためスペース全体のユーザへフォールバックする
+// (第 2 戻り値がフォールバックしたかどうか)。
+//
+// 取り込み時の検証とテンプレート出力の候補一覧で同じ集合を使うため公開している。
+func AssigneeCandidates(ctx context.Context, st *store.Store, projectID int64) ([]store.UserRef, bool, error) {
+	members, err := st.ListProjectUserRefs(ctx, projectID)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	if len(members) > 0 {
-		return members, nil
+		return members, false, nil
 	}
-	all, err := im.st.ListUserRefs(ctx)
+	all, err := st.ListUserRefs(ctx)
+	if err != nil {
+		return nil, false, err
+	}
+	return all, true, nil
+}
+
+// assigneeCandidates は担当者検証に使うユーザ候補を返し、
+// スペース全体へ縮退した場合は警告を残す。
+func (im *Importer) assigneeCandidates(ctx context.Context, projectID int64, res *ImportResult) ([]store.UserRef, error) {
+	users, fellBack, err := AssigneeCandidates(ctx, im.st, projectID)
 	if err != nil {
 		return nil, err
 	}
-	res.Warnings = append(res.Warnings,
-		"ユーザ同期が未実施のため担当者検証はスペース全体で行いました(プロジェクトに参加していない担当者は実行時に失敗する可能性があります)")
-	return all, nil
+	if fellBack {
+		res.Warnings = append(res.Warnings,
+			"ユーザ同期が未実施のため担当者検証はスペース全体で行いました(プロジェクトに参加していない担当者は実行時に失敗する可能性があります)")
+	}
+	return users, nil
 }
 
 // jobKind は行の内訳からジョブ種別を決める。
@@ -260,6 +280,9 @@ type rowPlan struct {
 	payload         Payload
 	changes         []string
 	conflictWarning bool
+	// warnings は取り込みを止めないが利用者へ伝えるべき注意
+	//(名前列と食い違う ID 列を無視した 等)。ImportResult.Warnings へ集約する。
+	warnings []string
 }
 
 // index は ID・名前の解決表。
@@ -314,15 +337,28 @@ type validator struct {
 	projectID         int64
 	defaultPriorityID int64
 	idx               *index
+	// rowWarnings は処理中の行で発生した警告(plan の入口で初期化する)。
+	rowWarnings []string
 }
 
 // plan は 1 行を検証し、送信内容と差分を決める。
 // エラーは行ごとに 1 件目で打ち切る(メッセージを読みやすく保つ)。
 func (v *validator) plan(ctx context.Context, r rawRow) (*rowPlan, error) {
+	v.rowWarnings = nil
+	var (
+		plan *rowPlan
+		err  error
+	)
 	if r.cell(colIssueKey) == "" {
-		return v.planCreate(r)
+		plan, err = v.planCreate(r)
+	} else {
+		plan, err = v.planUpdate(ctx, r)
 	}
-	return v.planUpdate(ctx, r)
+	if err != nil {
+		return nil, err
+	}
+	plan.warnings = v.rowWarnings
+	return plan, nil
 }
 
 // planCreate は新規追加行(issueKey が空)を検証する。
@@ -344,6 +380,7 @@ func (v *validator) planCreate(r rawRow) (*rowPlan, error) {
 	if summary == "" {
 		return nil, errors.New("件名が入力されていません(新規追加には必須です)")
 	}
+	// 新規追加行でも名前列を優先する(ID 列との食い違いは警告して無視する)
 	issueTypeID, _, err := v.resolveNamed(r, colIssueTypeID, colIssueTypeName, "種別",
 		v.idx.issueTypeByID, v.idx.issueTypeByName, false)
 	if err != nil {
@@ -545,68 +582,141 @@ func (v *validator) planUpdate(ctx context.Context, r rawRow) (*rowPlan, error) 
 	return plan, nil
 }
 
-// resolveNamed は ID 列・名前列からマスタの ID を解決する。
-// ID 列を正とし、ID が空で名前のみの場合は一意に解決できるときだけ補完する
-// (曖昧・不明はエラー。設計書 5 節)。
+// resolveNamed は名前列・ID 列からマスタの ID を解決する。
+//
+// 名前列を常に優先する(利用者はテンプレートの「マスタ」シートのドロップダウンから
+// 名前で選ぶため。ID 列は参考情報)。名前列に値があれば名前で解決し、解決できない
+// 場合・曖昧な場合はエラーにする。ID 列を使うのは名前列が空の行だけ。
+// 両方に値があり指す先が食い違う場合は名前列を採用し、ID 列を無視した旨を
+// 行の警告として残す(高 1)。
+//
+// 「どちらの列が編集されたか」を現在値から推測していた頃は、出力後にリモートが
+// 変化した行で古い ID 列を採用する誤更新が起きていた。推測はやめ、正となる列を
+// 名前列 1 つに固定している。
 //
 // 戻り値の cleared は #CLEAR# が指定されたことを表す(allowClear が真のときのみ)。
 func (v *validator) resolveNamed(r rawRow, idCol, nameCol, label string,
 	byID map[int64]string, byName map[string][]int64, allowClear bool) (id *int64, cleared bool, err error) {
 
 	idVal, nameVal := r.cell(idCol), r.cell(nameCol)
-	if idVal == ClearToken || nameVal == ClearToken {
+	// 名前列が正のため、#CLEAR# の判定も名前列を優先する(2 回目レビュー高 1)。
+	// ID 列の #CLEAR# が効くのは名前列が空の行だけ。
+	if nameVal == ClearToken {
+		if !allowClear {
+			return nil, false, clearNotAllowed(label)
+		}
+		v.warnIgnoredIDRaw(r.rowNo, idCol, idVal, ClearToken)
+		return nil, true, nil
+	}
+
+	if nameVal != "" {
+		ids := byName[normalizeHeader(nameVal)]
+		switch len(ids) {
+		case 0:
+			return nil, false, fmt.Errorf("%s「%s」が見つかりません(「%s」シートの候補から選んでください)",
+				label, nameVal, export.SheetBulkMaster)
+		case 1:
+			v.warnIgnoredID(r.rowNo, idCol, idVal, ids[0])
+			return ptrInt64(ids[0]), false, nil
+		default:
+			// 名前列を正とするため、ID 列を足すだけでは解決しない(名前列を空にする必要がある)
+			return nil, false, fmt.Errorf("%s「%s」は複数あり一意に決められません(%s を空にして %s を指定してください)",
+				label, nameVal, nameColumnLabels[nameCol], idColumnLabels[idCol])
+		}
+	}
+	if idVal == ClearToken { // 名前列が空の行のみ ID 列の #CLEAR# を受理する
 		if !allowClear {
 			return nil, false, clearNotAllowed(label)
 		}
 		return nil, true, nil
 	}
-	if idVal != "" {
-		n, perr := strconv.ParseInt(idVal, 10, 64)
-		if perr != nil {
-			return nil, false, fmt.Errorf("%sID は数値で入力してください(%q)", label, idVal)
-		}
-		if _, ok := byID[n]; !ok {
-			return nil, false, fmt.Errorf("%sID %d は存在しません", label, n)
-		}
-		return ptrInt64(n), false, nil // ID 列を正とする(名前列は参照しない)
-	}
-	if nameVal == "" {
+	if idVal == "" {
 		return nil, false, nil // 未指定 = 変更しない
 	}
-	ids := byName[normalizeHeader(nameVal)]
-	switch len(ids) {
-	case 0:
-		return nil, false, fmt.Errorf("%s「%s」が見つかりません(%s を指定してください)", label, nameVal, idColumnLabels[idCol])
-	case 1:
-		return ptrInt64(ids[0]), false, nil
-	default:
-		return nil, false, fmt.Errorf("%s「%s」は複数あり一意に決められません(%s を指定してください)", label, nameVal, idColumnLabels[idCol])
+	n, perr := strconv.ParseInt(idVal, 10, 64)
+	if perr != nil {
+		return nil, false, fmt.Errorf("%sID は数値で入力してください(%q)", label, idVal)
 	}
+	if _, ok := byID[n]; !ok {
+		return nil, false, fmt.Errorf("%sID %d は存在しません", label, n)
+	}
+	return ptrInt64(n), false, nil
 }
 
-// resolveAssignee は担当者を解決する。ID 列を正とし、名前列のみの場合は
-// ローカル users の名前 → ログイン ID の順に一意一致を探す
+// warnIgnoredID は名前列で解決した ID と ID 列の値が食い違う場合に行の警告を残す。
+// ID 列が空、または名前列と同じ値を指す場合は何もしない
+// (テンプレートは両方を出力するため、一致は通常の状態)。
+// 数値として読めない ID 列も「食い違い」として無視する(名前列が正のため、
+// 参考情報の書式エラーで取り込み全体を止めない)。
+func (v *validator) warnIgnoredID(rowNo int, idCol, idVal string, resolved int64) {
+	if n, err := strconv.ParseInt(idVal, 10, 64); err == nil && n == resolved {
+		return
+	}
+	v.warnIgnoredIDRaw(rowNo, idCol, idVal, "")
+}
+
+// warnIgnoredIDRaw は ID 列が無視された旨の警告を残す(agree に一致する値は警告しない)。
+// 名前列の #CLEAR# を採用した場合など、解決 ID との数値比較ができない経路でも使う。
+func (v *validator) warnIgnoredIDRaw(rowNo int, idCol, idVal, agree string) {
+	if idVal == "" || idVal == agree {
+		return
+	}
+	v.rowWarnings = append(v.rowWarnings,
+		fmt.Sprintf("%d 行目: %s 列は名前列と食い違うため無視しました", rowNo, idColumnLabels[idCol]))
+}
+
+// resolveAssignee は担当者を解決する。resolveNamed と同じく名前列を常に優先し、
+// テンプレートが出力する「表示名 (ID)」形式なら括弧内の ID を使う
+// (同名ユーザを区別できる唯一の手段)。
+// 名前だけの場合はローカル users の名前 → ログイン ID の順に一意一致を探す
 // (同名ユーザの誤選択を防ぐため、複数一致は必ずエラーにする)。
+// 担当者ID 列を使うのは名前列が空の行だけで、食い違う ID 列は警告して無視する。
 func (v *validator) resolveAssignee(r rawRow, allowClear bool) (id *int64, cleared bool, err error) {
 	idVal, nameVal := r.cell(colAssigneeID), r.cell(colAssigneeName)
-	if idVal == ClearToken || nameVal == ClearToken {
+	// resolveNamed と同じく #CLEAR# も名前列を優先する(2 回目レビュー高 1)
+	if nameVal == ClearToken {
+		if !allowClear {
+			return nil, false, clearNotAllowed("担当者")
+		}
+		v.warnIgnoredIDRaw(r.rowNo, colAssigneeID, idVal, ClearToken)
+		return nil, true, nil
+	}
+
+	if nameVal != "" {
+		resolved, rerr := v.resolveAssigneeName(nameVal)
+		if rerr != nil {
+			return nil, false, rerr
+		}
+		v.warnIgnoredID(r.rowNo, colAssigneeID, idVal, resolved)
+		return ptrInt64(resolved), false, nil
+	}
+	if idVal == ClearToken { // 名前列が空の行のみ ID 列の #CLEAR# を受理する
 		if !allowClear {
 			return nil, false, clearNotAllowed("担当者")
 		}
 		return nil, true, nil
 	}
-	if idVal != "" {
-		n, perr := strconv.ParseInt(idVal, 10, 64)
-		if perr != nil {
-			return nil, false, fmt.Errorf("担当者ID は数値で入力してください(%q)", idVal)
-		}
-		if _, ok := v.idx.userByID[n]; !ok {
-			return nil, false, fmt.Errorf("担当者ID %d は存在しません(ユーザ情報を同期してから再実行してください)", n)
-		}
-		return ptrInt64(n), false, nil
-	}
-	if nameVal == "" {
+	if idVal == "" {
 		return nil, false, nil // 未指定 = 変更しない
+	}
+	n, perr := strconv.ParseInt(idVal, 10, 64)
+	if perr != nil {
+		return nil, false, fmt.Errorf("担当者ID は数値で入力してください(%q)", idVal)
+	}
+	if _, ok := v.idx.userByID[n]; !ok {
+		return nil, false, fmt.Errorf("担当者ID %d は存在しません(ユーザ情報を同期してから再実行してください)", n)
+	}
+	return ptrInt64(n), false, nil
+}
+
+// resolveAssigneeName は担当者名(「表示名 (ID)」形式・表示名・ログイン ID)を
+// ユーザ ID へ解決する。
+func (v *validator) resolveAssigneeName(nameVal string) (int64, error) {
+	if labelID, ok := export.ParseAssigneeLabel(nameVal); ok {
+		if _, exists := v.idx.userByID[labelID]; !exists {
+			return 0, fmt.Errorf("担当者「%s」が見つかりません(ユーザ情報を同期してから再実行してください)", nameVal)
+		}
+		return labelID, nil
 	}
 	key := normalizeHeader(nameVal)
 	ids := v.idx.userByName[key]
@@ -615,11 +725,13 @@ func (v *validator) resolveAssignee(r rawRow, allowClear bool) (id *int64, clear
 	}
 	switch len(ids) {
 	case 0:
-		return nil, false, fmt.Errorf("担当者「%s」が見つかりません(担当者ID を指定してください)", nameVal)
+		return 0, fmt.Errorf("担当者「%s」が見つかりません(「%s」シートの候補から選んでください)",
+			nameVal, export.SheetBulkMaster)
 	case 1:
-		return ptrInt64(ids[0]), false, nil
+		return ids[0], nil
 	default:
-		return nil, false, fmt.Errorf("担当者「%s」は複数あり一意に決められません(担当者ID を指定してください)", nameVal)
+		return 0, fmt.Errorf("担当者「%s」は複数あり一意に決められません(「%s」シートの候補から選んでください)",
+			nameVal, export.SheetBulkMaster)
 	}
 }
 

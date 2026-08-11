@@ -1,11 +1,15 @@
 package applog
 
 import (
+	"compress/gzip"
+	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -121,18 +125,50 @@ func TestResolveLogDirErrorsWhenNoCandidate(t *testing.T) {
 	}
 }
 
-func TestCleanOldLogFilesRemovesOnlyOwnOldFiles(t *testing.T) {
+// --- ログの定期アーカイブ -----------------------------------------------------
+
+// setArchiveFn はアーカイブ処理をテスト用の関数へ差し替える。
+// 差し替えは newLogger の時点で Logger のフィールドへ取り込まれるため、
+// ロガー生成前に呼ぶこと。
+func setArchiveFn(t *testing.T, fn func(dir string, now time.Time, retentionDays, archiveDays int) (archiveResult, error)) {
+	t.Helper()
+	prev := archiveLogsFn
+	archiveLogsFn = fn
+	t.Cleanup(func() { archiveLogsFn = prev })
+}
+
+// readGzip は gzip ファイルを解凍して内容を返す。
+func readGzip(t *testing.T, path string) string {
+	t.Helper()
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatalf("アーカイブを開けません: %v", err)
+	}
+	defer f.Close()
+	zr, err := gzip.NewReader(f)
+	if err != nil {
+		t.Fatalf("gzip として読めません(%s): %v", path, err)
+	}
+	defer zr.Close()
+	b, err := io.ReadAll(zr)
+	if err != nil {
+		t.Fatalf("アーカイブを読み出せません: %v", err)
+	}
+	return string(b)
+}
+
+func TestArchiveOldLogsMovesOnlyOwnExpiredFiles(t *testing.T) {
 	dir := t.TempDir()
 	now := time.Date(2026, 8, 9, 10, 0, 0, 0, time.Local)
 
 	// 保持するのは「当日 + 直前 13 日 = 14 日分」(retentionDays = 14)。
-	// 当日が 20260809 なら保持境界は 20260727 で、それより古い日付は削除する。
+	// 当日が 20260809 なら保持境界は 20260727 で、それより古い日付をアーカイブする。
 	files := []string{
-		"backlog-assistant-20260725.log",     // 15 日前 → 削除
-		"backlog-assistant-20260726.log",     // 14 日前(15 日分目) → 削除
+		"backlog-assistant-20260725.log",     // 15 日前 → アーカイブ
+		"backlog-assistant-20260726.log",     // 14 日前(15 日分目) → アーカイブ
 		"backlog-assistant-20260727.log",     // 13 日前(14 日分目) → 保持
 		"backlog-assistant-20260809.log",     // 当日 → 保持
-		"backlog-assistant-20250101.log",     // 大幅に古い → 削除
+		"backlog-assistant-20260601.log",     // さらに古い(90 日以内) → アーカイブ
 		"other-app-20250101.log",             // 他アプリのログ → 保持
 		"backlog-assistant-2025-01-01.log",   // 命名パターン外 → 保持
 		"backlog-assistant-20250101.log.bak", // 命名パターン外 → 保持
@@ -144,17 +180,17 @@ func TestCleanOldLogFilesRemovesOnlyOwnOldFiles(t *testing.T) {
 			t.Fatalf("前提ファイルを作成できません: %v", err)
 		}
 	}
-	// サブディレクトリが同名でも削除しない
+	// サブディレクトリが同名でも触らない
 	if err := os.Mkdir(filepath.Join(dir, "backlog-assistant-20250102.log"), 0o700); err != nil {
 		t.Fatalf("前提ディレクトリを作成できません: %v", err)
 	}
 
-	removed, err := cleanOldLogFiles(dir, now, retentionDays)
+	res, err := archiveOldLogs(dir, now, retentionDays, archiveRetentionDays)
 	if err != nil {
-		t.Fatalf("cleanOldLogFiles が失敗しました: %v", err)
+		t.Fatalf("archiveOldLogs が失敗しました: %v", err)
 	}
-	if len(removed) != 3 {
-		t.Errorf("削除件数 = %d(%v), want 3", len(removed), removed)
+	if res.archived != 3 {
+		t.Errorf("アーカイブ件数 = %d, want 3", res.archived)
 	}
 
 	wantKept := []string{
@@ -169,18 +205,452 @@ func TestCleanOldLogFilesRemovesOnlyOwnOldFiles(t *testing.T) {
 	}
 	for _, f := range wantKept {
 		if _, err := os.Stat(filepath.Join(dir, f)); err != nil {
+			t.Errorf("触ってはいけない %q が消えました: %v", f, err)
+		}
+	}
+	wantArchived := []string{
+		"backlog-assistant-20260725.log.gz",
+		"backlog-assistant-20260726.log.gz",
+		"backlog-assistant-20260601.log.gz",
+	}
+	for _, f := range wantArchived {
+		if _, err := os.Stat(filepath.Join(dir, archiveDirName, f)); err != nil {
+			t.Errorf("アーカイブ %q がありません: %v", f, err)
+		}
+	}
+	for _, f := range []string{
+		"backlog-assistant-20260725.log",
+		"backlog-assistant-20260726.log",
+		"backlog-assistant-20260601.log",
+	} {
+		if _, err := os.Stat(filepath.Join(dir, f)); !os.IsNotExist(err) {
+			t.Errorf("アーカイブ済みの元ログ %q が残っています(err=%v)", f, err)
+		}
+	}
+}
+
+func TestArchiveOldLogsKeepsContentInGzip(t *testing.T) {
+	dir := t.TempDir()
+	now := time.Date(2026, 8, 9, 10, 0, 0, 0, time.Local)
+	content := strings.Repeat("time=2026-07-01T00:00:00Z level=INFO msg=操作\n", 200)
+	src := filepath.Join(dir, "backlog-assistant-20260701.log")
+	if err := os.WriteFile(src, []byte(content), 0o600); err != nil {
+		t.Fatalf("前提ファイルを作成できません: %v", err)
+	}
+
+	res, err := archiveOldLogs(dir, now, retentionDays, archiveRetentionDays)
+	if err != nil {
+		t.Fatalf("archiveOldLogs が失敗しました: %v", err)
+	}
+	if res.archived != 1 {
+		t.Fatalf("アーカイブ件数 = %d, want 1", res.archived)
+	}
+	gz := filepath.Join(dir, archiveDirName, "backlog-assistant-20260701.log.gz")
+	if got := readGzip(t, gz); got != content {
+		t.Errorf("解凍結果が元のログと一致しません(len=%d, want %d)", len(got), len(content))
+	}
+	if _, err := os.Stat(src); !os.IsNotExist(err) {
+		t.Errorf("圧縮後に元ファイルが削除されていません(err=%v)", err)
+	}
+	// 圧縮されていること(同内容の平文よりは小さい)
+	fi, err := os.Stat(gz)
+	if err != nil {
+		t.Fatalf("アーカイブの情報を取れません: %v", err)
+	}
+	if fi.Size() >= int64(len(content)) {
+		t.Errorf("アーカイブが圧縮されていません(size=%d, 元 %d)", fi.Size(), len(content))
+	}
+}
+
+func TestArchiveOldLogsAddsSequenceWhenArchiveExists(t *testing.T) {
+	dir := t.TempDir()
+	now := time.Date(2026, 8, 9, 10, 0, 0, 0, time.Local)
+	archiveDir := filepath.Join(dir, archiveDirName)
+	if err := os.MkdirAll(archiveDir, 0o700); err != nil {
+		t.Fatalf("前提ディレクトリを作成できません: %v", err)
+	}
+	// 既存アーカイブ(中身は上書きされてはならない)
+	existing := filepath.Join(archiveDir, "backlog-assistant-20260701.log.gz")
+	if err := os.WriteFile(existing, []byte("既存のアーカイブ"), 0o600); err != nil {
+		t.Fatalf("前提ファイルを作成できません: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "backlog-assistant-20260701.log"), []byte("新しい内容"), 0o600); err != nil {
+		t.Fatalf("前提ファイルを作成できません: %v", err)
+	}
+
+	if _, err := archiveOldLogs(dir, now, retentionDays, archiveRetentionDays); err != nil {
+		t.Fatalf("archiveOldLogs が失敗しました: %v", err)
+	}
+
+	b, err := os.ReadFile(existing)
+	if err != nil {
+		t.Fatalf("既存アーカイブを読めません: %v", err)
+	}
+	if string(b) != "既存のアーカイブ" {
+		t.Errorf("既存アーカイブが上書きされました: %q", string(b))
+	}
+	seq := filepath.Join(archiveDir, "backlog-assistant-20260701.log.1.gz")
+	if got := readGzip(t, seq); got != "新しい内容" {
+		t.Errorf("連番アーカイブの内容 = %q, want %q", got, "新しい内容")
+	}
+}
+
+func TestArchiveOldLogsRemovesExpiredArchives(t *testing.T) {
+	dir := t.TempDir()
+	now := time.Date(2026, 8, 9, 10, 0, 0, 0, time.Local)
+	archiveDir := filepath.Join(dir, archiveDirName)
+	if err := os.MkdirAll(archiveDir, 0o700); err != nil {
+		t.Fatalf("前提ディレクトリを作成できません: %v", err)
+	}
+	// 保持は「当日 + 直前 89 日 = 90 日分」。当日が 20260809 なら境界は 20260512。
+	files := []string{
+		"backlog-assistant-20260510.log.gz",   // 境界より古い → 削除
+		"backlog-assistant-20260511.log.gz",   // 境界より古い → 削除
+		"backlog-assistant-20260511.log.1.gz", // 連番付きも削除対象
+		"backlog-assistant-20260512.log.gz",   // 境界(90 日分目) → 保持
+		"backlog-assistant-20260701.log.gz",   // 保持
+		"other-app-20250101.log.gz",           // 他アプリ → 保持
+		"backlog-assistant-20250101.log",      // 非 gz(パターン外) → 保持
+		"notes.txt",                           // 無関係 → 保持
+	}
+	for _, f := range files {
+		if err := os.WriteFile(filepath.Join(archiveDir, f), []byte("x"), 0o600); err != nil {
+			t.Fatalf("前提ファイルを作成できません: %v", err)
+		}
+	}
+
+	res, err := archiveOldLogs(dir, now, retentionDays, archiveRetentionDays)
+	if err != nil {
+		t.Fatalf("archiveOldLogs が失敗しました: %v", err)
+	}
+	if res.removed != 3 {
+		t.Errorf("削除件数 = %d, want 3", res.removed)
+	}
+	for _, f := range []string{
+		"backlog-assistant-20260510.log.gz",
+		"backlog-assistant-20260511.log.gz",
+		"backlog-assistant-20260511.log.1.gz",
+	} {
+		if _, err := os.Stat(filepath.Join(archiveDir, f)); !os.IsNotExist(err) {
+			t.Errorf("保持期間を過ぎたアーカイブ %q が残っています(err=%v)", f, err)
+		}
+	}
+	for _, f := range []string{
+		"backlog-assistant-20260512.log.gz",
+		"backlog-assistant-20260701.log.gz",
+		"other-app-20250101.log.gz",
+		"backlog-assistant-20250101.log",
+		"notes.txt",
+	} {
+		if _, err := os.Stat(filepath.Join(archiveDir, f)); err != nil {
 			t.Errorf("削除してはいけない %q が消えました: %v", f, err)
 		}
 	}
-	wantGone := []string{
-		"backlog-assistant-20260725.log",
-		"backlog-assistant-20260726.log",
-		"backlog-assistant-20250101.log",
+}
+
+// TestArchiveOldLogsSkipsWhenArchiveIsNotDirectory は、logs/archive が
+// ディレクトリ以外(通常ファイル)として存在する場合にアーカイブ処理全体を
+// スキップし、元ファイルに触らないことを確認する(中 3)。
+func TestArchiveOldLogsSkipsWhenArchiveIsNotDirectory(t *testing.T) {
+	dir := t.TempDir()
+	now := time.Date(2026, 8, 9, 10, 0, 0, 0, time.Local)
+	src := filepath.Join(dir, "backlog-assistant-20260701.log")
+	if err := os.WriteFile(src, []byte("残っているべき内容"), 0o600); err != nil {
+		t.Fatalf("前提ファイルを作成できません: %v", err)
 	}
-	for _, f := range wantGone {
-		if _, err := os.Stat(filepath.Join(dir, f)); !os.IsNotExist(err) {
-			t.Errorf("古いログ %q が削除されていません(err=%v)", f, err)
-		}
+	// archive を「通常ファイル」として作る(アーカイブ先として使えない状態)
+	if err := os.WriteFile(filepath.Join(dir, archiveDirName), []byte("dummy"), 0o600); err != nil {
+		t.Fatalf("前提ファイルを作成できません: %v", err)
+	}
+
+	res, err := archiveOldLogs(dir, now, retentionDays, archiveRetentionDays)
+	if err != nil {
+		t.Fatalf("スキップはエラーにしない: %v", err)
+	}
+	if res.skipped == "" {
+		t.Error("スキップ理由が返っていません")
+	}
+	if res.archived != 0 || res.removed != 0 {
+		t.Errorf("結果 = %+v, want 0 件", res)
+	}
+	b, rerr := os.ReadFile(src)
+	if rerr != nil {
+		t.Fatalf("スキップ時に元ファイルが失われました: %v", rerr)
+	}
+	if string(b) != "残っているべき内容" {
+		t.Errorf("元ファイルの内容 = %q(変化しています)", string(b))
+	}
+}
+
+// TestArchiveOldLogsSkipsSymlinkedLogFiles は、ログ名のシンボリックリンクを
+// アーカイブ対象にしないことを確認する(中 3)。
+// リンクを辿ると、リンク先の実体(他の場所のファイル)を圧縮して削除してしまう。
+func TestArchiveOldLogsSkipsSymlinkedLogFiles(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows ではシンボリックリンクの作成に特権が必要なため検証しない")
+	}
+	dir := t.TempDir()
+	now := time.Date(2026, 8, 9, 10, 0, 0, 0, time.Local)
+
+	// リンク先(ログ保存先の外にある想定の実体)
+	target := filepath.Join(t.TempDir(), "important.dat")
+	if err := os.WriteFile(target, []byte("消えてはいけない内容"), 0o600); err != nil {
+		t.Fatalf("前提ファイルを作成できません: %v", err)
+	}
+	link := filepath.Join(dir, "backlog-assistant-20260701.log")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatalf("シンボリックリンクを作成できません: %v", err)
+	}
+
+	res, err := archiveOldLogs(dir, now, retentionDays, archiveRetentionDays)
+	if err != nil {
+		t.Fatalf("archiveOldLogs が失敗しました: %v", err)
+	}
+	if res.archived != 0 {
+		t.Errorf("アーカイブ件数 = %d, want 0(シンボリックリンクは対象外)", res.archived)
+	}
+	if _, lerr := os.Lstat(link); lerr != nil {
+		t.Errorf("シンボリックリンクが消えました: %v", lerr)
+	}
+	b, rerr := os.ReadFile(target)
+	if rerr != nil {
+		t.Fatalf("リンク先が失われました: %v", rerr)
+	}
+	if string(b) != "消えてはいけない内容" {
+		t.Errorf("リンク先の内容 = %q(変化しています)", string(b))
+	}
+	if _, serr := os.Stat(filepath.Join(dir, archiveDirName)); !os.IsNotExist(serr) {
+		t.Errorf("対象が無いのにアーカイブフォルダが作成されました(err=%v)", serr)
+	}
+}
+
+// TestArchiveOldLogsSkipsWhenArchiveIsSymlink は、logs/archive が
+// シンボリックリンクの場合にアーカイブ処理全体をスキップすることを確認する(中 3)。
+// リンクを辿ると、リンク先のフォルダへログを移動し、そこのファイルを
+// 保持期間判定で削除しうる。
+func TestArchiveOldLogsSkipsWhenArchiveIsSymlink(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows ではシンボリックリンクの作成に特権が必要なため検証しない")
+	}
+	dir := t.TempDir()
+	now := time.Date(2026, 8, 9, 10, 0, 0, 0, time.Local)
+
+	// リンク先フォルダ(保持期間を過ぎた名前のファイルを置き、削除されないことを見る)
+	linkTargetDir := t.TempDir()
+	outside := filepath.Join(linkTargetDir, "backlog-assistant-20260101.log.gz")
+	if err := os.WriteFile(outside, []byte("消えてはいけない内容"), 0o600); err != nil {
+		t.Fatalf("前提ファイルを作成できません: %v", err)
+	}
+	if err := os.Symlink(linkTargetDir, filepath.Join(dir, archiveDirName)); err != nil {
+		t.Fatalf("シンボリックリンクを作成できません: %v", err)
+	}
+	src := filepath.Join(dir, "backlog-assistant-20260701.log")
+	if err := os.WriteFile(src, []byte("残っているべき内容"), 0o600); err != nil {
+		t.Fatalf("前提ファイルを作成できません: %v", err)
+	}
+
+	res, err := archiveOldLogs(dir, now, retentionDays, archiveRetentionDays)
+	if err != nil {
+		t.Fatalf("スキップはエラーにしない: %v", err)
+	}
+	if res.skipped == "" {
+		t.Error("スキップ理由が返っていません")
+	}
+	if res.archived != 0 || res.removed != 0 {
+		t.Errorf("結果 = %+v, want 0 件", res)
+	}
+	if _, serr := os.Stat(src); serr != nil {
+		t.Errorf("元ログが移動されました: %v", serr)
+	}
+	if _, serr := os.Stat(outside); serr != nil {
+		t.Errorf("リンク先のファイルが削除されました: %v", serr)
+	}
+	entries, rerr := os.ReadDir(linkTargetDir)
+	if rerr != nil {
+		t.Fatalf("リンク先を読めません: %v", rerr)
+	}
+	if len(entries) != 1 {
+		t.Errorf("リンク先のファイル数 = %d, want 1(何も移動しない)", len(entries))
+	}
+}
+
+// TestNewLoggerLogsArchiveSkipWarning は、アーカイブをスキップした事実を
+// 警告として 1 行だけ記録することを確認する(中 3)。
+func TestNewLoggerLogsArchiveSkipWarning(t *testing.T) {
+	dir := t.TempDir()
+	at := time.Date(2026, 8, 9, 10, 0, 0, 0, time.Local)
+	if err := os.WriteFile(filepath.Join(dir, "backlog-assistant-20260701.log"), []byte("古いログ"), 0o600); err != nil {
+		t.Fatalf("前提ファイルを作成できません: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, archiveDirName), []byte("dummy"), 0o600); err != nil {
+		t.Fatalf("前提ファイルを作成できません: %v", err)
+	}
+
+	lg, err := newLogger(dir, fixedClock(at), "")
+	if err != nil {
+		t.Fatalf("newLogger が失敗しました: %v", err)
+	}
+	lg.waitArchive()
+	lg.Op("スキップ後の操作")
+	if err := lg.Close(); err != nil {
+		t.Fatalf("Close が失敗しました: %v", err)
+	}
+
+	content := readLogFile(t, lg.Path())
+	if got := strings.Count(content, "ログのアーカイブをスキップしました"); got != 1 {
+		t.Errorf("スキップ警告の行数 = %d, want 1:\n%s", got, content)
+	}
+	if !strings.Contains(content, "level=WARN") {
+		t.Errorf("警告レベルで記録されていません:\n%s", content)
+	}
+	if !strings.Contains(content, "スキップ後の操作") {
+		t.Errorf("スキップ後もログ出力が継続していません:\n%s", content)
+	}
+}
+
+func TestCompressFileRemovesPartialOutputOnFailure(t *testing.T) {
+	dir := t.TempDir()
+	// 読み出しが必ず失敗する入力(ディレクトリ)で途中失敗を再現する
+	src := filepath.Join(dir, "backlog-assistant-20260701.log")
+	if err := os.Mkdir(src, 0o700); err != nil {
+		t.Fatalf("前提ディレクトリを作成できません: %v", err)
+	}
+	dst := filepath.Join(dir, "backlog-assistant-20260701.log.gz")
+
+	if err := compressFile(src, dst); err == nil {
+		t.Fatal("入力を読めない場合はエラーを期待しました")
+	}
+	if _, err := os.Stat(dst); !os.IsNotExist(err) {
+		t.Errorf("書きかけのアーカイブが残っています(err=%v)", err)
+	}
+	if _, err := os.Stat(src); err != nil {
+		t.Errorf("失敗時に入力が失われました: %v", err)
+	}
+}
+
+func TestNewLoggerArchivesOldFilesInBackground(t *testing.T) {
+	dir := t.TempDir()
+	at := time.Date(2026, 8, 9, 10, 0, 0, 0, time.Local)
+	// 保持期間(14 日)超過かつアーカイブ保持期間(90 日)内の日付
+	old := filepath.Join(dir, "backlog-assistant-20260701.log")
+	if err := os.WriteFile(old, []byte("古いログ"), 0o600); err != nil {
+		t.Fatalf("前提ファイルを作成できません: %v", err)
+	}
+
+	lg, err := newLogger(dir, fixedClock(at), "")
+	if err != nil {
+		t.Fatalf("newLogger が失敗しました: %v", err)
+	}
+	lg.waitArchive()
+	if err := lg.Close(); err != nil {
+		t.Fatalf("Close が失敗しました: %v", err)
+	}
+
+	if _, err := os.Stat(old); !os.IsNotExist(err) {
+		t.Errorf("起動時に古いログがアーカイブされていません(err=%v)", err)
+	}
+	gz := filepath.Join(dir, archiveDirName, "backlog-assistant-20260701.log.gz")
+	if got := readGzip(t, gz); got != "古いログ" {
+		t.Errorf("アーカイブの内容 = %q, want %q", got, "古いログ")
+	}
+	content := readLogFile(t, lg.Path())
+	if !strings.Contains(content, "archived=1") {
+		t.Errorf("アーカイブ結果がログに記録されていません:\n%s", content)
+	}
+}
+
+func TestNewLoggerDoesNotCreateArchiveDirWhenNothingToArchive(t *testing.T) {
+	dir := t.TempDir()
+	lg, err := newLogger(dir, time.Now, "")
+	if err != nil {
+		t.Fatalf("newLogger が失敗しました: %v", err)
+	}
+	lg.waitArchive()
+	if err := lg.Close(); err != nil {
+		t.Fatalf("Close が失敗しました: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, archiveDirName)); !os.IsNotExist(err) {
+		t.Errorf("対象が無いのにアーカイブフォルダが作成されました(err=%v)", err)
+	}
+}
+
+func TestLoggerDoesNotStartArchiveTwice(t *testing.T) {
+	dir := t.TempDir()
+	var calls int32
+	release := make(chan struct{})
+	setArchiveFn(t, func(string, time.Time, int, int) (archiveResult, error) {
+		atomic.AddInt32(&calls, 1)
+		<-release
+		return archiveResult{}, nil
+	})
+
+	// newLogger が 1 回目を起動し、テストが release を閉じるまで実行中のままになる
+	lg, err := newLogger(dir, time.Now, "")
+	if err != nil {
+		t.Fatalf("newLogger が失敗しました: %v", err)
+	}
+	defer lg.Close()
+
+	// 実行中の起動要求は無視される(二重起動防止)
+	lg.startArchive(time.Now())
+	close(release)
+	lg.waitArchive()
+	if got := atomic.LoadInt32(&calls); got != 1 {
+		t.Errorf("実行回数 = %d, want 1(実行中の再起動は無視)", got)
+	}
+	// 完了後は再び起動できる
+	lg.startArchive(time.Now())
+	lg.waitArchive()
+	if got := atomic.LoadInt32(&calls); got != 2 {
+		t.Errorf("完了後の実行回数 = %d, want 2", got)
+	}
+}
+
+func TestLoggerLogsArchiveFailureWithoutBreakingLogging(t *testing.T) {
+	dir := t.TempDir()
+	setArchiveFn(t, func(string, time.Time, int, int) (archiveResult, error) {
+		return archiveResult{}, errFmt("アーカイブ先が読めません")
+	})
+	lg, err := newLogger(dir, time.Now, "")
+	if err != nil {
+		t.Fatalf("newLogger が失敗しました: %v", err)
+	}
+	lg.waitArchive()
+	lg.Op("アーカイブ失敗後の操作")
+	if err := lg.Close(); err != nil {
+		t.Fatalf("Close が失敗しました: %v", err)
+	}
+
+	content := readLogFile(t, lg.Path())
+	if !strings.Contains(content, "アーカイブ先が読めません") {
+		t.Errorf("アーカイブ失敗が記録されていません:\n%s", content)
+	}
+	if !strings.Contains(content, "アーカイブ失敗後の操作") {
+		t.Errorf("アーカイブ失敗後もログ出力が継続していません:\n%s", content)
+	}
+}
+
+func TestLoggerRecoversFromArchivePanic(t *testing.T) {
+	dir := t.TempDir()
+	setArchiveFn(t, func(string, time.Time, int, int) (archiveResult, error) {
+		panic("想定外の失敗")
+	})
+	lg, err := newLogger(dir, time.Now, "")
+	if err != nil {
+		t.Fatalf("newLogger が失敗しました: %v", err)
+	}
+	lg.waitArchive()
+	lg.Op("パニック後の操作")
+	if err := lg.Close(); err != nil {
+		t.Fatalf("Close が失敗しました: %v", err)
+	}
+
+	content := readLogFile(t, lg.Path())
+	if !strings.Contains(content, "想定外の失敗") {
+		t.Errorf("パニックが記録されていません:\n%s", content)
+	}
+	if !strings.Contains(content, "パニック後の操作") {
+		t.Errorf("パニック後もログ出力が継続していません:\n%s", content)
 	}
 }
 
@@ -336,22 +806,6 @@ func TestNewLoggerUsesLocalTimeZone(t *testing.T) {
 	}
 	if !strings.Contains(content, marker) {
 		t.Errorf("ローカル TZ(%s)の時刻が記録されていません:\n%s", marker, content)
-	}
-}
-
-func TestNewLoggerRemovesOldFilesOnStart(t *testing.T) {
-	dir := t.TempDir()
-	old := filepath.Join(dir, "backlog-assistant-20200101.log")
-	if err := os.WriteFile(old, []byte("x"), 0o600); err != nil {
-		t.Fatalf("前提ファイルを作成できません: %v", err)
-	}
-	lg, err := newLogger(dir, time.Now, "")
-	if err != nil {
-		t.Fatalf("newLogger が失敗しました: %v", err)
-	}
-	defer lg.Close()
-	if _, err := os.Stat(old); !os.IsNotExist(err) {
-		t.Errorf("起動時に古いログが削除されていません(err=%v)", err)
 	}
 }
 
@@ -578,7 +1032,7 @@ func TestLoggerRotatesFileWhenDateChanges(t *testing.T) {
 	dir := t.TempDir()
 	day1 := time.Date(2026, 8, 9, 23, 59, 0, 0, time.Local)
 	day2 := time.Date(2026, 8, 10, 0, 1, 0, 0, time.Local)
-	// 起動時は保持境界内、ローテーション後に境界外になるファイル(削除の再実行を確認)
+	// 起動時は保持境界内、ローテーション後に境界外になるファイル(アーカイブの再実行を確認)
 	expiring := filepath.Join(dir, "backlog-assistant-20260727.log")
 	if err := os.WriteFile(expiring, []byte("x"), 0o600); err != nil {
 		t.Fatalf("前提ファイルを作成できません: %v", err)
@@ -589,9 +1043,10 @@ func TestLoggerRotatesFileWhenDateChanges(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newLogger が失敗しました: %v", err)
 	}
+	lg.waitArchive()
 	lg.Op("日付が変わる前の操作")
 	if _, err := os.Stat(expiring); err != nil {
-		t.Fatalf("保持境界内のファイルが削除されました: %v", err)
+		t.Fatalf("保持境界内のファイルがアーカイブされました: %v", err)
 	}
 
 	current = day2
@@ -599,6 +1054,7 @@ func TestLoggerRotatesFileWhenDateChanges(t *testing.T) {
 	if want := filepath.Join(dir, "backlog-assistant-20260810.log"); lg.Path() != want {
 		t.Errorf("ローテーション後の Path = %q, want %q", lg.Path(), want)
 	}
+	lg.waitArchive()
 	if err := lg.Close(); err != nil {
 		t.Fatalf("Close が失敗しました: %v", err)
 	}
@@ -618,7 +1074,10 @@ func TestLoggerRotatesFileWhenDateChanges(t *testing.T) {
 		t.Errorf("終了ログが新ファイルに書かれていません:\n%s", second)
 	}
 	if _, err := os.Stat(expiring); !os.IsNotExist(err) {
-		t.Errorf("ローテーション時に保持期間切れのファイルが削除されていません(err=%v)", err)
+		t.Errorf("ローテーション時に保持期間切れのファイルがアーカイブされていません(err=%v)", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, archiveDirName, "backlog-assistant-20260727.log.gz")); err != nil {
+		t.Errorf("ローテーション時のアーカイブが作成されていません: %v", err)
 	}
 }
 

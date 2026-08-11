@@ -33,6 +33,8 @@ type connector interface {
 	GetUsers(ctx context.Context) ([]*backlog.User, error)
 	GetTeams(ctx context.Context) ([]*backlog.Team, error)
 	InitRateLimit(ctx context.Context) error
+	// RateLimitSnapshot は区分別のレート制限残量(API 呼び出しなし)。
+	RateLimitSnapshot() []backlogclient.CategoryStatus
 	syncpkg.API
 	// 一括更新・追加(書き込み + マスタ取得)。GetIssue は syncpkg.API と
 	// 同じシグネチャのため重複してもよい(埋め込みインターフェースの重複メソッド)。

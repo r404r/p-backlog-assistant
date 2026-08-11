@@ -205,35 +205,34 @@ func (e *Engine) fullSyncIssues(ctx context.Context, projectID int64, onProgress
 	// 3. sort=created&order=asc で全ページ取得して UPSERT する。
 	//    created は不変なので、offset ページング中に並行更新があっても
 	//    行の並びが崩れない(sort=updated では取り逃しが起きる)。
+	//    取得(API)と書き込み(DB)はパイプライン化して重ねる
+	//    (ページ順・書き込み順は維持。fetchIssuePagesPipelined を参照)。
 	seen := map[int64]bool{}
 	fetchedAt := e.nowString()
-	for page := 0; ; page++ {
-		if page >= maxPages {
-			return nil, fmt.Errorf("課題取得のページ数が上限(%d)を超えました", maxPages)
-		}
-		q := baseQuery
-		q.Sort, q.Order, q.Count, q.Offset = "created", "asc", pageSize, page*pageSize
-		issues, err := e.api.GetIssues(ctx, q)
-		if err != nil {
-			return nil, fmt.Errorf("課題一覧の取得に失敗しました(offset %d): %w", q.Offset, err)
-		}
-		if len(issues) > 0 {
-			rows := toStoreIssues(issues, fetchedAt)
-			if err := e.st.WithTx(ctx, func(tx *sql.Tx) error {
-				return store.UpsertIssues(ctx, tx, rows)
-			}); err != nil {
-				return nil, err
+	if err := e.fetchIssuePagesPipelined(ctx,
+		func(page int) backlogclient.IssueQuery {
+			q := baseQuery
+			q.Sort, q.Order, q.Count, q.Offset = "created", "asc", pageSize, page*pageSize
+			return q
+		},
+		func(_ int, issues []backlogclient.Issue) error {
+			if len(issues) > 0 {
+				rows := toStoreIssues(issues, fetchedAt)
+				if err := e.st.WithTx(ctx, func(tx *sql.Tx) error {
+					return store.UpsertIssues(ctx, tx, rows)
+				}); err != nil {
+					return err
+				}
+				for _, i := range issues {
+					seen[i.ID] = true
+				}
+				res.Fetched += len(issues)
+				res.Upserted += len(issues)
 			}
-			for _, i := range issues {
-				seen[i.ID] = true
-			}
-			res.Fetched += len(issues)
-			res.Upserted += len(issues)
-		}
-		report(onProgress, Progress{Phase: PhaseFetch, Fetched: res.Fetched, Total: total})
-		if len(issues) < pageSize {
-			break
-		}
+			report(onProgress, Progress{Phase: PhaseFetch, Fetched: res.Fetched, Total: total})
+			return nil
+		}); err != nil {
+		return nil, err
 	}
 
 	// 4. 一時集合に含まれないローカル行を「削除候補」とする。
@@ -345,46 +344,43 @@ func (e *Engine) incrementalSyncIssues(ctx context.Context, projectID int64, sta
 		return nil, err
 	}
 	fetchedAt := e.nowString()
-	for page := 0; ; page++ {
-		if page >= maxPages {
-			return nil, fmt.Errorf("課題取得のページ数が上限(%d)を超えました", maxPages)
-		}
-		q := backlogclient.IssueQuery{
-			ProjectIDs:   []int64{projectID},
-			UpdatedSince: updatedSince,
-			Sort:         "created", Order: "asc",
-			Count: pageSize, Offset: page * pageSize,
-		}
-		issues, err := e.api.GetIssues(ctx, q)
-		if err != nil {
-			return nil, fmt.Errorf("課題一覧の取得に失敗しました(offset %d): %w", q.Offset, err)
-		}
-		res.Fetched += len(issues)
+	// フル同期と同じく、取得と書き込みをオーバーラップさせる(順序は維持)。
+	if err := e.fetchIssuePagesPipelined(ctx,
+		func(page int) backlogclient.IssueQuery {
+			return backlogclient.IssueQuery{
+				ProjectIDs:   []int64{projectID},
+				UpdatedSince: updatedSince,
+				Sort:         "created", Order: "asc",
+				Count: pageSize, Offset: page * pageSize,
+			}
+		},
+		func(_ int, issues []backlogclient.Issue) error {
+			res.Fetched += len(issues)
 
-		// updated がローカルと同じ行は書き込まない(重複 DB 更新の防止)
-		var changed []backlogclient.Issue
-		for _, i := range issues {
-			if prev, ok := localUpdated[i.ID]; ok && prev == i.Updated && i.Updated != "" {
-				continue
+			// updated がローカルと同じ行は書き込まない(重複 DB 更新の防止)
+			var changed []backlogclient.Issue
+			for _, i := range issues {
+				if prev, ok := localUpdated[i.ID]; ok && prev == i.Updated && i.Updated != "" {
+					continue
+				}
+				changed = append(changed, i)
 			}
-			changed = append(changed, i)
-		}
-		if len(changed) > 0 {
-			rows := toStoreIssues(changed, fetchedAt)
-			if err := e.st.WithTx(ctx, func(tx *sql.Tx) error {
-				return store.UpsertIssues(ctx, tx, rows)
-			}); err != nil {
-				return nil, err
+			if len(changed) > 0 {
+				rows := toStoreIssues(changed, fetchedAt)
+				if err := e.st.WithTx(ctx, func(tx *sql.Tx) error {
+					return store.UpsertIssues(ctx, tx, rows)
+				}); err != nil {
+					return err
+				}
+				for _, i := range changed {
+					localUpdated[i.ID] = i.Updated
+				}
+				res.Upserted += len(changed)
 			}
-			for _, i := range changed {
-				localUpdated[i.ID] = i.Updated
-			}
-			res.Upserted += len(changed)
-		}
-		report(onProgress, Progress{Phase: PhaseFetch, Fetched: res.Fetched})
-		if len(issues) < pageSize {
-			break
-		}
+			report(onProgress, Progress{Phase: PhaseFetch, Fetched: res.Fetched})
+			return nil
+		}); err != nil {
+		return nil, err
 	}
 
 	// 2. 削除検知(activities を全ページ消化)。
@@ -402,6 +398,98 @@ func (e *Engine) incrementalSyncIssues(ctx context.Context, projectID int64, sta
 		return nil, err
 	}
 	return res, nil
+}
+
+// issuePipelineBuffer は取得済みページを溜めるバッファ段数。
+// 2 ページぶん先読みできれば「取得 1 ページ」と「書き込み 1 ページ」が
+// 常に重なり、これ以上増やしても待ち時間は減らない(メモリだけ増える)。
+const issuePipelineBuffer = 2
+
+// fetchIssuePagesPipelined は課題ページの取得と処理をオーバーラップさせる。
+//
+// 並行設計の意図:
+//   - プロデューサ(専用 goroutine)は queryFor(page) のクエリで API を叩き、
+//     取得結果をバッファ付きチャネルへページ順に流す。
+//   - コンシューマは呼び出し元 goroutine そのもので、受け取ったページを
+//     ページ順に handle へ渡す。DB 書き込み・進捗通知・集計は
+//     すべてこの 1 goroutine の中だけで起きるため、
+//     既存のトランザクション整合・進捗順序・共有状態の扱いは変わらない。
+//   - offset ページングの整合性のため、取得順・処理順はどちらも直列のまま。
+//     重ねるのは「次ページの取得」と「今のページの書き込み」だけ。
+//
+// エラー・キャンセル:
+//   - handle が失敗したら context をキャンセルしてプロデューサを確実に止め、
+//     チャネルを空にしてから goroutine の終了を待つ(リーク防止)。
+//   - 双方が失敗した場合はページ順で先に起きた側(= handle 側)を返す。
+//     handle がページ i を処理できたということは、ページ i の取得は成功して
+//     いるので、プロデューサの失敗は必ずページ i より後ろにあたる。
+//   - 呼び出し元の context がキャンセルされた場合は、そのエラーを返す。
+func (e *Engine) fetchIssuePagesPipelined(
+	ctx context.Context,
+	queryFor func(page int) backlogclient.IssueQuery,
+	handle func(page int, issues []backlogclient.Issue) error,
+) error {
+	// 内部 context。コンシューマ側の失敗でプロデューサを止めるために使う。
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	type fetchedPage struct {
+		index  int
+		issues []backlogclient.Issue
+	}
+	ch := make(chan fetchedPage, issuePipelineBuffer)
+	done := make(chan struct{})
+	var producerErr error // done のクローズ後にのみ読む
+
+	go func() {
+		defer close(done)
+		defer close(ch)
+		for page := 0; ; page++ {
+			if page >= maxPages {
+				producerErr = fmt.Errorf("課題取得のページ数が上限(%d)を超えました", maxPages)
+				return
+			}
+			q := queryFor(page)
+			issues, err := e.api.GetIssues(ctx, q)
+			if err != nil {
+				producerErr = fmt.Errorf("課題一覧の取得に失敗しました(offset %d): %w", q.Offset, err)
+				return
+			}
+			select {
+			case ch <- fetchedPage{index: page, issues: issues}:
+			case <-ctx.Done():
+				// コンシューマの失敗・呼び出し元のキャンセルで送信先が消えた
+				producerErr = ctx.Err()
+				return
+			}
+			if len(issues) < pageSize {
+				return
+			}
+		}
+	}()
+
+	var handleErr error
+	for p := range ch {
+		// 呼び出し元がキャンセルした場合は以降の書き込みを行わない
+		if err := ctx.Err(); err != nil {
+			handleErr = err
+			break
+		}
+		if err := handle(p.index, p.issues); err != nil {
+			handleErr = err
+			break
+		}
+	}
+	// プロデューサを止め、送信でブロックしている場合に備えて残りを捨てる。
+	cancel()
+	for range ch { //nolint:revive // チャネルを空にしてプロデューサを解放する
+	}
+	<-done // producerErr の読み取りを goroutine の終了後に揃える
+
+	if handleErr != nil {
+		return handleErr
+	}
+	return producerErr
 }
 
 // consumeDeleteActivities は activityTypeId=4 のアクティビティを minId から

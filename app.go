@@ -292,6 +292,36 @@ func (a *App) GetPermissionStatus(profileID string) (*service.PermissionStatus, 
 	return st, nil
 }
 
+// GetRateLimitStatus は区分別(read / update / search / icon)のレート制限残量を返す。
+// 追加の API 呼び出しは行わず、これまでの通信で観測した値と経過時間だけで算出する
+// (observed が false の区分は実値を取得できていない = UI では「不明」扱い)。
+func (a *App) GetRateLimitStatus(profileID string) (*service.RateLimitStatus, error) {
+	const op = "GetRateLimitStatus"
+	attrs := []slog.Attr{slog.String("profileId", profileID)}
+	a.logStart(op, attrs...)
+	s, err := a.svc()
+	if err != nil {
+		a.logEnd(op, err, attrs...)
+		return nil, err
+	}
+	st, err := s.GetRateLimitStatus(a.ctx, profileID)
+	if err != nil {
+		a.logEnd(op, err, attrs...)
+		return nil, err
+	}
+	// 記録するのは区分数と実値を取得できた区分数のみ(残量値は記録しない)
+	observed := 0
+	for _, c := range st.Categories {
+		if c.Observed {
+			observed++
+		}
+	}
+	a.logEnd(op, nil, append(attrs,
+		slog.Int("count", len(st.Categories)),
+		slog.Int("observedCount", observed))...)
+	return st, nil
+}
+
 // ---- M2: 同期・課題抽出・Excel 出力(frontend/src/lib/backend.ts の契約と対) ----
 
 // ProjectRow はプロジェクト一覧の 1 行(課題同期の最終時刻付き)。
@@ -810,6 +840,45 @@ func rawIssueIDs(rawJSON string) (issueTypeID, priorityID int64) {
 	return v.IssueType.ID, v.Priority.ID
 }
 
+// bulkTemplateMasters はテンプレートの「マスタ」シートに載せる選択候補を集める。
+//
+// 種別・状態・優先度は API のマスタ(取り込み時の検証と同じ内容)、
+// 担当者はローカルのプロジェクト参加者(未同期ならスペース全体)を使う。
+// export へ渡す型に詰め替えることで、export が bulk・store に依存しないようにする。
+func (a *App) bulkTemplateMasters(profileID string, projectID int64) (export.BulkTemplateMasters, error) {
+	var out export.BulkTemplateMasters
+	s, err := a.svc()
+	if err != nil {
+		return out, err
+	}
+	master, err := s.GetMasterData(a.ctx, profileID, projectID)
+	if err != nil {
+		return out, err
+	}
+	out.IssueTypes = namedRefsOf(master.IssueTypes)
+	out.Statuses = namedRefsOf(master.Statuses)
+	out.Priorities = namedRefsOf(master.Priorities)
+
+	users, err := s.ListAssigneeCandidates(a.ctx, profileID, projectID)
+	if err != nil {
+		return out, err
+	}
+	out.Assignees = make([]export.NamedRef, 0, len(users))
+	for _, u := range users {
+		out.Assignees = append(out.Assignees, export.NamedRef{ID: u.ID, Name: u.Name})
+	}
+	return out, nil
+}
+
+// namedRefsOf はマスタ(bulk.NamedID)を export の候補型へ詰め替える。
+func namedRefsOf(items []bulk.NamedID) []export.NamedRef {
+	out := make([]export.NamedRef, 0, len(items))
+	for _, it := range items {
+		out = append(out, export.NamedRef{ID: it.ID, Name: it.Name})
+	}
+	return out
+}
+
 // ExportBulkTemplate は一括更新テンプレート(既存課題 + base_updated)を Excel 出力する。
 func (a *App) ExportBulkTemplate(profileID string, projectID int64, query store.IssueFilter) (*ExportResultDTO, error) {
 	const op = "ExportBulkTemplate"
@@ -829,6 +898,13 @@ func (a *App) ExportBulkTemplate(profileID string, projectID int64, query store.
 	}
 	if res.Truncated {
 		err := errors.New("対象件数が上限(100 万件)を超えています。条件で絞り込んでください")
+		a.logEnd(op, err, attrs...)
+		return nil, err
+	}
+	// 名前で編集できるようにするため、テンプレートへ選択候補(種別・状態・優先度・担当者)を載せる。
+	// 保存先を尋ねる前に取得し、失敗した場合はダイアログを出さずに終わる。
+	masters, err := a.bulkTemplateMasters(profileID, projectID)
+	if err != nil {
 		a.logEnd(op, err, attrs...)
 		return nil, err
 	}
@@ -867,7 +943,7 @@ func (a *App) ExportBulkTemplate(profileID string, projectID int64, query store.
 		})
 	}
 	fileAttr := fileExtAttr(path)
-	if err := export.ExportBulkTemplateToFile(path, projectID, rows); err != nil {
+	if err := export.ExportBulkTemplateToFile(path, projectID, rows, masters); err != nil {
 		a.logEnd(op, maskPathInError(err, path), append(attrs, fileAttr)...)
 		return nil, err
 	}

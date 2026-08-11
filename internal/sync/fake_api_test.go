@@ -5,13 +5,29 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	stdsync "sync"
+	"time"
 
 	"backlog-assistant/internal/backlogclient"
 )
 
 // fakeAPI は Backlog API のフェイク。offset ページング・updatedSince 絞り込み・
 // activities の minId 消化を実 API と同じ挙動で再現する。
+//
+// 同期エンジンが取得を並行実行する(課題ページのパイプライン・プロジェクト単位の
+// 有界並列)ため、呼び出し記録は mu で保護する。応答データ側のフィールドは
+// テストのセットアップ時にのみ書き込み、goroutine 起動後は読み取り専用とする。
 type fakeAPI struct {
+	// mu は呼び出し記録・同時実行数カウンタを保護する。
+	mu stdsync.Mutex
+	// projectInFlight / projectMaxInFlight はプロジェクト単位取得の同時実行数
+	//(有界並列の検証用)。
+	projectInFlight    int
+	projectMaxInFlight int
+	// issuesDelay / projectCallDelay は応答遅延の注入(オーバーラップの検証用)。
+	issuesDelay      time.Duration
+	projectCallDelay time.Duration
+
 	issues     []backlogclient.Issue // created 昇順で保持する
 	activities []backlogclient.Activity
 	projects   []backlogclient.Project
@@ -105,8 +121,45 @@ func (f *fakeAPI) GetTeamsPaged(ctx context.Context, offset, count int) ([]backl
 	return f.teams[offset:end], nil
 }
 
+// enterProjectCall はプロジェクト単位取得の呼び出しを記録し、
+// 同時実行数の最大値を更新する。戻り値は退出用の関数。
+func (f *fakeAPI) enterProjectCall(calls *[]int64, projectID int64) func() {
+	f.mu.Lock()
+	*calls = append(*calls, projectID)
+	f.projectInFlight++
+	if f.projectInFlight > f.projectMaxInFlight {
+		f.projectMaxInFlight = f.projectInFlight
+	}
+	delay := f.projectCallDelay
+	f.mu.Unlock()
+	if delay > 0 {
+		time.Sleep(delay)
+	}
+	return func() {
+		f.mu.Lock()
+		f.projectInFlight--
+		f.mu.Unlock()
+	}
+}
+
+// maxProjectInFlight はプロジェクト単位取得の同時実行数の最大値を返す。
+func (f *fakeAPI) maxProjectInFlight() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.projectMaxInFlight
+}
+
+// recordedIssueQueries は記録済みの課題クエリのコピーを返す。
+func (f *fakeAPI) recordedIssueQueries() []backlogclient.IssueQuery {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]backlogclient.IssueQuery, len(f.issueQueries))
+	copy(out, f.issueQueries)
+	return out
+}
+
 func (f *fakeAPI) GetProjectUsers(ctx context.Context, projectID int64) ([]backlogclient.User, error) {
-	f.projectUsersCalls = append(f.projectUsersCalls, projectID)
+	defer f.enterProjectCall(&f.projectUsersCalls, projectID)()
 	if err := f.projectUsersErr[projectID]; err != nil {
 		return nil, err
 	}
@@ -114,7 +167,7 @@ func (f *fakeAPI) GetProjectUsers(ctx context.Context, projectID int64) ([]backl
 }
 
 func (f *fakeAPI) GetProjectAdministrators(ctx context.Context, projectID int64) ([]backlogclient.User, error) {
-	f.projectAdminsCalls = append(f.projectAdminsCalls, projectID)
+	defer f.enterProjectCall(&f.projectAdminsCalls, projectID)()
 	if err := f.projectAdminsErr[projectID]; err != nil {
 		return nil, err
 	}
@@ -122,7 +175,7 @@ func (f *fakeAPI) GetProjectAdministrators(ctx context.Context, projectID int64)
 }
 
 func (f *fakeAPI) GetProjectTeams(ctx context.Context, projectID int64) ([]backlogclient.Team, error) {
-	f.projectTeamsCalls = append(f.projectTeamsCalls, projectID)
+	defer f.enterProjectCall(&f.projectTeamsCalls, projectID)()
 	if err := f.projectTeamsErr[projectID]; err != nil {
 		return nil, err
 	}
@@ -188,7 +241,17 @@ func (f *fakeAPI) matchQuery(i backlogclient.Issue, q backlogclient.IssueQuery) 
 }
 
 func (f *fakeAPI) GetIssues(ctx context.Context, q backlogclient.IssueQuery) ([]backlogclient.Issue, error) {
+	f.mu.Lock()
 	f.issueQueries = append(f.issueQueries, q)
+	delay := f.issuesDelay
+	f.mu.Unlock()
+	if delay > 0 {
+		time.Sleep(delay)
+	}
+	// 実 API と同様にキャンセルを尊重する(パイプラインの停止確認に必要)。
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if f.issuesErr != nil {
 		return nil, f.issuesErr
 	}

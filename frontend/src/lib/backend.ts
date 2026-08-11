@@ -367,6 +367,25 @@ export interface BulkProgress {
   total: number
 }
 
+/** レート制限の区分別残量(Go 側 backlogclient.CategoryStatus と対) */
+export interface RateLimitCategory {
+  /** 区分(read=読み込み / update=更新 / search=検索 / icon=アイコン) */
+  name: 'read' | 'update' | 'search' | 'icon'
+  /** 毎分上限(未取得は 0) */
+  limit: number
+  /** 現在のウィンドウの残量(未取得は 0) */
+  remaining: number
+  /** 現在のウィンドウのリセット時刻(Unix 秒。未取得は 0) */
+  resetUnix: number
+  /** サーバ実値を観測済みか。false のとき UI は「未取得」を表示する */
+  observed: boolean
+}
+
+/** レート制限の残量スナップショット(常に read/update/search/icon の 4 件・この順) */
+export interface RateLimitStatus {
+  categories: RateLimitCategory[]
+}
+
 /** 動作ログの状態(Go 側 main.LogInfo と対) */
 export interface LogInfo {
   /** ログファイルのパス(無効な場合は空文字) */
@@ -498,6 +517,14 @@ export interface Backend {
 
   /** 動作ログの出力先パスと有効・無効を返す */
   getLogInfo(): Promise<LogInfo>
+
+  // --- レート制限 -----------------------------------------------------------
+
+  /**
+   * レート制限の区分別残量を返す(サーバから観測した実測値のみ。追加の API 通信は
+   * 発生しないため、画面からの定期的な参照も安全)。
+   */
+  getRateLimitStatus(profileId: string): Promise<RateLimitStatus>
 }
 
 // ---------------------------------------------------------------------------
@@ -541,6 +568,7 @@ interface WailsApp {
   ExportBulkResultExcel(profileId: string, jobId: number): Promise<ExportResult>
   GetMasterData(profileId: string, projectId: number): Promise<MasterData>
   GetLogInfo(): Promise<LogInfo>
+  GetRateLimitStatus(profileId: string): Promise<RateLimitStatus>
 }
 
 /** Wails ランタイム(window.runtime)のうち本アプリが使うイベント購読 API */
@@ -701,6 +729,10 @@ function createWailsBackend(app: WailsApp): Backend {
       if (typeof app.GetLogInfo !== 'function') return { path: '', enabled: false }
       const r = await app.GetLogInfo()
       return { path: r?.path ?? '', enabled: r?.enabled ?? false }
+    },
+    getRateLimitStatus: async (profileId) => {
+      const r = await app.GetRateLimitStatus(profileId)
+      return { categories: r?.categories ?? [] }
     },
   }
 }
@@ -1341,6 +1373,19 @@ function createMockBackend(): Backend {
       await delay(50)
       // モックでは実ファイルを作らないため、ダミーのパスを返す
       return { path: '(モック)logs/backlog-assistant-YYYYMMDD.log', enabled: true }
+    },
+
+    async getRateLimitStatus() {
+      await delay(50)
+      const reset = Math.floor(Date.now() / 1000) + 42
+      return {
+        categories: [
+          { name: 'read' as const, limit: 600, remaining: 587, resetUnix: reset, observed: true },
+          { name: 'update' as const, limit: 150, remaining: 150, resetUnix: 0, observed: false },
+          { name: 'search' as const, limit: 150, remaining: 143, resetUnix: reset, observed: true },
+          { name: 'icon' as const, limit: 60, remaining: 60, resetUnix: 0, observed: false },
+        ],
+      }
     },
   }
 }

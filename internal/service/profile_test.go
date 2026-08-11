@@ -62,6 +62,9 @@ type fakeConnector struct {
 	usersEntered chan struct{}
 	usersOnce    sync.Once
 
+	// レート制限残量のスナップショット(GetRateLimitStatus の応答)。
+	rateLimit []backlogclient.CategoryStatus
+
 	// 一括更新・追加(bulk.API)の応答と呼び出し記録。
 	issueTypes []backlogclient.IssueType
 	priorities []backlogclient.Priority
@@ -198,6 +201,10 @@ func (f *fakeConnector) GetTeams(ctx context.Context) ([]*backlog.Team, error) {
 func (f *fakeConnector) InitRateLimit(ctx context.Context) error {
 	f.initCalls++
 	return f.initErr
+}
+
+func (f *fakeConnector) RateLimitSnapshot() []backlogclient.CategoryStatus {
+	return f.rateLimit
 }
 
 // newTestService はキーチェーンをモック化し、一時ディレクトリの config を使う
