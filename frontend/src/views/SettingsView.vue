@@ -7,6 +7,7 @@ import {
   type PermissionStatus,
   type Profile,
 } from '../lib/backend'
+import { errorMessage } from '../lib/format'
 
 const backend = getBackend()
 const mock = isMockBackend()
@@ -69,11 +70,6 @@ watch(activeProfileId, async (id) => {
     activeProfileId.value = persistedActiveId // UI の選択を元へ戻す
   }
 })
-
-function errorMessage(e: unknown): string {
-  if (e instanceof Error) return e.message
-  return String(e)
-}
 
 // ---------------------------------------------------------------------------
 // フォーム(新規登録 / 変更)

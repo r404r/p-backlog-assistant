@@ -234,8 +234,10 @@ func (a *App) GetActiveProfile() (string, error) {
 // SetActiveProfile は接続先プロファイル ID を保存する(空文字 = 選択解除)。
 // フロントの接続先セレクタ変更時に呼ばれる。
 //
-// TODO(マイルストーン 2): activeProfileId の変更を DB オープン(store.Open)と
-// 同期処理の接続先切り替えへ結線する。現時点では設定の永続化のみ行う。
+// ここで行うのは設定の永続化(次回起動時の初期選択)のみでよい。
+// ローカル DB(store.Open)と API クライアントは、各操作が引数で受け取った
+// profileID から service 側で解決・キャッシュする(ProfileService.storeForProfile /
+// clientForProfile)ため、接続先の切り替えはこの値に依存しない。
 func (a *App) SetActiveProfile(id string) error {
 	const op = "SetActiveProfile"
 	a.logStart(op, slog.String("profileId", id))
@@ -401,7 +403,7 @@ func (a *App) GetRateLimitStatus(profileID string) (*service.RateLimitStatus, er
 	return st, nil
 }
 
-// ---- M2: 同期・課題抽出・Excel 出力(frontend/src/lib/backend.ts の契約と対) ----
+// ---- 同期・課題抽出・Excel 出力(frontend/src/lib/backend.ts の契約と対) ----
 
 // ProjectRow はプロジェクト一覧の 1 行(課題同期の最終時刻付き)。
 type ProjectRow struct {

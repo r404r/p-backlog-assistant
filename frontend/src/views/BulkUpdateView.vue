@@ -20,6 +20,8 @@ import {
   type MasterItem,
   type Project,
 } from '../lib/backend'
+import { errorMessage, formatDateTime } from '../lib/format'
+import { issueSyncRunning } from '../lib/syncState'
 import {
   resolveProjectSelection,
   restoreProjectSelection,
@@ -38,20 +40,6 @@ const selectionGuard = useProjectSelectionGuard()
 
 /** 実行時間の目安(設計書 5 節: 1,000 件で 8〜10 分) */
 const MINUTES_PER_1000 = 9
-
-function errorMessage(e: unknown): string {
-  if (e instanceof Error) return e.message
-  return String(e)
-}
-
-/** RFC3339 を「YYYY-MM-DD HH:mm」に整形する(空文字はそのまま) */
-function formatDateTime(iso: string): string {
-  if (!iso) return ''
-  const d = new Date(iso)
-  if (Number.isNaN(d.getTime())) return iso
-  const p = (n: number) => String(n).padStart(2, '0')
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`
-}
 
 /** 件数から実行時間の目安を日本語で返す */
 function estimateDuration(count: number): string {
@@ -174,8 +162,25 @@ const exportRows = ref(0)
 const exportCanceled = ref(false)
 const exportError = ref('')
 
+/**
+ * 課題同期中はテンプレート出力・取り込み・実行を行わない(R10)。
+ *
+ * - テンプレート出力: 読み取りトランザクションを保持したまま対象プロジェクトの
+ *   課題を全件走査する(app.ExportBulkTemplate → service.IterateIssues)。
+ *   同期の途中で走らせると、取り込み済みの課題だけが載った不完全なテンプレートが
+ *   「全件」として保存されてしまう。単一 DB 接続(SetMaxOpenConns(1))の
+ *   奪い合いで双方が長時間待たされる問題も課題抽出の Excel 出力と同じ。
+ * - 取り込み(dry-run)・実行: どちらも Go 側で同期と直列化される
+ *   (service.ImportBulkFile / RunBulkJob が syncMu を取る)。同期中に呼ぶと
+ *   ロック待ちで同期が終わるまで画面が固まったように見える。加えて dry-run の
+ *   現在値・競合判定はローカル DB を基準にするため、中途データでの判定になる。
+ *
+ * 履歴の閲覧・結果 Excel 出力は jobs / job_rows しか読まず短時間で終わるため、
+ * 同期中でも許可する(明細の表示を止めると実行中の状況が確認できなくなるため)。
+ */
 async function exportTemplate() {
   if (!profileId.value || !selectedProjectId.value || exporting.value) return
+  if (issueSyncRunning.value) return
   exporting.value = true
   exportError.value = ''
   exportPath.value = ''
@@ -208,7 +213,13 @@ const importCanceled = ref(false)
 const importResult = ref<BulkImportResult | null>(null)
 
 const canImport = computed(
-  () => !!profileId.value && !!selectedProjectId.value && !importing.value && !running.value,
+  () =>
+    !!profileId.value &&
+    !!selectedProjectId.value &&
+    !importing.value &&
+    !running.value &&
+    // 課題同期中は取り込まない(exportTemplate のコメント参照)
+    !issueSyncRunning.value,
 )
 
 async function importFile() {
@@ -254,6 +265,19 @@ const conflictWarningCount = computed(
 // ---------------------------------------------------------------------------
 
 const running = ref(false)
+
+/**
+ * プロジェクト選択(①)を固定するか(R10)。
+ *
+ * この画面は課題同期を開始しないが、プロジェクト選択は 3 画面で共有しているため、
+ * 課題抽出・同期状態の画面で始めた同期の最中にここで切り替えられると、
+ * 同期の完了処理が別プロジェクトに作用してしまう。共有状態(syncState)を見て
+ * セレクタを固定する(課題同期中に抑止する操作の範囲は exportTemplate のコメント参照)。
+ */
+const selectionLocked = computed(
+  () => projectsLoading.value || running.value || issueSyncRunning.value,
+)
+
 const canceling = ref(false)
 const runError = ref('')
 const runResult = ref<BulkRunResult | null>(null)
@@ -271,7 +295,13 @@ const confirmJobId = ref(0)
 const confirmCount = ref(0)
 
 const canRun = computed(
-  () => !!importResult.value?.valid && targetCount.value > 0 && !running.value && !importing.value,
+  () =>
+    !!importResult.value?.valid &&
+    targetCount.value > 0 &&
+    !running.value &&
+    !importing.value &&
+    // 課題同期中は実行しない(exportTemplate のコメント参照)
+    !issueSyncRunning.value,
 )
 
 const progressPercent = computed(() => {
@@ -280,9 +310,12 @@ const progressPercent = computed(() => {
   return Math.min(100, Math.round((p.processed / p.total) * 100))
 })
 
-/** 実行確認を開く(ジョブ ID・件数・オプションを確定させる) */
+/**
+ * 実行確認を開く(ジョブ ID・件数・オプションを確定させる)。
+ * 実行・再開・強制再実行のすべてがここを通るため、課題同期中の抑止もここで行う。
+ */
 function askRun(jobId: number, count: number, force: boolean, resendSending: boolean) {
-  if (running.value || !jobId) return
+  if (running.value || !jobId || issueSyncRunning.value) return
   confirmJobId.value = jobId
   confirmCount.value = count
   confirmForce.value = force
@@ -297,7 +330,8 @@ function cancelConfirm() {
 async function confirmRun() {
   confirming.value = false
   const jobId = confirmJobId.value
-  if (!jobId || running.value) return
+  // 確認ダイアログを開いている間に他画面で同期が始まることもあるため、実行直前にも見る
+  if (!jobId || running.value || issueSyncRunning.value) return
   running.value = true
   canceling.value = false
   runError.value = ''
@@ -543,7 +577,7 @@ onUnmounted(() => {
           <select
             id="b-project"
             v-model.number="selectedProjectId"
-            :disabled="projectsLoading || running"
+            :disabled="selectionLocked"
             @change="onProjectChange"
           >
             <option v-if="projects.length === 0" :value="0">(プロジェクトがありません)</option>
@@ -551,8 +585,15 @@ onUnmounted(() => {
               {{ p.name }}({{ p.projectKey }})
             </option>
           </select>
-          <button :disabled="projectsLoading || running" @click="loadProjects">再読込</button>
+          <button :disabled="selectionLocked" @click="loadProjects">再読込</button>
         </div>
+        <!-- 課題同期中に止まる操作をまとめて案内する(R10。exportTemplate のコメント参照)。
+             この画面は同期を開始しないため、実行中の同期は必ず他画面が始めたもの -->
+        <p v-if="issueSyncRunning" class="hint warn">
+          他の画面で開始した課題同期が実行中です。完了するまで、プロジェクトの切り替え・
+          テンプレート出力・Excel の取り込み・一括実行はできません
+          (ジョブ履歴の確認と結果の Excel 出力は行えます)。
+        </p>
         <p class="hint">
           対象プロジェクトの課題を全件テンプレート化します(条件による絞り込みは行いません)。
           テンプレートにはプロジェクトが固定で埋め込まれるため、行ごとにプロジェクトは変えられません。
@@ -563,7 +604,7 @@ onUnmounted(() => {
         <div class="row buttons">
           <button
             class="primary"
-            :disabled="!selectedProjectId || exporting || running"
+            :disabled="!selectedProjectId || exporting || running || issueSyncRunning"
             @click="exportTemplate"
           >
             {{ exporting ? '出力中...' : 'テンプレート出力' }}
@@ -753,7 +794,9 @@ onUnmounted(() => {
             最新を確認のうえ、強制上書きは再実行で「競合を上書き」を選択してください。
           </p>
           <div class="row buttons">
-            <button :disabled="running" @click="rerunWithForce">競合を上書きして再実行</button>
+            <button :disabled="running || issueSyncRunning" @click="rerunWithForce">
+              競合を上書きして再実行
+            </button>
           </div>
         </div>
 
@@ -830,12 +873,17 @@ onUnmounted(() => {
                   <td class="num">{{ j.sending }}</td>
                   <td class="num">{{ j.skipped }}</td>
                   <td class="nowrap actions">
-                    <button v-if="canResume(j)" :disabled="running" @click="resumeJob(j, false)">
+                    <!-- 再開・再実行は askRun を通るため、課題同期中は実行できない -->
+                    <button
+                      v-if="canResume(j)"
+                      :disabled="running || issueSyncRunning"
+                      @click="resumeJob(j, false)"
+                    >
                       再開
                     </button>
                     <button
                       v-if="j.conflict > 0"
-                      :disabled="running"
+                      :disabled="running || issueSyncRunning"
                       @click="forceResumeJob(j)"
                     >
                       競合を上書きして再実行
@@ -857,7 +905,11 @@ onUnmounted(() => {
                   <td colspan="12" class="sending-note">
                     送信結果を確認できなかった行があります({{ j.sending }} 件)。
                     再開すると確認のうえ処理されます(作成済みの課題と突合するため、二重作成は自動で防止されます)。
-                    <button class="inline" :disabled="running" @click="resumeJob(j, true)">
+                    <button
+                      class="inline"
+                      :disabled="running || issueSyncRunning"
+                      @click="resumeJob(j, true)"
+                    >
                       送信中の行も再送して再開
                     </button>
                   </td>

@@ -2,6 +2,7 @@
 // アプリ情報画面。TDD 例外(GUI): フロントエンドにテスト基盤が無いため手動確認で担保する。
 import { onMounted, ref } from 'vue'
 import { getBackend, openExternalURL, type StorageInfo } from '../lib/backend'
+import { errorMessage } from '../lib/format'
 
 const backend = getBackend()
 
@@ -32,11 +33,6 @@ onMounted(async () => {
     storageError.value = `保存データの情報を取得できませんでした: ${errorMessage(e)}`
   }
 })
-
-function errorMessage(e: unknown): string {
-  if (e instanceof Error) return e.message
-  return String(e)
-}
 
 /**
  * バイト数を人間が読める単位へ整形する(小数 1 桁)。

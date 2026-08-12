@@ -208,7 +208,9 @@ func TestFullSync_UpsertsIssueRecoveredByDeleteConfirm(t *testing.T) {
 }
 
 // TestFullSync_TooManyCandidatesSkipsDeletion は削除候補が多数(100 件以上)の
-// 場合に削除せず警告を返すことを検証する(リコンシリエーションは次マイルストーン)。
+// 場合に削除せず警告を返すことを検証する。
+// これは誤削除を避けるための安全弁であり、候補が deleteConfirmLimit 未満に減らない限り
+// フル同期を繰り返しても削除は確定しない(利用者が警告を見て対処する前提)。
 func TestFullSync_TooManyCandidatesSkipsDeletion(t *testing.T) {
 	api := newFakeAPI()
 	api.addIssue(1, "EXA-1", 1, "残る", "2026-01-01T00:00:00Z", "2026-08-01T00:00:00Z")

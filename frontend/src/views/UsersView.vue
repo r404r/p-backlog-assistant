@@ -9,6 +9,7 @@ import {
   type UserQuery,
   type UserRow,
 } from '../lib/backend'
+import { errorMessage, formatDateTime, formatElapsed } from '../lib/format'
 
 const backend = getBackend()
 const mock = isMockBackend()
@@ -56,32 +57,6 @@ function joinValues(values: string[]): string {
  */
 function roleLabel(u: UserRow): string {
   return u.roleName || `不明(${u.roleType})`
-}
-
-function errorMessage(e: unknown): string {
-  if (e instanceof Error) return e.message
-  return String(e)
-}
-
-/** RFC3339 を「YYYY-MM-DD HH:mm」に整形する(空文字はそのまま) */
-function formatDateTime(iso: string): string {
-  if (!iso) return ''
-  const d = new Date(iso)
-  if (Number.isNaN(d.getTime())) return iso
-  const p = (n: number) => String(n).padStart(2, '0')
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`
-}
-
-/** 最終同期時刻からの経過を日本語で表す */
-function formatElapsed(iso: string): string {
-  const d = new Date(iso)
-  if (Number.isNaN(d.getTime())) return ''
-  const min = Math.floor((Date.now() - d.getTime()) / 60000)
-  if (min < 1) return 'たった今'
-  if (min < 60) return `${min} 分前`
-  const hour = Math.floor(min / 60)
-  if (hour < 24) return `${hour} 時間前`
-  return `${Math.floor(hour / 24)} 日前`
 }
 
 // ---------------------------------------------------------------------------

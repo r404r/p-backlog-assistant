@@ -17,12 +17,14 @@ import {
   type SyncProgress,
   type SyncResult,
 } from '../lib/backend'
+import { errorMessage, formatDateTime, formatElapsed, syncModeLabel } from '../lib/format'
 import {
   resolveProjectSelection,
   restoreProjectSelection,
   selectedProjectId,
   useProjectSelectionGuard,
 } from '../lib/projectSelection'
+import { beginIssueSync, endIssueSync, issueSyncRunning } from '../lib/syncState'
 
 const backend = getBackend()
 const mock = isMockBackend()
@@ -74,32 +76,6 @@ const FIXED_EXPORT_COLUMNS: ExportColumn[] = [
 const DEFAULT_EXPORT_COLUMN_KEYS = FIXED_EXPORT_COLUMNS.filter(
   (c) => c.key !== 'parentIssueKey',
 ).map((c) => c.key)
-
-function errorMessage(e: unknown): string {
-  if (e instanceof Error) return e.message
-  return String(e)
-}
-
-/** RFC3339 を「YYYY-MM-DD HH:mm」に整形する(空文字はそのまま) */
-function formatDateTime(iso: string): string {
-  if (!iso) return ''
-  const d = new Date(iso)
-  if (Number.isNaN(d.getTime())) return iso
-  const p = (n: number) => String(n).padStart(2, '0')
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`
-}
-
-/** 最終同期時刻からの経過を日本語で表す */
-function formatElapsed(iso: string): string {
-  const d = new Date(iso)
-  if (Number.isNaN(d.getTime())) return ''
-  const min = Math.floor((Date.now() - d.getTime()) / 60000)
-  if (min < 1) return 'たった今'
-  if (min < 60) return `${min} 分前`
-  const hour = Math.floor(min / 60)
-  if (hour < 24) return `${hour} 時間前`
-  return `${Math.floor(hour / 24)} 日前`
-}
 
 // ---------------------------------------------------------------------------
 // アクティブプロファイル・プロジェクト
@@ -153,7 +129,9 @@ async function loadProjects() {
 }
 
 async function syncProjects() {
-  if (!profileId.value || projectsSyncing.value) return
+  // busy 中(課題同期中を含む)は実行しない。ボタンは disabled だが、
+  // 判定を UI だけに任せない(SyncStatusView と同じ流儀)
+  if (!profileId.value || busy.value) return
   projectsSyncing.value = true
   globalError.value = ''
   projectsWarning.value = ''
@@ -174,9 +152,20 @@ async function syncProjects() {
  * 表示する前に必ず API と突合する。
  * 同期はベストエフォートで、失敗しても警告を出してキャッシュ表示は継続する。
  * 連打・多重実行は projectsSyncing フラグで防ぐ。
+ *
+ * 課題同期の実行中は API による最新化を省略する(R10)。Go 側の同期処理は
+ * 直列化されている(service の syncMu)ため、ここで待つと画面の初期表示が
+ * 課題同期の完了(数分)までブロックされてしまう。ローカル一覧の読み込み
+ * (loadProjects)は省略せず、セレクタが空のままにならないようにする。
  */
 async function refreshProjects() {
   if (!profileId.value || projectsSyncing.value) return
+  if (issueSyncRunning.value) {
+    projectsWarning.value =
+      '課題の同期中のため、プロジェクト一覧の最新化は省略しました(表示はローカルキャッシュです)。'
+    await loadProjects()
+    return
+  }
   projectsSyncing.value = true
   projectsWarning.value = ''
   try {
@@ -520,7 +509,11 @@ function invalidatePendingRequests() {
 }
 
 async function search() {
-  if (!selectedProjectId.value || searching.value) return
+  // 同期中は検索しない(R10)。同期途中のローカル DB を読むと「取り込み済みの
+  // ぶんだけ」の件数・一覧になり、完了後の結果と食い違って見えるため。
+  // ボタンは disabled にしてあるが、キーワード欄の Enter からも入るのでここでも見る。
+  // 判定は共有状態込みの issueSyncing(他画面で開始した同期も対象)。
+  if (!selectedProjectId.value || searching.value || issueSyncing.value) return
   const seq = ++searchRequestSeq
   searching.value = true
   searchError.value = ''
@@ -573,10 +566,29 @@ const syncing = ref(false)
 const syncResult = ref<SyncResult | null>(null)
 const syncError = ref('')
 
+/**
+ * 課題同期が実行中か。
+ *
+ * この画面が開始した同期(syncing)に加えて、共有状態(syncState)も見る。
+ * ローカル ref だけで判定すると、サイドバーで一度別画面へ移動して戻ってきた
+ * 時点で syncing が false の新しい画面になり、Go 側で走り続けている同期を
+ * 無視して選択を切り替えられてしまうため(R10)。
+ */
+const issueSyncing = computed(() => syncing.value || issueSyncRunning.value)
+
+/**
+ * プロジェクト選択・同期系操作を固定する状態(R10。SyncStatusView の busy と同じ流儀)。
+ *
+ * 課題同期中にプロジェクトを切り替えられると、完了後の再読込
+ * (loadProjects / loadFilterOptions)や結果表示が切替先の画面に作用し得る。
+ * 世代番号(syncRequestSeq)で表示は守れるが、実行中に選択が動くこと自体が
+ * 「どのプロジェクトを同期しているのか」を分かりにくくするため、
+ * 実行中はプロジェクトセレクタと同期系ボタンを固定する。
+ */
+const busy = computed(() => issueSyncing.value || projectsSyncing.value || projectsLoading.value)
+
 /** runSync の世代番号(検索・出力と同じ理由。プロジェクト切替で失効させる) */
 let syncRequestSeq = 0
-
-const syncModeLabel = (mode: string) => (mode === 'full' ? 'フル同期' : '差分同期')
 
 /**
  * 実行中の同期の進捗(未受信・非実行中は null)。
@@ -611,7 +623,7 @@ onUnmounted(() => {
 })
 
 async function runSync() {
-  if (!selectedProjectId.value || syncing.value) return
+  if (!selectedProjectId.value || syncBlocked.value) return
   const seq = ++syncRequestSeq
   syncing.value = true
   syncError.value = ''
@@ -619,10 +631,14 @@ async function runSync() {
   syncProgress.value = null
   const runId = newSyncRunId()
   currentSyncRunId = runId
+  // 画面をまたいで抑止するため、実行中であることを共有状態にも記録する(R10)。
+  // この画面が破棄されてもローカルの syncing は失われるが、共有状態は残る。
+  const targetProjectId = selectedProjectId.value
+  beginIssueSync(profileId.value, targetProjectId, runId)
   try {
     const result = await backend.syncIssues(
       profileId.value,
-      selectedProjectId.value,
+      targetProjectId,
       syncMode.value,
       runId,
     )
@@ -640,6 +656,9 @@ async function runSync() {
     syncProgress.value = null
     // 応答後に届く進捗(あれば)を受け取らないよう、実行 ID も外す
     if (currentSyncRunId === runId) currentSyncRunId = ''
+    // 共有状態の解除(主経路)。この継続は画面が破棄されても走るため、
+    // 成功・失敗のどちらでも確実に解除される(syncState.ts のコメント参照)。
+    endIssueSync(runId)
   }
 }
 
@@ -663,6 +682,19 @@ function pruneUnavailableColumns() {
 }
 
 const exporting = ref(false)
+
+/**
+ * 課題同期を開始できない状態(同期モード・同期ボタンの disabled と runSync のガード)。
+ *
+ * busy に加えて検索・Excel 出力の実行中も含める(逆方向の排他)。
+ * 出力は読み取りトランザクションを保持したまま全件を走査し(service.IterateIssues)、
+ * 単一 DB 接続(SetMaxOpenConns(1))を同期の書き込みと奪い合うため、
+ * 同時に始めると双方が長時間待たされる。検索も、開始済みのものが終わるまでは
+ * 同期を待たせて中途データとの混在を避ける。
+ * (exporting を参照するため、宣言はこの位置に置く)
+ */
+const syncBlocked = computed(() => busy.value || searching.value || exporting.value)
+
 const exportPath = ref('')
 const exportRows = ref(0)
 const exportUnverifiable = ref(0)
@@ -676,8 +708,20 @@ const exportError = ref('')
  */
 let exportRequestSeq = 0
 
+/**
+ * Excel 出力を実行できるか。
+ *
+ * 同期中は出力しない(R10)。出力は条件一致の全件を読み取りトランザクションを
+ * 保持したまま走査する(service.IterateIssues)ため、同期の書き込みと
+ * 単一 DB 接続を奪い合って双方が長時間待たされる。加えて、途中まで取り込んだ
+ * 状態のブックが「完全なデータ」として保存されてしまうのを避ける。
+ */
 const canExport = computed(
-  () => !!selectedProjectId.value && selectedColumns.value.length > 0 && !exporting.value,
+  () =>
+    !!selectedProjectId.value &&
+    selectedColumns.value.length > 0 &&
+    !exporting.value &&
+    !issueSyncing.value,
 )
 
 async function exportExcel() {
@@ -735,14 +779,16 @@ async function exportExcel() {
         <h2>プロジェクト</h2>
         <div class="row">
           <label for="i-project">プロジェクト</label>
-          <select id="i-project" v-model="selectedProjectId" :disabled="projectsLoading">
+          <!-- 同期中は選択を固定する(R10。切り替えると同期完了後の再読込・
+               結果表示が切替先に作用してしまうため) -->
+          <select id="i-project" v-model="selectedProjectId" :disabled="busy">
             <option v-if="projects.length === 0" :value="0">(プロジェクトがありません)</option>
             <option v-for="p in projects" :key="p.id" :value="p.id">
               {{ p.name }}({{ p.projectKey }})
             </option>
           </select>
           <button
-            :disabled="projectsSyncing || projectsLoading"
+            :disabled="busy"
             title="プロジェクト一覧を最新化(課題は同期しません)"
             @click="syncProjects"
           >
@@ -750,6 +796,10 @@ async function exportExcel() {
           </button>
           <span v-if="projectsSyncing" class="spinner" aria-hidden="true"></span>
         </div>
+
+        <p v-if="issueSyncing" class="hint warn">
+          同期中はプロジェクトを切り替えできません(同期の完了後に切り替えてください)。
+        </p>
 
         <p class="hint">
           「プロジェクト一覧を同期」はプロジェクト一覧を最新化(課題は同期しません)。
@@ -779,25 +829,34 @@ async function exportExcel() {
         <div class="row">
           <label>同期モード</label>
           <label class="radio">
-            <input v-model="syncMode" type="radio" value="auto" :disabled="syncing" />
+            <input v-model="syncMode" type="radio" value="auto" :disabled="syncBlocked" />
             自動(初回はフル同期)
           </label>
           <label class="radio">
-            <input v-model="syncMode" type="radio" value="full" :disabled="syncing" />
+            <input v-model="syncMode" type="radio" value="full" :disabled="syncBlocked" />
             フル同期
           </label>
           <label class="radio">
-            <input v-model="syncMode" type="radio" value="incremental" :disabled="syncing" />
+            <input v-model="syncMode" type="radio" value="incremental" :disabled="syncBlocked" />
             差分同期
           </label>
-          <button :disabled="syncing || !selectedProjectId" @click="runSync">
+          <button :disabled="syncBlocked || !selectedProjectId" @click="runSync">
             {{ syncing ? '同期中...' : '同期' }}
           </button>
           <span v-if="syncing" class="spinner" aria-hidden="true"></span>
+          <!-- 進捗・結果に対象プロジェクト名は添えない(R10)。同期中は上のセレクタが
+               固定されて対象が画面に出ており、完了後にプロジェクトを切り替えると
+               watch(selectedProjectId) が結果を消すため、取り違えは起きない。
+               (SyncStatusView は同期状態一覧に他プロジェクトの行が並ぶため名前を添えている) -->
           <span v-if="syncing && syncProgressText" class="sync-progress" aria-live="polite">
             {{ syncProgressText }}
           </span>
         </div>
+        <!-- 他画面で開始した同期(この画面は runId を知らないため進捗は出せない)。
+             実行中であることだけは伝えないと、操作できない理由が分からなくなる -->
+        <p v-if="!syncing && issueSyncRunning" class="hint warn">
+          他の画面で開始した課題同期が実行中です。完了するまで同期・検索・Excel 出力は実行できません。
+        </p>
         <p class="hint">
           自動は同期状態から判定します(未同期・長期間未同期ならフル同期)。
           差分同期は前回同期以降の更新のみを取得します。不整合が疑われる場合はフル同期を選んでください。
@@ -956,12 +1015,20 @@ async function exportExcel() {
         </details>
 
         <div class="row buttons">
-          <button class="primary" :disabled="searching || !selectedProjectId" @click="search">
+          <!-- 同期中は検索しない(R10。search() のコメント参照) -->
+          <button
+            class="primary"
+            :disabled="searching || issueSyncing || !selectedProjectId"
+            @click="search"
+          >
             {{ searching ? '検索中...' : '検索' }}
           </button>
           <button :disabled="searching" @click="clearConditions">条件をクリア</button>
           <span v-if="searching" class="spinner" aria-hidden="true"></span>
         </div>
+        <p v-if="issueSyncing" class="hint warn">
+          同期中は検索できません(同期の完了後に実行してください)。
+        </p>
         <p v-if="searchError" class="error">{{ searchError }}</p>
       </section>
 
@@ -1057,6 +1124,9 @@ async function exportExcel() {
           </button>
           <span v-if="exporting" class="spinner" aria-hidden="true"></span>
         </div>
+        <p v-if="issueSyncing" class="hint warn">
+          同期中は Excel 出力できません(同期の完了後に実行してください)。
+        </p>
         <p v-if="selectedColumns.length === 0" class="hint warn">出力する列を 1 つ以上選択してください。</p>
         <p v-if="exportError" class="error">{{ exportError }}</p>
         <p v-if="exportCanceled" class="notice">Excel 出力はキャンセルされました。</p>

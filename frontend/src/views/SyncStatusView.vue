@@ -15,12 +15,19 @@ import {
   type SyncResult,
   type SyncStateRow,
 } from '../lib/backend'
+import { errorMessage, formatDateTime, formatElapsed, syncModeLabel } from '../lib/format'
 import {
   resolveProjectSelection,
   restoreProjectSelection,
   selectedProjectId,
   useProjectSelectionGuard,
 } from '../lib/projectSelection'
+import {
+  activeIssueSync,
+  beginIssueSync,
+  endIssueSync,
+  issueSyncRunning,
+} from '../lib/syncState'
 
 const backend = getBackend()
 const mock = isMockBackend()
@@ -42,30 +49,6 @@ const DATA_KIND_LABELS: Record<string, string> = {
 
 function dataKindLabel(kind: string): string {
   return DATA_KIND_LABELS[kind] ?? kind
-}
-
-function errorMessage(e: unknown): string {
-  if (e instanceof Error) return e.message
-  return String(e)
-}
-
-function formatDateTime(iso: string): string {
-  if (!iso) return ''
-  const d = new Date(iso)
-  if (Number.isNaN(d.getTime())) return iso
-  const p = (n: number) => String(n).padStart(2, '0')
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`
-}
-
-function formatElapsed(iso: string): string {
-  const d = new Date(iso)
-  if (Number.isNaN(d.getTime())) return ''
-  const min = Math.floor((Date.now() - d.getTime()) / 60000)
-  if (min < 1) return 'たった今'
-  if (min < 60) return `${min} 分前`
-  const hour = Math.floor(min / 60)
-  if (hour < 24) return `${hour} 時間前`
-  return `${Math.floor(hour / 24)} 日前`
 }
 
 // ---------------------------------------------------------------------------
@@ -125,9 +108,20 @@ async function reload() {
  * 表示する前に必ず API と突合する。
  * 同期はベストエフォートで、失敗しても警告を出してキャッシュ表示は継続する。
  * 連打・多重実行は syncingProjects フラグで防ぐ。
+ *
+ * 課題同期の実行中は API による最新化を省略する(R10)。Go 側の同期処理は
+ * 直列化されている(service の syncMu)ため、ここで待つと画面の初期表示が
+ * 課題同期の完了(数分)までブロックされてしまう。ローカルキャッシュの
+ * 読み込み(reload)は省略せず、一覧が空のままにならないようにする。
  */
 async function refreshProjects() {
   if (!profileId.value || syncingProjects.value) return
+  if (issueSyncRunning.value) {
+    projectsWarning.value =
+      '課題の同期中のため、プロジェクト一覧の最新化は省略しました(表示はローカルキャッシュです)。'
+    await reload()
+    return
+  }
   syncingProjects.value = true
   projectsWarning.value = ''
   try {
@@ -247,9 +241,28 @@ const syncResult = ref<SyncResult | null>(null)
 const syncResultProject = ref('')
 const syncError = ref('')
 
-const busy = computed(() => syncing.value || syncingProjects.value || loading.value)
+/**
+ * 課題同期が実行中か。ローカルの syncing に加えて共有状態も見る(R10)。
+ * 画面を移動すると syncing は失われるが、Go 側の同期は走り続けるため。
+ */
+const issueSyncing = computed(() => syncing.value || issueSyncRunning.value)
 
-const syncModeLabel = (mode: string) => (mode === 'full' ? 'フル同期' : '差分同期')
+/**
+ * 他画面で実行中の同期の対象プロジェクト(共有状態から解決する。非実行中は空文字)。
+ *
+ * 名前を引けるのはこの画面が表示している接続先の一覧(projects)だけなので、
+ * 同期中に接続先プロファイルを切り替えた場合は名前解決しない。プロジェクト ID は
+ * スペースごとの採番のため、他スペースの同じ ID のプロジェクト名を
+ * 実行中の対象として誤表示してしまう。
+ */
+const activeIssueSyncLabel = computed(() => {
+  const running = activeIssueSync.value
+  if (!running) return ''
+  if (running.profileId !== profileId.value) return '別の接続先のプロジェクト'
+  return projectLabel(running.projectId)
+})
+
+const busy = computed(() => issueSyncing.value || syncingProjects.value || loading.value)
 
 /**
  * 実行中の課題同期の進捗(未受信・非実行中は null)。
@@ -292,10 +305,13 @@ async function runIssueSync() {
   syncResultProject.value = projectLabel(selectedProjectId.value)
   const runId = newSyncRunId()
   currentSyncRunId = runId
+  // 画面をまたいで抑止するため、実行中であることを共有状態にも記録する(R10)
+  const targetProjectId = selectedProjectId.value
+  beginIssueSync(profileId.value, targetProjectId, runId)
   try {
     syncResult.value = await backend.syncIssues(
       profileId.value,
-      selectedProjectId.value,
+      targetProjectId,
       syncMode.value,
       runId,
     )
@@ -307,6 +323,8 @@ async function runIssueSync() {
     syncProgress.value = null
     // 応答後に届く進捗(あれば)を受け取らないよう、実行 ID も外す
     if (currentSyncRunId === runId) currentSyncRunId = ''
+    // 共有状態の解除(主経路。syncState.ts のコメント参照)
+    endIssueSync(runId)
   }
 }
 
@@ -423,6 +441,13 @@ async function runProjectSync() {
             {{ syncProgressText }}
           </span>
         </div>
+
+        <!-- 他画面(課題抽出)で開始した同期。runId を知らないため進捗は出せないが、
+             操作できない理由は伝える(R10) -->
+        <p v-if="!syncing && issueSyncRunning" class="hint warn">
+          他の画面で開始した課題同期({{ activeIssueSyncLabel }})が実行中です。
+          完了するまでプロジェクトの切り替えと同期は実行できません。
+        </p>
 
         <p class="hint">
           自動は同期状態から判定します(未同期・長期間未同期ならフル同期)。
@@ -670,6 +695,11 @@ button.primary:hover:not(:disabled) {
   font-size: 0.8rem;
   color: #57606a;
   margin: 0.5rem 0 0;
+}
+
+/* 注意喚起のヒント(課題抽出画面と同じ配色) */
+.hint.warn {
+  color: #9a6700;
 }
 
 .error {
