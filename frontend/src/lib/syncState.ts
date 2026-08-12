@@ -25,9 +25,8 @@
  * done で解除しても、開始した画面自身は自分のローカルフラグ(syncing)が
  * 下りるまで固定されたままなので、応答到着前に自画面の選択が動くことはない。
  *
- * TDD 例外(GUI): フロントエンドにテスト基盤が無い(R15)ため手動確認で担保する。
- * 将来テストできるよう、Vue コンポーネントに依存しない純粋なモジュール状態
- * (begin / end と参照用の computed)として切り出してある。
+ * Vue コンポーネントに依存しない純粋なモジュール状態(begin / end と参照用の computed)
+ * として切り出してあり、syncState.test.ts で検証する(R15)。
  */
 import { computed, readonly, ref } from 'vue'
 import { onSyncProgress } from './backend'

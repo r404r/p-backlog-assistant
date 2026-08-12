@@ -6,9 +6,10 @@
  * 切り替えのたびに一覧の先頭へ戻ってしまう。ここでモジュールレベルの ref を共有し、
  * さらに接続先プロファイルごとに localStorage へ保存して次回起動時も維持する。
  *
- * TDD 例外(GUI): フロントエンドにテスト基盤が無いため手動確認で担保する。
- * 将来テストできるよう、キー生成・保存値の解釈・一覧に対する解決は
- * 副作用のない純粋関数として切り出してある。
+ * キー生成・保存値の解釈・一覧に対する解決は副作用のない純粋関数として切り出してあり、
+ * 保存・復元と併せて projectSelection.test.ts で検証する(R15)。
+ * Vue コンポーネントに結び付く useProjectSelectionGuard(onUnmounted)のみ
+ * TDD 例外(GUI)として手動確認で担保する。
  */
 import { onUnmounted, ref, watch } from 'vue'
 
@@ -91,7 +92,7 @@ export function restoreProjectSelection(profileId: string): void {
   if (profileId !== loadedProfileId) selectionGeneration++
   // 保存先キーを先に確定させてから ref を更新する(watch が正しいキーへ保存するため)
   loadedProfileId = profileId
-  let raw: string | null = null
+  let raw: string | null
   try {
     raw = localStorage.getItem(projectSelectionKey(profileId))
   } catch {

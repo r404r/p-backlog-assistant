@@ -27,10 +27,12 @@ jobs:
           node-version: 22
           cache: npm
           cache-dependency-path: frontend/package-lock.json
-      - name: フロントエンドの型検査とビルド
+      - name: フロントエンドの lint・テスト・型検査・ビルド
         working-directory: frontend
         run: |
           npm ci
+          npm run lint
+          npm run test
           npm run build
       # main パッケージ(Wails 本体)は GUI 依存があるため、Linux では internal のみ検査する
       - name: Go vet / テスト

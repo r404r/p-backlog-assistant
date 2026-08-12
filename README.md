@@ -63,14 +63,17 @@ Nulab [Backlog](https://backlog.com/ja/) の課題とユーザ情報を、ロー
 
 ## 開発
 
-必要環境: Go 1.25+ / Node.js 20+ / Wails CLI v2.13
+必要環境: Go 1.25+ / Node.js 20.19+(または 22.13+ / 24+)/ Wails CLI v2.13
 
 ```sh
 # テスト(全パッケージ)
 go test ./...
 
-# フロントエンドの型検査とビルド
-cd frontend && npm install && npm run build
+# フロントエンドの lint・テスト・型検査・ビルド
+cd frontend && npm install
+npm run lint
+npm run test
+npm run build
 
 # 開発モード(要 GUI 環境)
 wails dev

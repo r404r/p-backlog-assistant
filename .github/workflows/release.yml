@@ -44,10 +44,12 @@ jobs:
             echo "RELEASE_NOTES.md の見出しが '# backlog-assistant $TAG' と完全一致しません(前リリースのノート流用を防ぐため更新してください)" >&2
             exit 1
           fi
-      - name: フロントエンドの型検査とビルド
+      - name: フロントエンドの lint・テスト・型検査・ビルド
         working-directory: frontend
         run: |
           npm ci
+          npm run lint
+          npm run test
           npm run build
       - name: Go vet / テスト
         run: |
