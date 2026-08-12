@@ -299,6 +299,102 @@ func TestParentIssueKeyOf(t *testing.T) {
 	}
 }
 
+// TestIssueDetailDTOOf は課題詳細ポップアップ(画面 2)へ渡す DTO の組み立てを確認する。
+//
+// カスタム属性は定義取得(API)を行わず、生 JSON の name と表示規約だけで作る。
+// 並びは課題レスポンスの順(定義順ではない)。
+func TestIssueDetailDTOOf(t *testing.T) {
+	issue := &store.Issue{
+		IssueKey: "EXA-2", Summary: "件名", Description: "詳細本文",
+		StatusName: "処理中", AssigneeName: "山田 太郎",
+		IssueTypeName: "タスク", PriorityName: "中",
+		Created: "2026-02-01T04:05:06Z", Updated: "2026-02-03T04:05:06Z",
+		DueDate: "2026-03-04", FetchedAt: "2026-02-04T00:00:00Z",
+		RawJSON: `{"id":102,"parentIssueId":100,"customFields":[
+			{"id":34,"fieldTypeId":5,"name":"重要度","value":{"id":341,"name":"高"}},
+			{"id":31,"fieldTypeId":1,"name":"顧客名","value":"取引先 A"},
+			{"id":35,"fieldTypeId":6,"name":"影響環境","value":[{"id":351,"name":"UI"},{"id":353,"name":"DB"}]}
+		]}`,
+	}
+
+	t.Run("固定項目と親課題キー", func(t *testing.T) {
+		dto := issueDetailDTOOf(issue, map[int64]string{100: "EXA-1"})
+		if dto.IssueKey != "EXA-2" || dto.Summary != "件名" || dto.Description != "詳細本文" {
+			t.Errorf("固定項目 = %+v", dto)
+		}
+		if dto.StatusName != "処理中" || dto.AssigneeName != "山田 太郎" ||
+			dto.IssueTypeName != "タスク" || dto.PriorityName != "中" {
+			t.Errorf("固定項目 = %+v", dto)
+		}
+		if dto.Created != "2026-02-01T04:05:06Z" || dto.Updated != "2026-02-03T04:05:06Z" ||
+			dto.DueDate != "2026-03-04" || dto.FetchedAt != "2026-02-04T00:00:00Z" {
+			t.Errorf("日時項目 = %+v", dto)
+		}
+		if dto.ParentIssueKey != "EXA-1" {
+			t.Errorf("親課題キー = %q, want EXA-1", dto.ParentIssueKey)
+		}
+	})
+
+	t.Run("ローカルに無い親は ID 表記へ縮退する", func(t *testing.T) {
+		dto := issueDetailDTOOf(issue, nil)
+		if dto.ParentIssueKey != "ID:100" {
+			t.Errorf("親課題キー = %q, want ID:100", dto.ParentIssueKey)
+		}
+	})
+
+	t.Run("カスタム属性は生 JSON の名前と表示規約で作る", func(t *testing.T) {
+		dto := issueDetailDTOOf(issue, nil)
+		want := []IssueCustomFieldDTO{
+			// 定義順ではなく課題レスポンスの順に並ぶ(定義取得を行わないため)
+			{Name: "重要度", Value: "高"},
+			{Name: "顧客名", Value: "取引先 A"},
+			{Name: "影響環境", Value: "UI, DB"},
+		}
+		if len(dto.CustomFields) != len(want) {
+			t.Fatalf("カスタム属性 = %+v, want %+v", dto.CustomFields, want)
+		}
+		for i, w := range want {
+			if dto.CustomFields[i] != w {
+				t.Errorf("customFields[%d] = %+v, want %+v", i, dto.CustomFields[i], w)
+			}
+		}
+	})
+
+	t.Run("名前を持たない属性も値が消えないようにする", func(t *testing.T) {
+		noName := &store.Issue{
+			IssueKey: "EXA-3",
+			RawJSON:  `{"id":103,"customFields":[{"id":31,"fieldTypeId":1,"value":"取引先 A"}]}`,
+		}
+		dto := issueDetailDTOOf(noName, nil)
+		if len(dto.CustomFields) != 1 {
+			t.Fatalf("カスタム属性 = %+v", dto.CustomFields)
+		}
+		if dto.CustomFields[0].Name != "(定義 ID 31)" || dto.CustomFields[0].Value != "取引先 A" {
+			t.Errorf("customFields[0] = %+v", dto.CustomFields[0])
+		}
+	})
+
+	t.Run("生 JSON が無い・壊れていても詳細は返る", func(t *testing.T) {
+		for _, raw := range []string{"", "{壊れた JSON"} {
+			broken := &store.Issue{IssueKey: "EXA-4", Summary: "件名", RawJSON: raw}
+			dto := issueDetailDTOOf(broken, map[int64]string{100: "EXA-1"})
+			if dto.IssueKey != "EXA-4" || dto.Summary != "件名" {
+				t.Errorf("縮退時の固定項目 = %+v", dto)
+			}
+			if dto.ParentIssueKey != "" {
+				t.Errorf("親課題キー = %q, want 空", dto.ParentIssueKey)
+			}
+			// フロント契約で null を返さない(常に配列)
+			if dto.CustomFields == nil {
+				t.Error("customFields = nil, want 空スライス")
+			}
+			if len(dto.CustomFields) != 0 {
+				t.Errorf("customFields = %+v, want 空", dto.CustomFields)
+			}
+		}
+	})
+}
+
 // TestHasColumn は列選択に特定の列キーが含まれるかの判定を確認する
 // (親課題キー列を選んだときだけ課題キーの対応表を作るため)。
 func TestHasColumn(t *testing.T) {

@@ -403,3 +403,69 @@ func TestDeleteProfile_ClosesStoreBeforeRemovingDB(t *testing.T) {
 		t.Error("DB 接続を開いたまま削除処理が呼ばれた")
 	}
 }
+
+// TestGetIssueDetail は課題詳細ポップアップ(画面 2)の材料が
+// ローカル DB だけで揃うこと(API を呼ばないこと)を確認する。
+//
+// 親課題キーの引き当ては 1 件だけ引く(プロジェクト全体の対応表は作らない)。
+func TestGetIssueDetail(t *testing.T) {
+	fake := &fakeConnector{info: testInfo()}
+	s, id := newSyncTestService(t, fake)
+	ctx := context.Background()
+
+	st, err := s.storeForProfile(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.UpsertIssues(ctx, []*store.Issue{
+		{ID: 100, IssueKey: "EXA-1", ProjectID: 1, Summary: "親課題", RawJSON: `{"id":100}`},
+		{ID: 101, IssueKey: "EXA-2", ProjectID: 1, Summary: "子課題", RawJSON: `{"id":101,"parentIssueId":100}`},
+		{ID: 102, IssueKey: "EXA-3", ProjectID: 1, Summary: "親が未同期", RawJSON: `{"id":102,"parentIssueId":9999}`},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Run("課題と親課題キーの対応を返す", func(t *testing.T) {
+		det, err := s.GetIssueDetail(ctx, id, 1, "EXA-2")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if det.Issue == nil || det.Issue.Summary != "子課題" {
+			t.Fatalf("課題 = %+v", det.Issue)
+		}
+		if det.ParentKeys[100] != "EXA-1" {
+			t.Errorf("親課題キー = %+v, want map[100:EXA-1]", det.ParentKeys)
+		}
+	})
+
+	t.Run("ローカルに無い親は対応表に載らない", func(t *testing.T) {
+		det, err := s.GetIssueDetail(ctx, id, 1, "EXA-3")
+		if err != nil {
+			t.Fatal(err)
+		}
+		// 呼び出し側(app)が ID:<数値> へ縮退させる
+		if len(det.ParentKeys) != 0 {
+			t.Errorf("親課題キー = %+v, want 空", det.ParentKeys)
+		}
+	})
+
+	t.Run("親を持たない課題も引ける", func(t *testing.T) {
+		det, err := s.GetIssueDetail(ctx, id, 1, "EXA-1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(det.ParentKeys) != 0 {
+			t.Errorf("親課題キー = %+v, want 空", det.ParentKeys)
+		}
+	})
+
+	t.Run("見つからない課題は明確なエラー", func(t *testing.T) {
+		if _, err := s.GetIssueDetail(ctx, id, 1, "EXA-9"); err == nil {
+			t.Fatal("エラーにならなかった")
+		}
+		// 別プロジェクトの課題キーも取り違えない
+		if _, err := s.GetIssueDetail(ctx, id, 2, "EXA-1"); err == nil {
+			t.Error("別プロジェクトの課題が返った")
+		}
+	})
+}

@@ -2,6 +2,8 @@ package store
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 )
 
 // 一括更新・追加(internal/bulk)の検証・差分表示で使うローカル参照。
@@ -26,6 +28,33 @@ func GetIssueByKey(ctx context.Context, q dbtx, projectID int64, issueKey string
 // GetIssueByKey は Store 直接実行版。
 func (s *Store) GetIssueByKey(ctx context.Context, projectID int64, issueKey string) (*Issue, error) {
 	return GetIssueByKey(ctx, s.db, projectID, issueKey)
+}
+
+// GetIssueKeyByID は課題 ID(未削除)から課題キーを 1 件だけ引く。
+// 見つからない場合は空文字を返す(エラーにしない)。
+//
+// 親課題キーの引き当てで 1 件しか要らない場面(課題詳細ポップアップ)に使う。
+// プロジェクト全体の対応表(ListIssueRefs)は課題数ぶんの走査になるため、
+// 1 件だけ引く経路を分けている。
+// プロジェクトを跨いだ取り違えを防ぐため、必ず projectID で限定する。
+func GetIssueKeyByID(ctx context.Context, q dbtx, projectID, id int64) (string, error) {
+	var issueKey string
+	err := q.QueryRowContext(ctx,
+		`SELECT issue_key FROM issues
+		 WHERE project_id = ? AND id = ? AND deleted = 0 LIMIT 1`,
+		projectID, id).Scan(&issueKey)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	return issueKey, nil
+}
+
+// GetIssueKeyByID は Store 直接実行版。
+func (s *Store) GetIssueKeyByID(ctx context.Context, projectID, id int64) (string, error) {
+	return GetIssueKeyByID(ctx, s.db, projectID, id)
 }
 
 // UserRef はユーザの識別情報だけを持つ軽量表現(担当者 ID・名前の解決用)。

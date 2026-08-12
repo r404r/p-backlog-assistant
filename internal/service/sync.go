@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 
@@ -223,6 +224,66 @@ func (s *ProfileService) SearchIssues(ctx context.Context, profileID string, fil
 		return nil, err
 	}
 	return st.SearchIssues(ctx, filter)
+}
+
+// IssueDetail は課題 1 件の詳細表示(画面 2 のポップアップ)の材料。
+//
+// DTO への詰め替え(表示規約・フロント契約への正規化)は呼び出し側(app)で行う。
+// ここでは「ローカル DB から読める素材」だけを返す。
+type IssueDetail struct {
+	// Issue は対象の課題(常に非 nil)。
+	Issue *store.Issue
+	// ParentKeys は親課題 ID → 課題キー。親が無い場合、および親が
+	// ローカルに無い(未同期・別プロジェクト)場合は空になる。
+	// 呼び出し側は引き当てられない親を ID:<数値> 表記へ縮退させること。
+	ParentKeys map[int64]string
+}
+
+// GetIssueDetail は課題キーで課題 1 件の詳細をローカル DB から返す(API は呼ばない)。
+//
+// 見つからない場合はエラーを返す(画面がポップアップに理由を表示できるようにする)。
+// 親課題キーの引き当ては、必要な 1 件だけを引く(プロジェクト全体の対応表を作る
+// ListIssueKeysByID は、詳細を 1 件開くたびに全課題を走査してしまうため使わない)。
+//
+// 課題本体と親課題キーの 2 クエリは 1 つの読み取りトランザクションで実行する
+// (中 2 と同じ流儀)。間に同期の書き込みが割り込むと、親課題だけが削除・改名された
+// 中途半端なスナップショットを表示してしまうため。
+func (s *ProfileService) GetIssueDetail(ctx context.Context, profileID string, projectID int64, issueKey string) (*IssueDetail, error) {
+	// store を使う操作はプロファイルの削除・保存と排他する(高 2)
+	s.profileMu.RLock()
+	defer s.profileMu.RUnlock()
+	st, err := s.storeForProfile(profileID)
+	if err != nil {
+		return nil, err
+	}
+	var detail IssueDetail
+	err = st.WithReadTx(ctx, func(tx *sql.Tx) error {
+		issue, err := store.GetIssueByKey(ctx, tx, projectID, issueKey)
+		if err != nil {
+			return err
+		}
+		if issue == nil {
+			// 課題キーはエラーメッセージに含めない(画面側が対象を表示しているため
+			// 不要であり、動作ログのマスク方針とも揃える)
+			return errors.New("課題がローカルに見つかりません(同期後に削除されたか、まだ同期されていません)")
+		}
+		keys := map[int64]string{}
+		if parentID := store.ParentIssueID(issue.RawJSON); parentID != 0 {
+			parentKey, err := store.GetIssueKeyByID(ctx, tx, projectID, parentID)
+			if err != nil {
+				return err
+			}
+			if parentKey != "" {
+				keys[parentID] = parentKey
+			}
+		}
+		detail = IssueDetail{Issue: issue, ParentKeys: keys}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &detail, nil
 }
 
 // IterateIssues はローカル DB の課題を条件に一致した順(ID 昇順)で

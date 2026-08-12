@@ -15,6 +15,7 @@ import {
   copyToClipboard,
   customColumnKey,
   formatSyncProgress,
+  getBackend,
   newSyncRunId,
   rowStatusLabel,
   type SyncPhase,
@@ -195,5 +196,51 @@ describe('copyToClipboard', () => {
     setRuntime(undefined)
     setClipboard(undefined)
     await expect(copyToClipboard('text')).rejects.toThrow()
+  })
+})
+
+/**
+ * モックバックエンドの課題詳細(Wails 外の画面確認で使う)。
+ *
+ * Wails ランタイムが無い環境では getBackend() がモックを返すため、
+ * 詳細ポップアップが期待する契約(必須項目・カスタム属性の形・
+ * 見つからない課題はエラー)をここで固定する。
+ */
+describe('モックバックエンドの getIssueDetail', () => {
+  /** モックの初期データはプロジェクト 101(SAMPLE)に投入されている */
+  const projectId = 101
+
+  it('課題キーで詳細を返す', async () => {
+    const detail = await getBackend().getIssueDetail('p1', projectId, 'SAMPLE-1')
+
+    expect(detail.issueKey).toBe('SAMPLE-1')
+    expect(detail.summary).not.toBe('')
+    // 本文・取得時刻は「最終同期時点の内容です」の注記に使う
+    expect(detail.description).not.toBe('')
+    expect(detail.fetchedAt).not.toBe('')
+    // カスタム属性は常に配列(null を返さない)
+    expect(Array.isArray(detail.customFields)).toBe(true)
+    for (const f of detail.customFields) {
+      expect(typeof f.name).toBe('string')
+      expect(typeof f.value).toBe('string')
+    }
+  })
+
+  it('親課題は課題キー・ID 表記・親なしの 3 通りを返す', async () => {
+    const backend = getBackend()
+    // 5 の倍数は 1 つ前の課題が親(ローカルにある親 = 課題キー表示)
+    expect((await backend.getIssueDetail('p1', projectId, 'SAMPLE-5')).parentIssueKey).toBe(
+      'SAMPLE-4',
+    )
+    // 7 の倍数はローカルに無い親(ID:<数値> 表示)
+    expect((await backend.getIssueDetail('p1', projectId, 'SAMPLE-7')).parentIssueKey).toBe(
+      'ID:999999',
+    )
+    // それ以外は親なし(空文字)
+    expect((await backend.getIssueDetail('p1', projectId, 'SAMPLE-3')).parentIssueKey).toBe('')
+  })
+
+  it('ローカルに無い課題はエラーにする(空の詳細を返さない)', async () => {
+    await expect(getBackend().getIssueDetail('p1', projectId, 'SAMPLE-99999')).rejects.toThrow()
   })
 })

@@ -5,6 +5,7 @@ package main
 // Excel 出力は app_export.go、一括更新・追加は app_bulk.go にある。
 
 import (
+	"fmt"
 	"log/slog"
 
 	"backlog-assistant/internal/customfield"
@@ -237,6 +238,101 @@ func (a *App) SearchIssues(profileID string, query store.IssueFilter, columns []
 					slog.Int("unverifiable", res.Unverifiable),
 					slog.Int("customFieldColumns", len(customFieldIDs)),
 				}, nil
+		})
+}
+
+// IssueCustomFieldDTO は課題詳細に表示するカスタム属性 1 件
+// (frontend/src/lib/backend.ts の IssueCustomField と対)。
+type IssueCustomFieldDTO struct {
+	Name  string `json:"name"`
+	Value string `json:"value"`
+}
+
+// IssueDetailDTO は課題 1 件の詳細(frontend/src/lib/backend.ts の IssueDetail と対)。
+//
+// 中身はすべてローカル DB の最終同期時点の内容。FetchedAt はその取得時刻で、
+// 画面が「いつ時点の内容か」を注記するために使う。
+type IssueDetailDTO struct {
+	IssueKey      string `json:"issueKey"`
+	Summary       string `json:"summary"`
+	Description   string `json:"description"`
+	StatusName    string `json:"statusName"`
+	AssigneeName  string `json:"assigneeName"`
+	IssueTypeName string `json:"issueTypeName"`
+	PriorityName  string `json:"priorityName"`
+	Created       string `json:"created"`
+	Updated       string `json:"updated"`
+	DueDate       string `json:"dueDate"`
+	// ParentIssueKey は親課題の表記(CF5 と同じ規約)。
+	// 親なし・判定不能は空文字、ローカルに無い親は ID:<数値>。
+	ParentIssueKey string `json:"parentIssueKey"`
+	// CustomFields は課題が持つカスタム属性の全件(フロント契約: null を返さない)。
+	CustomFields []IssueCustomFieldDTO `json:"customFields"`
+	// FetchedAt はこの課題をローカルへ取り込んだ時刻(RFC3339)。
+	FetchedAt string `json:"fetchedAt"`
+}
+
+// issueDetailDTOOf は課題 1 件を詳細 DTO へ詰め替える。
+//
+// カスタム属性は定義(GET /projects/:id/customFields)を取りに行かず、
+// 生 JSON の customFields に含まれる name と表示規約(customfield.FormatValue)
+// だけで組み立てる。詳細を開くたびに API を呼ばずに済み、オフラインでも表示できる。
+// その代わり並び順は「定義順」ではなく「課題レスポンスに現れた順」になる。
+//
+// 生 JSON を解釈できない課題はカスタム属性を空にして縮退させ、
+// 1 件のデータ不備で詳細表示全体を失わせない(課題抽出・Excel 出力と同じ流儀)。
+func issueDetailDTOOf(is *store.Issue, parentKeys map[int64]string) IssueDetailDTO {
+	dto := IssueDetailDTO{
+		IssueKey:       is.IssueKey,
+		Summary:        is.Summary,
+		Description:    is.Description,
+		StatusName:     is.StatusName,
+		AssigneeName:   is.AssigneeName,
+		IssueTypeName:  is.IssueTypeName,
+		PriorityName:   is.PriorityName,
+		Created:        is.Created,
+		Updated:        is.Updated,
+		DueDate:        is.DueDate,
+		ParentIssueKey: parentIssueKeyOf(is.RawJSON, parentKeys),
+		// フロント契約では null を返さない(常に配列)
+		CustomFields: []IssueCustomFieldDTO{},
+		FetchedAt:    is.FetchedAt,
+	}
+	values, err := customfield.ParseValues(is.RawJSON)
+	if err != nil {
+		return dto
+	}
+	for _, v := range values {
+		name := v.Name
+		if name == "" {
+			// 名前を持たない応答でも、どの定義の値かが分かるようにする
+			// (値が表示から消えるのを避ける)
+			name = fmt.Sprintf("(定義 ID %d)", v.ID)
+		}
+		dto.CustomFields = append(dto.CustomFields,
+			IssueCustomFieldDTO{Name: name, Value: customfield.FormatValue(v)})
+	}
+	return dto
+}
+
+// GetIssueDetail は課題 1 件の詳細をローカル DB から返す(API は呼ばない)。
+//
+// 検索結果の課題キーをクリックしたときのポップアップ表示に使う。
+// 表示は最終同期時点の内容であり、Backlog 側の最新とは限らない
+// (画面はその旨を FetchedAt とともに注記する)。
+func (a *App) GetIssueDetail(profileID string, projectID int64, issueKey string) (*IssueDetailDTO, error) {
+	// 課題キー・件名は記録しない(既存のマスク方針。profileId / projectId のみ)
+	attrs := []slog.Attr{slog.String("profileId", profileID), slog.Int64("projectId", projectID)}
+	return appOp(a, "GetIssueDetail", attrs,
+		func(s *service.ProfileService) (*IssueDetailDTO, []slog.Attr, error) {
+			detail, err := s.GetIssueDetail(a.ctx, profileID, projectID, issueKey)
+			if err != nil {
+				return nil, nil, err
+			}
+			dto := issueDetailDTOOf(detail.Issue, detail.ParentKeys)
+			// 記録するのは件数のみ。親の有無は「この課題が子課題である」という
+			// 課題の内容そのものなので残さない(マスク方針)
+			return &dto, []slog.Attr{slog.Int("customFields", len(dto.CustomFields))}, nil
 		})
 }
 

@@ -9,9 +9,11 @@ import {
   isMockBackend,
   newSyncRunId,
   onSyncProgress,
+  openExternalURL,
   type CustomFieldDef,
   type CustomFieldFilter,
   type ExportColumn,
+  type IssueDetail,
   type IssueQuery,
   type IssueRow,
   type Project,
@@ -21,6 +23,7 @@ import {
 } from '../lib/backend'
 import { issueUrl } from '../lib/backlogUrl'
 import { errorMessage, formatDateTime, formatElapsed, syncModeLabel } from '../lib/format'
+import { useModalFocus } from '../lib/modalFocus'
 import {
   resolveProjectSelection,
   restoreProjectSelection,
@@ -418,6 +421,8 @@ watch(selectedProjectId, () => {
   // 消した一覧に対する「コピーしました」・コピー失敗の表示を残さない
   clearCopiedFeedback()
   copyError.value = ''
+  // 前のプロジェクトの課題を表示したままにしない(取得中の要求も失効させる)
+  closeIssueDetail()
   syncResult.value = null
   syncError.value = ''
   exportPath.value = ''
@@ -648,8 +653,13 @@ async function loadSpaceUrl() {
   }
 }
 
-/** 課題キーのクリック: 課題 URL をクリップボードへコピーする */
-async function copyIssueUrl(issueKey: string) {
+/**
+ * 課題 URL をクリップボードへコピーする(一覧のアイコン・詳細ポップアップの共通処理)。
+ *
+ * inDetail が真のときは失敗をポップアップ内に表示する。一覧側のエラー表示は
+ * オーバーレイの背後になり、ポップアップを開いたままでは見えないため。
+ */
+async function copyIssueUrl(issueKey: string, inDetail = false) {
   const url = issueUrl(spaceUrl.value, issueKey)
   // スペース URL が分からない場合はボタン自体を出していないが、念のため何もしない
   if (!url) return
@@ -659,6 +669,7 @@ async function copyIssueUrl(issueKey: string) {
     // 完了までの間に別の課題キーがクリックされていたら、この(古い)結果は反映しない
     if (seq !== copyRequestSeq) return
     copyError.value = ''
+    detailCopyError.value = ''
     if (copiedTimer !== null) clearTimeout(copiedTimer)
     // 同じ課題を連続コピーしたときも支援技術(role="status")へ再通知されるよう、
     // 一度空にして次のティックで再設定する(DOM 内容が変化しないと読み上げられない)
@@ -674,7 +685,12 @@ async function copyIssueUrl(issueKey: string) {
     if (seq !== copyRequestSeq) return
     // 成功表示が残っていると失敗に気づけないため、先に消してからエラーを出す
     clearCopiedFeedback()
-    copyError.value = `課題 URL をコピーできませんでした: ${errorMessage(e)}`
+    const message = `課題 URL をコピーできませんでした: ${errorMessage(e)}`
+    if (inDetail) {
+      detailCopyError.value = message
+    } else {
+      copyError.value = message
+    }
   }
 }
 
@@ -682,6 +698,121 @@ async function copyIssueUrl(issueKey: string) {
 onUnmounted(() => {
   clearCopiedFeedback()
 })
+
+// ---------------------------------------------------------------------------
+// 課題詳細のポップアップ(課題キーのクリック)
+// ---------------------------------------------------------------------------
+
+/**
+ * 詳細を表示中の課題キー(空 = ポップアップを閉じている)。
+ *
+ * 取得結果(detail)とは別に持つ。読み込み中・失敗時もどの課題を開いたのかを
+ * ヘッダに出し続けるため(空のダイアログにしない)。
+ */
+const detailIssueKey = ref('')
+
+/** 取得した課題詳細(null = 未取得・取得失敗) */
+const detail = ref<IssueDetail | null>(null)
+
+const detailLoading = ref(false)
+const detailError = ref('')
+
+/**
+ * ポップアップ内の「URL をコピー」の失敗表示(空 = 正常)。
+ *
+ * 一覧側の copyError はオーバーレイの背後に隠れて見えないため、
+ * ポップアップから実行したコピーの失敗はポップアップ内に出す。
+ */
+const detailCopyError = ref('')
+
+/** 詳細ポップアップを開いているか */
+const detailOpen = computed(() => detailIssueKey.value !== '')
+
+/**
+ * 詳細取得の要求番号。行を続けてクリックした場合や連打した場合に、
+ * 古い応答が後着して別の課題の内容を表示しないようにする(検索と同じ流儀)。
+ */
+let detailRequestSeq = 0
+
+/** 閉じたときにフォーカスを戻す先(詳細を開いた課題キーのボタン) */
+let detailOpener: HTMLElement | null = null
+
+/** ポップアップの「閉じる」ボタン(開いた直後のフォーカス移動先) */
+const detailCloseButton = ref<HTMLButtonElement | null>(null)
+
+/** ポップアップ本体(フォーカスをこの中へ閉じ込める範囲) */
+const detailModal = ref<HTMLElement | null>(null)
+
+// 開いている間はフォーカスをポップアップ内に閉じ込め、ESC で閉じる。
+// 戻り先は「開いた課題キーのボタン」を明示する(クリックでフォーカスが
+// 移らない WebView でも確実に戻すため)
+useModalFocus(detailModal, detailOpen, {
+  initialFocus: () => detailCloseButton.value,
+  returnFocus: () => detailOpener,
+  onEscape: () => closeIssueDetail(),
+})
+
+/** 課題キーのクリック: 課題詳細をポップアップで表示する */
+async function openIssueDetail(issueKey: string, e: MouseEvent) {
+  // 同期中は開かない(R10)。同期途中のローカル DB を読むと、完了後の内容と
+  // 食い違う中途半端な詳細を見せてしまう。ボタンは disabled にしてあるが、
+  // 判定を UI だけに任せない(検索・Excel 出力と同じ流儀)
+  if (issueSyncing.value) return
+  // 閉じたときに戻すフォーカス先は、非同期の前(currentTarget が有効なうち)に控える
+  detailOpener = (e.currentTarget as HTMLElement | null) ?? null
+  const seq = ++detailRequestSeq
+  detailIssueKey.value = issueKey
+  detail.value = null
+  detailError.value = ''
+  detailCopyError.value = ''
+  detailLoading.value = true
+  try {
+    const res = await backend.getIssueDetail(profileId.value, selectedProjectId.value, issueKey)
+    // 別の行を開き直した・閉じた後なら、この(古い)応答は反映しない
+    if (seq !== detailRequestSeq) return
+    detail.value = res
+  } catch (err) {
+    if (seq !== detailRequestSeq) return
+    detailError.value = `課題の詳細を取得できませんでした: ${errorMessage(err)}`
+  } finally {
+    if (seq === detailRequestSeq) detailLoading.value = false
+  }
+}
+
+/**
+ * 「最終同期時点の内容です」の注記(取得時刻が分かる場合は同期時刻を添える)。
+ * 詳細はローカル DB の内容であり、Backlog 側の最新とは限らないため必ず出す。
+ */
+const detailNote = computed(() => {
+  const at = detail.value?.fetchedAt ? formatDateTime(detail.value.fetchedAt) : ''
+  const suffix = 'Backlog 側の最新の状態とは異なる場合があります。'
+  return at ? `最終同期時点の内容です(同期: ${at})。${suffix}` : `最終同期時点の内容です。${suffix}`
+})
+
+/**
+ * 詳細ポップアップを閉じる(実行中の取得は失効させる)。
+ * 閉じた後のフォーカス復帰は useModalFocus が行う(detailOpener は
+ * その戻り先として参照されるため、ここでは消さない)。
+ */
+function closeIssueDetail() {
+  if (!detailOpen.value) return
+  detailRequestSeq++
+  // モーダル起点で進行中のコピーも失効させる。閉じた後に完了した古いコピーの
+  // 失敗が、次に開いたモーダルの detailCopyError へ混入するのを防ぐ
+  copyRequestSeq++
+  detailIssueKey.value = ''
+  detail.value = null
+  detailError.value = ''
+  detailCopyError.value = ''
+  detailLoading.value = false
+}
+
+/** 詳細ポップアップの課題を既定のブラウザで開く */
+function openIssueInBrowser() {
+  const url = issueUrl(spaceUrl.value, detailIssueKey.value)
+  if (!url) return
+  openExternalURL(url)
+}
 
 // ---------------------------------------------------------------------------
 // 同期
@@ -702,6 +833,14 @@ const syncError = ref('')
  * 無視して選択を切り替えられてしまうため(R10)。
  */
 const issueSyncing = computed(() => syncing.value || issueSyncRunning.value)
+
+// 同期が始まったら開いている詳細を閉じる(R10)。
+// 表示中の内容は同期の進行とともに古くなり、同期途中の DB を読み直すこともできない。
+// 他画面で開始された同期(issueSyncRunning)も対象にするため、この画面の
+// runSync ではなく issueSyncing の変化で判定する。
+watch(issueSyncing, (running) => {
+  if (running) closeIssueDetail()
+})
 
 /**
  * プロジェクト選択・同期系操作を固定する状態(R10。SyncStatusView の busy と同じ流儀)。
@@ -1200,19 +1339,46 @@ async function exportExcel() {
             </thead>
             <tbody>
               <tr v-for="r in rows" :key="r.issueKey">
-                <!-- 課題キーのクリックで課題 URL をコピーする
-                     (スペース URL が分からない場合は通常表示に留める) -->
+                <!-- 課題キーのクリックで詳細をポップアップ表示し、
+                     右隣のクリップボードのアイコンで課題 URL をコピーする
+                     (コピーはスペース URL が分かる場合のみ) -->
                 <td class="nowrap">
                   <button
-                    v-if="canCopyIssueUrl"
                     type="button"
                     class="issue-key"
-                    title="クリックで課題 URL をコピー"
-                    @click="copyIssueUrl(r.issueKey)"
+                    :disabled="issueSyncing"
+                    :title="issueSyncing ? '同期中は詳細を表示できません' : 'クリックで詳細を表示'"
+                    @click="openIssueDetail(r.issueKey, $event)"
                   >
                     {{ r.issueKey }}
                   </button>
-                  <template v-else>{{ r.issueKey }}</template>
+                  <!-- アイコンは常時表示にして、ホバーで出し入れしない
+                       (表示・非表示のたびに列幅が変わってテーブルがずれるため) -->
+                  <button
+                    v-if="canCopyIssueUrl"
+                    type="button"
+                    class="copy-icon"
+                    title="課題 URL をコピー"
+                    aria-label="課題 URL をコピー"
+                    @click="copyIssueUrl(r.issueKey)"
+                  >
+                    <!-- クリップボード(線画)。外部アイコンライブラリを持ち込まず、
+                         色は currentColor で周囲の文字色に追従させる -->
+                    <svg
+                      width="14"
+                      height="14"
+                      viewBox="0 0 16 16"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="1.3"
+                      stroke-linejoin="round"
+                      aria-hidden="true"
+                      focusable="false"
+                    >
+                      <rect x="3.5" y="3" width="9" height="11.5" rx="1.5" />
+                      <rect x="6" y="1.5" width="4" height="2.5" rx="0.75" />
+                    </svg>
+                  </button>
                 </td>
                 <td>{{ r.summary }}</td>
                 <td class="nowrap">{{ r.statusName }}</td>
@@ -1230,8 +1396,11 @@ async function exportExcel() {
 
         <p v-if="copyError" class="error">{{ copyError }}</p>
 
-        <p v-if="canCopyIssueUrl && rows.length > 0" class="hint">
-          課題キーをクリックすると、その課題の URL をクリップボードへコピーします。
+        <p v-if="rows.length > 0" class="hint">
+          課題キーをクリックすると、同期済みの内容で課題の詳細を表示します。
+          <template v-if="canCopyIssueUrl">
+            右隣のクリップボードのアイコンをクリックすると、その課題の URL をコピーします。
+          </template>
         </p>
 
         <p v-if="customColumns.length > 0" class="hint">
@@ -1290,6 +1459,79 @@ async function exportExcel() {
         </div>
       </section>
     </template>
+
+    <!-- 課題詳細のポップアップ。
+         背景クリック(@click.self)と ESC で閉じるのは、接続設定の削除確認
+         ダイアログ(SettingsView)と同じ流儀。内容はローカル DB の
+         最終同期時点のもので、開いても API は呼ばない -->
+    <div v-if="detailOpen" class="modal-overlay" @click.self="closeIssueDetail">
+      <div
+        ref="detailModal"
+        class="modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="issue-detail-title"
+      >
+        <h2 id="issue-detail-title" class="detail-title">
+          <span class="detail-key">{{ detailIssueKey }}</span>
+          <span v-if="detail" class="detail-summary">{{ detail.summary }}</span>
+        </h2>
+
+        <p v-if="detailLoading" class="notice">読み込み中...</p>
+        <p v-else-if="detailError" class="error">{{ detailError }}</p>
+
+        <template v-else-if="detail">
+          <dl class="detail-grid">
+            <dt>状態</dt>
+            <dd>{{ detail.statusName || '-' }}</dd>
+            <dt>種別</dt>
+            <dd>{{ detail.issueTypeName || '-' }}</dd>
+            <dt>優先度</dt>
+            <dd>{{ detail.priorityName || '-' }}</dd>
+            <dt>担当者</dt>
+            <dd>{{ detail.assigneeName || '(未設定)' }}</dd>
+            <dt>期限</dt>
+            <dd>{{ detail.dueDate || '-' }}</dd>
+            <dt>作成日時</dt>
+            <dd>{{ formatDateTime(detail.created) || '-' }}</dd>
+            <dt>更新日時</dt>
+            <dd>{{ formatDateTime(detail.updated) || '-' }}</dd>
+            <dt>親課題</dt>
+            <dd>{{ detail.parentIssueKey || '(なし)' }}</dd>
+          </dl>
+
+          <!-- カスタム属性(定義があり、値を持つ課題でのみ表示) -->
+          <template v-if="detail.customFields.length > 0">
+            <h3 class="detail-section">カスタム属性</h3>
+            <dl class="detail-grid">
+              <template v-for="(f, i) in detail.customFields" :key="i">
+                <dt>{{ f.name }}</dt>
+                <dd>{{ f.value || '(未設定)' }}</dd>
+              </template>
+            </dl>
+          </template>
+
+          <h3 class="detail-section">詳細</h3>
+          <pre v-if="detail.description" class="detail-description">{{ detail.description }}</pre>
+          <p v-else class="hint">(詳細は入力されていません)</p>
+
+          <p class="hint detail-note">{{ detailNote }}</p>
+        </template>
+
+        <!-- コピーの失敗はここに出す(一覧側のエラーはオーバーレイの背後で見えない) -->
+        <p v-if="detailCopyError" class="error detail-error">{{ detailCopyError }}</p>
+
+        <div class="row buttons detail-buttons">
+          <button v-if="canCopyIssueUrl" type="button" @click="copyIssueUrl(detailIssueKey, true)">
+            URL をコピー
+          </button>
+          <button v-if="canCopyIssueUrl" type="button" @click="openIssueInBrowser">
+            ブラウザで開く
+          </button>
+          <button ref="detailCloseButton" type="button" @click="closeIssueDetail">閉じる</button>
+        </div>
+      </div>
+    </div>
 
     <!-- コピー完了の通知(トースト)。
          行内に出すと課題キー列の幅が変わってテーブルがずれるため、
@@ -1615,6 +1857,121 @@ button.issue-key:hover {
   color: #094c8f;
 }
 
+/* 課題 URL コピーのアイコンボタン(課題キーの右隣に常時表示)。
+   ボタン面(枠・背景)を消して、アイコンだけが並ぶようにする */
+button.copy-icon {
+  border: none;
+  background: none;
+  padding: 0;
+  margin-left: 0.35rem;
+  color: #8c959f;
+  cursor: pointer;
+  /* 行の文字とベースラインをそろえる(1 行の高さを変えない) */
+  vertical-align: -0.15em;
+  line-height: 0;
+}
+
+button.copy-icon:hover:not(:disabled) {
+  background: none;
+  color: #0b5cad;
+}
+
+/* ---- 課題詳細のポップアップ ---- */
+
+/* 配色・重なり順は SettingsView の削除確認ダイアログに合わせる */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.35);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+  padding: 1rem;
+  box-sizing: border-box;
+}
+
+.modal {
+  background: #fff;
+  border-radius: 6px;
+  padding: 1.25rem 1.5rem;
+  width: min(720px, 92vw);
+  /* 長い課題でもウインドウから溢れないよう、中身をスクロールさせる */
+  max-height: 85vh;
+  overflow: auto;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.2);
+  font-size: 0.9rem;
+}
+
+.detail-title {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin: 0 0 0.75rem;
+}
+
+.detail-key {
+  font-family: monospace;
+  color: #57606a;
+}
+
+.detail-summary {
+  font-size: 1.05rem;
+}
+
+.detail-section {
+  font-size: 0.9rem;
+  margin: 1rem 0 0.4rem;
+}
+
+/* 項目名と値の 2 列。項目名の幅は内容に合わせ、値だけを伸ばす */
+.detail-grid {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  column-gap: 0.75rem;
+  row-gap: 0.3rem;
+  margin: 0;
+}
+
+.detail-grid dt {
+  font-weight: 600;
+  color: #57606a;
+}
+
+.detail-grid dd {
+  margin: 0;
+  word-break: break-word;
+}
+
+/* 詳細本文は改行・空白を保ったまま折り返す(長文はスクロール) */
+.detail-description {
+  margin: 0;
+  padding: 0.6rem 0.75rem;
+  border: 1px solid #d0d7de;
+  border-radius: 4px;
+  background: #f6f8fa;
+  font-family: inherit;
+  font-size: 0.85rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 240px;
+  overflow: auto;
+}
+
+.detail-note {
+  margin: 0.75rem 0 0;
+}
+
+.detail-error {
+  margin: 0.75rem 0 0;
+}
+
+.detail-buttons {
+  margin-top: 1rem;
+  margin-bottom: 0;
+}
+
 /* コピー成功のトースト(数秒で自動的に消える)。
    position: fixed のためテーブルの列幅・スクロール位置に影響しない。
    配色は既存の成功表示(.result.ok)に合わせる */
@@ -1632,8 +1989,10 @@ button.issue-key:hover {
   font-size: 0.85rem;
   white-space: nowrap;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
-  /* 表の固定ヘッダ(z-index: 1)より手前に出す。クリックは下の要素へ通す */
-  z-index: 50;
+  /* 表の固定ヘッダ(z-index: 1)と課題詳細のポップアップ(z-index: 100)より
+     手前に出す(ポップアップの「URL をコピー」の結果が隠れないように)。
+     クリックは下の要素へ通す */
+  z-index: 200;
   pointer-events: none;
 }
 

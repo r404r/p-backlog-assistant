@@ -8,6 +8,7 @@ import {
   type Profile,
 } from '../lib/backend'
 import { errorMessage } from '../lib/format'
+import { useModalFocus } from '../lib/modalFocus'
 
 const backend = getBackend()
 const mock = isMockBackend()
@@ -228,6 +229,18 @@ function closeDeleteDialog() {
   deleteTarget.value = null
 }
 
+/** 確認ダイアログ本体(フォーカスをこの中へ閉じ込める範囲) */
+const deleteModal = ref<HTMLElement | null>(null)
+
+/** 確認ダイアログを開いているか */
+const deleteDialogOpen = computed(() => deleteTarget.value !== null)
+
+// 開いている間はフォーカスをダイアログ内に閉じ込め、ESC で閉じる。
+// 初期フォーカスは指定せず先頭のフォーカス可能要素(「ローカルデータも削除する」の
+// チェックボックス)に任せる。破壊的な「削除する」に最初からフォーカスを当てると、
+// 開いた直後の Enter で削除できてしまうため。
+useModalFocus(deleteModal, deleteDialogOpen, { onEscape: () => closeDeleteDialog() })
+
 async function confirmDelete() {
   if (!deleteTarget.value) return
   deleting.value = true
@@ -408,7 +421,13 @@ async function confirmDelete() {
 
     <!-- 削除確認ダイアログ -->
     <div v-if="deleteTarget" class="modal-overlay" @click.self="closeDeleteDialog">
-      <div class="modal" role="dialog" aria-modal="true" aria-labelledby="del-title">
+      <div
+        ref="deleteModal"
+        class="modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="del-title"
+      >
         <h2 id="del-title">プロファイルの削除</h2>
         <p>
           プロファイル「{{ deleteTarget.name }}」({{ deleteTarget.spaceUrl }})を削除します。<br />

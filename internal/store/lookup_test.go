@@ -54,6 +54,58 @@ func TestGetIssueByKey_ExcludesDeleted(t *testing.T) {
 	}
 }
 
+// TestGetIssueKeyByID は課題 ID から課題キーを 1 件だけ引けることを確認する
+// (課題詳細ポップアップの親課題キー解決)。
+func TestGetIssueKeyByID(t *testing.T) {
+	s := openTempStore(t)
+	ctx := context.Background()
+
+	if err := s.UpsertIssue(ctx, &Issue{ID: 100, IssueKey: "EXA-1", ProjectID: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.UpsertIssue(ctx, &Issue{ID: 200, IssueKey: "SUB-1", ProjectID: 2}); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := s.GetIssueKeyByID(ctx, 1, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "EXA-1" {
+		t.Errorf("課題キー = %q, want EXA-1", got)
+	}
+
+	// 未登録・別プロジェクトは空文字(エラーにしない。呼び出し側は ID:<数値> へ縮退する)
+	missing, err := s.GetIssueKeyByID(ctx, 1, 999)
+	if err != nil || missing != "" {
+		t.Errorf("未登録 ID = %q, %v, want \"\", nil", missing, err)
+	}
+	other, err := s.GetIssueKeyByID(ctx, 1, 200)
+	if err != nil || other != "" {
+		t.Errorf("別プロジェクト = %q, %v, want \"\", nil", other, err)
+	}
+}
+
+// TestGetIssueKeyByID_ExcludesDeleted は論理削除済みの課題を引き当てないことを確認する。
+func TestGetIssueKeyByID_ExcludesDeleted(t *testing.T) {
+	s := openTempStore(t)
+	ctx := context.Background()
+
+	if err := s.UpsertIssue(ctx, &Issue{ID: 100, IssueKey: "EXA-1", ProjectID: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.MarkIssueDeletedByKey(ctx, 1, "EXA-1"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.GetIssueKeyByID(ctx, 1, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "" {
+		t.Errorf("削除済み課題が引き当てられた: %q", got)
+	}
+}
+
 // TestListProjectUserRefs はプロジェクト参加者のみを返すことを確認する(中 1)。
 func TestListProjectUserRefs(t *testing.T) {
 	s := openTempStore(t)

@@ -316,6 +316,48 @@ export interface IssueSearchResult {
   unverifiable: number
 }
 
+/** 課題詳細に表示するカスタム属性 1 件(表示用の名前と値。整形は Go 側で済み) */
+export interface IssueCustomField {
+  name: string
+  value: string
+}
+
+/**
+ * 課題 1 件の詳細(ローカル DB の最終同期時点の内容。API は呼ばれない)。
+ *
+ * 検索結果の課題キーをクリックしたときのポップアップ表示に使う。
+ * Backlog 側の最新とは限らないため、画面は fetchedAt を添えて注記すること。
+ */
+export interface IssueDetail {
+  issueKey: string
+  summary: string
+  /** 詳細本文(改行を含む生テキスト) */
+  description: string
+  statusName: string
+  assigneeName: string
+  issueTypeName: string
+  priorityName: string
+  /** 作成日時(RFC3339) */
+  created: string
+  /** 更新日時(RFC3339) */
+  updated: string
+  /** 期限(YYYY-MM-DD。未設定なら空文字) */
+  dueDate: string
+  /**
+   * 親課題キー(Excel 出力の親課題キー列と同じ規約)。
+   * 親なし・判定不能は空文字、ローカルに無い親は `ID:<数値>`
+   */
+  parentIssueKey: string
+  /**
+   * カスタム属性(課題が持つ全件)。
+   * 並びは定義順ではなく、同期時の課題レスポンスに現れた順
+   * (定義取得の API 往復を避けるため、Go 側は生 JSON の名前だけを使う)
+   */
+  customFields: IssueCustomField[]
+  /** この課題をローカルへ取り込んだ時刻(RFC3339。不明なら空文字) */
+  fetchedAt: string
+}
+
 /** 条件フォームのセレクト候補(ローカル DB の実データから抽出) */
 export interface FilterOptions {
   statuses: string[]
@@ -718,6 +760,11 @@ export interface Backend {
     query: IssueQuery,
     columns?: string[],
   ): Promise<IssueSearchResult>
+  /**
+   * ローカル DB から課題 1 件の詳細を返す(API は呼ばない)。
+   * 課題がローカルに無い場合はエラーになる(空の詳細は返らない)。
+   */
+  getIssueDetail(profileId: string, projectId: number, issueKey: string): Promise<IssueDetail>
   /** 条件フォームの状態・担当者候補を返す */
   listFilterOptions(profileId: string, projectId: number): Promise<FilterOptions>
   /** データ種別ごとの同期状態一覧を返す */
@@ -850,6 +897,7 @@ interface WailsApp {
     query: IssueQuery,
     columns: string[],
   ): Promise<IssueSearchResult>
+  GetIssueDetail(profileId: string, projectId: number, issueKey: string): Promise<IssueDetail>
   ListFilterOptions(profileId: string, projectId: number): Promise<FilterOptions>
   GetSyncState(profileId: string): Promise<SyncStateRow[]>
   GetIssueExportColumns(): Promise<ExportColumn[]>
@@ -974,6 +1022,35 @@ function createWailsBackend(app: WailsApp): Backend {
       // (画面が r.customFields[key] を条件分岐なしで参照できるように)
       const rows = (r?.rows ?? []).map((row) => ({ ...row, customFields: row.customFields ?? {} }))
       return { rows, total: r?.total ?? 0, unverifiable: r?.unverifiable ?? 0 }
+    },
+    getIssueDetail: async (profileId, projectId, issueKey) => {
+      // 旧バージョンのバインディング(メソッド未実装)では空の詳細を返さない
+      // (すべての項目が空のポップアップは「値が無い課題」と誤読させるため)
+      if (typeof app.GetIssueDetail !== 'function') {
+        throw new Error(
+          '課題の詳細はこのバージョンのアプリでは表示できません(アプリを更新してください)',
+        )
+      }
+      const r = await app.GetIssueDetail(profileId, projectId, issueKey)
+      return {
+        issueKey: r?.issueKey ?? issueKey,
+        summary: r?.summary ?? '',
+        description: r?.description ?? '',
+        statusName: r?.statusName ?? '',
+        assigneeName: r?.assigneeName ?? '',
+        issueTypeName: r?.issueTypeName ?? '',
+        priorityName: r?.priorityName ?? '',
+        created: r?.created ?? '',
+        updated: r?.updated ?? '',
+        dueDate: r?.dueDate ?? '',
+        parentIssueKey: r?.parentIssueKey ?? '',
+        // Go の nil スライスは null で届くため、配列は必ず正規化する
+        customFields: (r?.customFields ?? []).map((c) => ({
+          name: c?.name ?? '',
+          value: c?.value ?? '',
+        })),
+        fetchedAt: r?.fetchedAt ?? '',
+      }
     },
     listFilterOptions: async (profileId, projectId) => {
       const r = await app.ListFilterOptions(profileId, projectId)
@@ -1323,6 +1400,38 @@ function buildMockIssues(project: Project, count: number): IssueRow[] {
     })
   }
   return rows
+}
+
+/**
+ * モック用: 課題詳細に出す本文(改行を含む複数行)。
+ * 詳細ポップアップの折り返し・スクロールを Wails 外でも確認できるようにする。
+ */
+function mockDescription(row: IssueRow): string {
+  return [
+    `${row.summary} の詳細(モックデータ)。`,
+    '',
+    '再現手順:',
+    '1. サンプル画面を開く',
+    '2. 入力欄に値を入れて保存する',
+    '3. 一覧に戻ると反映されていない',
+    '',
+    '※ これはモック用のダミー本文であり、実在の課題ではありません。',
+  ].join('\n')
+}
+
+/**
+ * モック用: 課題キーから親課題の表記を決める(Go 側の CF5 と同じ形)。
+ *
+ * 5 の倍数は 1 つ前の課題を親に、7 の倍数はローカルに無い親(ID:<数値>)にして、
+ * 「課題キー表示」「ID 表示」「親なし」の 3 通りを手元で確認できるようにする。
+ */
+function mockParentIssueKey(issueKey: string): string {
+  const sep = issueKey.lastIndexOf('-')
+  const n = Number(issueKey.slice(sep + 1))
+  if (sep < 0 || !Number.isInteger(n)) return ''
+  if (n % 7 === 0) return 'ID:999999'
+  if (n % 5 === 0 && n > 1) return `${issueKey.slice(0, sep)}-${n - 1}`
+  return ''
 }
 
 /**
@@ -1761,6 +1870,29 @@ function createMockBackend(): Backend {
         customFields: pickMockCustomFields(r.customFields, columns),
       }))
       return { rows, total: matched.length, unverifiable }
+    },
+
+    async getIssueDetail(_profileId, projectId, issueKey) {
+      await delay(200)
+      const all = issuesByProject.get(projectId) ?? []
+      const row = all.find((r) => r.issueKey === issueKey)
+      // Go 側と同じく、ローカルに無い課題は明確なエラーにする
+      if (!row) {
+        throw new Error('課題がローカルに見つかりません(同期後に削除されたか、まだ同期されていません)')
+      }
+      return {
+        ...row,
+        description: mockDescription(row),
+        parentIssueKey: mockParentIssueKey(row.issueKey),
+        // モックは表示文字列しか持たないため、定義順に並べる
+        // (Wails 実行時は課題レスポンスの順になる。既知の簡易化)
+        customFields: MOCK_MASTER.customFields
+          .filter((def) => customColumnKey(def.id) in row.customFields)
+          .map((def) => ({ name: def.name, value: row.customFields[customColumnKey(def.id)] })),
+        fetchedAt:
+          syncState.find((s) => s.dataKind === 'issues' && s.projectId === projectId)
+            ?.lastSyncedAt ?? '',
+      }
     },
 
     async listFilterOptions(_profileId, projectId) {
