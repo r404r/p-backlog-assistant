@@ -454,7 +454,7 @@ func TestImport_CustomField_AcceptsExportedTemplate(t *testing.T) {
 	st := openTestStore(t)
 	master := testMasterWithCustomFields()
 	path := filepath.Join(t.TempDir(), "template.xlsx")
-	err := export.ExportBulkTemplateToFile(path, testProjectID, []export.BulkTemplateRow{{
+	err := export.ExportBulkTemplateToFile(path, testProjectID, export.BulkTemplateSlice([]export.BulkTemplateRow{{
 		IssueKey: "EXA-1", Summary: "ログイン不具合",
 		IssueTypeID: 11, IssueTypeName: "タスク",
 		StatusID: 1, StatusName: "未対応",
@@ -463,7 +463,7 @@ func TestImport_CustomField_AcceptsExportedTemplate(t *testing.T) {
 		BaseUpdated: "2026-08-01T00:00:00Z",
 		// テンプレートには現在値がプリフィルされる
 		CustomFields: map[int64]string{31: "取引先 A", 33: "2026-05-06", 34: "高", 35: "UI, DB"},
-	}}, export.BulkTemplateMasters{
+	}}), export.BulkTemplateMasters{
 		IssueTypes:   []export.NamedRef{{ID: 11, Name: "タスク"}},
 		Statuses:     []export.NamedRef{{ID: 1, Name: "未対応"}},
 		Priorities:   []export.NamedRef{{ID: 3, Name: "中"}},

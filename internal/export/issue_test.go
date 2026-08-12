@@ -44,7 +44,7 @@ func sampleIssues() []store.Issue {
 func exportToTempFile(t *testing.T, rows []store.Issue, opts Options) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "issues.xlsx")
-	if err := ExportIssuesToFile(path, rows, opts); err != nil {
+	if err := ExportIssuesToFile(path, IssueSlice(rows), opts); err != nil {
 		t.Fatalf("ExportIssuesToFile: %v", err)
 	}
 	return path
@@ -181,7 +181,7 @@ func TestExportIssues_SelectedColumns(t *testing.T) {
 
 func TestExportIssues_UnknownColumn(t *testing.T) {
 	var buf bytes.Buffer
-	err := ExportIssues(&buf, sampleIssues(), Options{Columns: []string{"issueKey", "nosuchcolumn"}})
+	err := ExportIssues(&buf, IssueSlice(sampleIssues()), Options{Columns: []string{"issueKey", "nosuchcolumn"}})
 	if !errors.Is(err, ErrUnknownColumn) {
 		t.Fatalf("err = %v, want ErrUnknownColumn", err)
 	}
@@ -311,7 +311,7 @@ func TestExportIssues_AutoFilterAndFreezePane(t *testing.T) {
 
 func TestExportIssues_WriterOutput(t *testing.T) {
 	var buf bytes.Buffer
-	if err := ExportIssues(&buf, sampleIssues(), Options{}); err != nil {
+	if err := ExportIssues(&buf, IssueSlice(sampleIssues()), Options{}); err != nil {
 		t.Fatal(err)
 	}
 	f, err := excelize.OpenReader(bytes.NewReader(buf.Bytes()))
@@ -399,7 +399,7 @@ func TestExportIssues_LargeRows(t *testing.T) {
 	}
 	path := filepath.Join(t.TempDir(), "large.xlsx")
 	start := time.Now()
-	if err := ExportIssuesToFile(path, rows, Options{WithBaseUpdated: true}); err != nil {
+	if err := ExportIssuesToFile(path, IssueSlice(rows), Options{WithBaseUpdated: true}); err != nil {
 		t.Fatal(err)
 	}
 	elapsed := time.Since(start)
@@ -592,7 +592,7 @@ func TestExportIssues_UnknownCustomFieldColumn(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			var buf bytes.Buffer
-			err := ExportIssues(&buf, sampleIssues(), c.opts)
+			err := ExportIssues(&buf, IssueSlice(sampleIssues()), c.opts)
 			if !errors.Is(err, ErrUnknownColumn) {
 				t.Fatalf("err = %v, want ErrUnknownColumn", err)
 			}

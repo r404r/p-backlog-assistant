@@ -225,6 +225,31 @@ func (s *ProfileService) SearchIssues(ctx context.Context, profileID string, fil
 	return st.SearchIssues(ctx, filter)
 }
 
+// IterateIssues はローカル DB の課題を条件に一致した順(ID 昇順)で
+// 1 件ずつ visit へ渡す(R4)。Excel 出力・テンプレート出力のように
+// 「条件一致全件を逐次書き出す」用途で使い、全件をメモリに保持しない。
+//
+// 呼び出しの約束(store.IterateIssues と同じ):
+//   - visit の中からローカル DB を触らないこと(接続 1 本 + 読み取り Tx 保持中の
+//     ためデッドロックする)。
+//   - 件数上限は visit がエラーを返して打ち切ること(IssueFilter.Limit は無視される)。
+//
+// 走査中はプロファイルのライフサイクルと排他し(profileMu.RLock)、
+// 読み取りトランザクションを保持し続ける。出力ファイルの書き込み時間ぶん
+// 同期がブロックされるが、途中でスナップショットが変わって行が重複・欠落する
+// 方が害が大きいためこの設計にしている。
+func (s *ProfileService) IterateIssues(ctx context.Context, profileID string,
+	filter store.IssueFilter, visit store.IssueVisitor) (store.IssueIterateResult, error) {
+	// store を使う操作はプロファイルの削除・保存と排他する(高 2)
+	s.profileMu.RLock()
+	defer s.profileMu.RUnlock()
+	st, err := s.storeForProfile(profileID)
+	if err != nil {
+		return store.IssueIterateResult{}, err
+	}
+	return st.IterateIssues(ctx, filter, visit)
+}
+
 // ListFilterOptions は抽出条件の候補(状態・担当者)をローカル DB から返す。
 func (s *ProfileService) ListFilterOptions(ctx context.Context, profileID string, projectID int64) (*store.FilterOptions, error) {
 	// store を使う操作はプロファイルの削除・保存と排他する(高 2)

@@ -313,14 +313,14 @@ func TestImport_WarnsOnNameIDMismatch(t *testing.T) {
 func TestImport_AcceptsExportedTemplate(t *testing.T) {
 	st := openTestStore(t)
 	path := filepath.Join(t.TempDir(), "template.xlsx")
-	err := export.ExportBulkTemplateToFile(path, testProjectID, []export.BulkTemplateRow{{
+	err := export.ExportBulkTemplateToFile(path, testProjectID, export.BulkTemplateSlice([]export.BulkTemplateRow{{
 		IssueKey: "EXA-1", Summary: "ログイン不具合",
 		IssueTypeID: 11, IssueTypeName: "タスク",
 		StatusID: 1, StatusName: "未対応",
 		PriorityID: 3, PriorityName: "中",
 		AssigneeID: 501, AssigneeName: "山田 太郎",
 		BaseUpdated: "2026-08-01T00:00:00Z",
-	}}, export.BulkTemplateMasters{
+	}}), export.BulkTemplateMasters{
 		IssueTypes: []export.NamedRef{{ID: 11, Name: "タスク"}, {ID: 12, Name: "バグ"}},
 		Statuses:   []export.NamedRef{{ID: 1, Name: "未対応"}, {ID: 4, Name: "完了"}},
 		Priorities: []export.NamedRef{{ID: 2, Name: "高"}, {ID: 3, Name: "中"}},

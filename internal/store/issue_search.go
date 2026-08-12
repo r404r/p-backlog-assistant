@@ -190,8 +190,14 @@ func scanIssues(ctx context.Context, q dbtx, query string, args ...any) ([]Issue
 	return out, rows.Err()
 }
 
+// issueQuery は条件に一致する課題を ID 昇順で取り出す SELECT 文を組み立てる
+// (検索・走査で同じ並びを使うため 1 か所にまとめる)。
+func issueQuery(where string) string {
+	return `SELECT ` + issueColumns + ` FROM issues WHERE ` + where + ` ORDER BY id`
+}
+
 // scanIssueRow は issueColumns の並びで 1 行を Issue に読み込む
-// (scanIssues と scanIssuesMatching で列の並びを共有するため関数に切り出す)。
+// (scanIssues と iterateIssueRows で列の並びを共有するため関数に切り出す)。
 func scanIssueRow(rows *sql.Rows, i *Issue) error {
 	return rows.Scan(&i.ID, &i.IssueKey, &i.ProjectID, &i.Summary, &i.Description,
 		&i.StatusID, &i.StatusName, &i.AssigneeID, &i.AssigneeName,
@@ -208,6 +214,45 @@ const (
 	matchUnverifiable                   // 生 JSON が無い・壊れていて判定できない
 )
 
+// iterateIssueRows は SQL の結果を SQL カーソル(rows.Next)で 1 行ずつ読み、
+// match が真の行だけを visit へ渡す。全行を保持しないため、一致件数がいくら
+// 多くてもメモリ使用量は 1 行ぶんで頭打ちになる(R4)。
+//
+// 返す total は match が真だった件数、unverifiable は判定できなかった件数。
+// visit がエラーを返した時点で走査を打ち切り、そのエラーをそのまま返す
+// (呼び出し側は errors.Is で自分の打ち切り理由を判定できる)。
+//
+// visit へ渡す *Issue は行ごとに新しく確保する。使い回すと、呼び出し側が
+// うっかり保持したときに全行が最後の 1 件に化けるという分かりにくい不具合を
+// 招くため(1 行ぶんの確保コストより誤用防止を優先する)。
+func iterateIssueRows(ctx context.Context, q dbtx, query string,
+	match func(*Issue) issueMatch, visit IssueVisitor, args ...any) (total, unverifiable int, err error) {
+	rows, err := q.QueryContext(ctx, query, args...)
+	if err != nil {
+		return 0, 0, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		i := new(Issue)
+		if err := scanIssueRow(rows, i); err != nil {
+			return 0, 0, err
+		}
+		switch match(i) {
+		case matchUnverifiable:
+			unverifiable++
+		case matchYes:
+			total++
+			if err := visit(i); err != nil {
+				return total, unverifiable, err
+			}
+		}
+	}
+	return total, unverifiable, rows.Err()
+}
+
+// matchAll は絞り込みを行わない match 関数(SQL だけで条件が完結する場合)。
+func matchAll(*Issue) issueMatch { return matchYes }
+
 // scanIssuesMatching は SQL で絞った行を走査し、match が真の行だけを最大 limit 件
 // 返す。返却は上限で打ち切っても一致件数は数え続け、total として返す
 // (UI の「N 件中 M 件を表示」を SQL 側の COUNT(*) と同じ意味に保つため)。
@@ -218,28 +263,17 @@ const (
 // 条件に合う行の判定自体は SQL 一致行の全件に対して行われる。
 func scanIssuesMatching(ctx context.Context, q dbtx, query string,
 	match func(*Issue) issueMatch, limit int, args ...any) (issues []Issue, total, unverifiable int, err error) {
-	rows, err := q.QueryContext(ctx, query, args...)
+	out := []Issue{}
+	total, unverifiable, err = iterateIssueRows(ctx, q, query, match, func(i *Issue) error {
+		if len(out) < limit {
+			out = append(out, *i)
+		}
+		return nil
+	}, args...)
 	if err != nil {
 		return nil, 0, 0, err
 	}
-	defer rows.Close()
-	out := []Issue{}
-	for rows.Next() {
-		var i Issue
-		if err := scanIssueRow(rows, &i); err != nil {
-			return nil, 0, 0, err
-		}
-		switch match(&i) {
-		case matchUnverifiable:
-			unverifiable++
-		case matchYes:
-			total++
-			if len(out) < limit {
-				out = append(out, i)
-			}
-		}
-	}
-	return out, total, unverifiable, rows.Err()
+	return out, total, unverifiable, nil
 }
 
 // customFieldMatcher は課題 1 件がカスタム属性条件を満たすかを判定する関数を返す。
@@ -310,8 +344,7 @@ func SearchIssues(ctx context.Context, q dbtx, f IssueFilter) (*IssueSearchResul
 	}
 	if len(cfFilters) > 0 {
 		issues, total, unverifiable, err := scanIssuesMatching(ctx, q,
-			`SELECT `+issueColumns+` FROM issues WHERE `+where+` ORDER BY id`,
-			customFieldMatcher(cfFilters), limit, args...)
+			issueQuery(where), customFieldMatcher(cfFilters), limit, args...)
 		if err != nil {
 			return nil, err
 		}
@@ -328,8 +361,7 @@ func SearchIssues(ctx context.Context, q dbtx, f IssueFilter) (*IssueSearchResul
 		return nil, err
 	}
 	issues, err := scanIssues(ctx, q,
-		`SELECT `+issueColumns+` FROM issues WHERE `+where+` ORDER BY id LIMIT `+strconv.Itoa(limit),
-		args...)
+		issueQuery(where)+` LIMIT `+strconv.Itoa(limit), args...)
 	if err != nil {
 		return nil, err
 	}

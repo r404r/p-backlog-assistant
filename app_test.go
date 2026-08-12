@@ -1,10 +1,15 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/xuri/excelize/v2"
 
 	"backlog-assistant/internal/bulk"
 	"backlog-assistant/internal/customfield"
@@ -291,6 +296,179 @@ func TestHasColumn(t *testing.T) {
 	}
 	if hasColumn([]string{"issueKey"}, export.ParentIssueKeyColumn) {
 		t.Errorf("選択していない列を検出した")
+	}
+}
+
+// TestLimitedIssueVisitor は Excel 出力の件数上限が「逐次書き出しの途中で
+// 打ち切る」形で働くことを確認する(R4)。全件をメモリに溜めなくなったため、
+// 上限判定は走査中に行い、超えた時点で errExportRowLimit で中断する。
+func TestLimitedIssueVisitor(t *testing.T) {
+	written := 0
+	visit := limitedIssueVisitor(2, func(*store.Issue) error {
+		written++
+		return nil
+	})
+	for i := 0; i < 2; i++ {
+		if err := visit(&store.Issue{}); err != nil {
+			t.Fatalf("%d 件目でエラー: %v", i+1, err)
+		}
+	}
+	err := visit(&store.Issue{})
+	if !errors.Is(err, errExportRowLimit) {
+		t.Fatalf("上限超過時のエラー = %v, want errExportRowLimit", err)
+	}
+	if written != 2 {
+		t.Errorf("書き出した件数 = %d, want 2(上限を超えた行は書き出さない)", written)
+	}
+}
+
+// TestLimitedIssueVisitor_PropagatesWriteError は書き出し側のエラーが
+// そのまま伝わることを確認する(上限超過と取り違えないため)。
+func TestLimitedIssueVisitor_PropagatesWriteError(t *testing.T) {
+	want := errors.New("書き出し失敗")
+	visit := limitedIssueVisitor(10, func(*store.Issue) error { return want })
+	if err := visit(&store.Issue{}); !errors.Is(err, want) {
+		t.Fatalf("err = %v, want %v", err, want)
+	}
+}
+
+// TestBulkTemplateRowOf は課題 1 件からテンプレート行への詰め替えを確認する。
+// 逐次書き出しでは課題を保持しないため、この変換は 1 件単位で完結する必要がある。
+func TestBulkTemplateRowOf(t *testing.T) {
+	issue := &store.Issue{
+		IssueKey: "EXA-2", Summary: "件名",
+		StatusID: 1, StatusName: "未対応",
+		AssigneeID: 501, AssigneeName: "山田 太郎",
+		IssueTypeName: "タスク", PriorityName: "中",
+		DueDate: "2026-03-04T00:00:00Z", Description: "詳細",
+		Updated: "2026-02-03T04:05:06Z",
+		RawJSON: `{"id":102,"parentIssueId":100,
+			"issueType":{"id":11},"priority":{"id":3},
+			"customFields":[{"id":31,"fieldTypeId":1,"value":"取引先 A"}]}`,
+	}
+	row := bulkTemplateRowOf(issue, map[int64]string{100: "EXA-1"})
+
+	if row.IssueKey != "EXA-2" || row.Summary != "件名" {
+		t.Errorf("固定項目 = %+v", row)
+	}
+	// 種別 ID・優先度 ID は生 JSON から補完する(store.Issue は名前しか持たない)
+	if row.IssueTypeID != 11 || row.PriorityID != 3 {
+		t.Errorf("ID 列 = 種別 %d / 優先度 %d, want 11 / 3", row.IssueTypeID, row.PriorityID)
+	}
+	if row.ParentIssueKey != "EXA-1" {
+		t.Errorf("親課題キー = %q, want EXA-1", row.ParentIssueKey)
+	}
+	if row.BaseUpdated != "2026-02-03T04:05:06Z" {
+		t.Errorf("base_updated = %q(整形せず生値を使うこと)", row.BaseUpdated)
+	}
+	if row.CustomFields[31] != "取引先 A" {
+		t.Errorf("カスタム属性 = %+v", row.CustomFields)
+	}
+}
+
+// storeWithIssues は課題を投入した一時ローカル DB を返す(結合確認用)。
+func storeWithIssues(t *testing.T, n int) *store.Store {
+	t.Helper()
+	st, err := store.Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+
+	issues := make([]*store.Issue, 0, n)
+	for i := 1; i <= n; i++ {
+		issues = append(issues, &store.Issue{
+			ID: int64(i), IssueKey: fmt.Sprintf("EXA-%d", i), ProjectID: 1,
+			Summary: fmt.Sprintf("件名 %d", i),
+			Updated: "2026-02-03T04:05:06Z",
+			RawJSON: fmt.Sprintf(`{"id":%d,"parentIssueId":1,
+				"customFields":[{"id":31,"fieldTypeId":1,"value":"取引先 %d"}]}`, i, i),
+		})
+	}
+	if err := st.UpsertIssues(context.Background(), issues); err != nil {
+		t.Fatal(err)
+	}
+	return st
+}
+
+// TestExportIssuesToFile_StreamsFromStoreCursor は「ローカル DB のカーソル →
+// Excel の StreamWriter」という R4 の経路が、全件をスライスに載せずに
+// 従来と同じ列(固定列・カスタム属性列・親課題キー列)を出力することを確認する。
+// 保存ダイアログ(Wails ランタイム結合)だけを除いた結合確認。
+func TestExportIssuesToFile_StreamsFromStoreCursor(t *testing.T) {
+	const n = 50
+	st := storeWithIssues(t, n)
+	ctx := context.Background()
+
+	path := filepath.Join(t.TempDir(), "issues.xlsx")
+	opts := export.Options{
+		Columns:         []string{"issueKey", export.ParentIssueKeyColumn, export.CustomColumnKey(31)},
+		CustomFields:    []customfield.Def{{ID: 31, TypeID: customfield.TypeText, Name: "顧客名"}},
+		ParentIssueKeys: map[int64]string{1: "EXA-1"},
+	}
+	var res store.IssueIterateResult
+	seq := func(yield func(*store.Issue) error) error {
+		var err error
+		res, err = st.IterateIssues(ctx, store.IssueFilter{ProjectID: 1}, yield)
+		return err
+	}
+	if err := export.ExportIssuesToFile(path, seq, opts); err != nil {
+		t.Fatalf("ExportIssuesToFile: %v", err)
+	}
+	if res.Total != n {
+		t.Errorf("走査件数 = %d, want %d", res.Total, n)
+	}
+
+	f, err := excelize.OpenFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = f.Close() }()
+	rows, err := f.GetRows(export.SheetIssues)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != n+1 {
+		t.Fatalf("行数 = %d, want %d", len(rows), n+1)
+	}
+	for i := 1; i <= n; i++ {
+		want := []string{fmt.Sprintf("EXA-%d", i), "EXA-1", fmt.Sprintf("取引先 %d", i)}
+		for c, w := range want {
+			if rows[i][c] != w {
+				t.Errorf("%d 行 %d 列 = %q, want %q", i+1, c+1, rows[i][c], w)
+			}
+		}
+	}
+}
+
+// TestExportIssuesToFile_RowLimitLeavesExistingFile は、件数上限で打ち切った
+// 出力が既存ファイルを壊さないことを確認する(R4 の打ち切りと R5 の
+// 一時ファイル置換の組み合わせ)。
+func TestExportIssuesToFile_RowLimitLeavesExistingFile(t *testing.T) {
+	st := storeWithIssues(t, 5)
+	ctx := context.Background()
+
+	path := filepath.Join(t.TempDir(), "issues.xlsx")
+	const existing = "既存の内容"
+	if err := os.WriteFile(path, []byte(existing), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	seq := func(yield func(*store.Issue) error) error {
+		_, err := st.IterateIssues(ctx, store.IssueFilter{ProjectID: 1},
+			limitedIssueVisitor(2, yield)) // 上限 2 件 < 5 件
+		return err
+	}
+	err := export.ExportIssuesToFile(path, seq, export.Options{})
+	if !errors.Is(err, errExportRowLimit) {
+		t.Fatalf("err = %v, want errExportRowLimit", err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != existing {
+		t.Errorf("既存ファイルが変更された: %q", string(got))
 	}
 }
 

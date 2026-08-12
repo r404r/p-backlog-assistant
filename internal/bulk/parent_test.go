@@ -547,7 +547,7 @@ func TestImport_ParentAcceptsExportedTemplate(t *testing.T) {
 	seedParentIssues(t, st)
 
 	path := filepath.Join(t.TempDir(), "template.xlsx")
-	err := export.ExportBulkTemplateToFile(path, testProjectID, []export.BulkTemplateRow{{
+	err := export.ExportBulkTemplateToFile(path, testProjectID, export.BulkTemplateSlice([]export.BulkTemplateRow{{
 		IssueKey: "EXA-6", Summary: "子課題",
 		IssueTypeID: 11, IssueTypeName: "タスク",
 		StatusID: 1, StatusName: "未対応",
@@ -555,7 +555,7 @@ func TestImport_ParentAcceptsExportedTemplate(t *testing.T) {
 		// テンプレートには現在の親がプリフィルされる
 		ParentIssueKey: "EXA-3",
 		BaseUpdated:    "2026-08-06T00:00:00Z",
-	}}, export.BulkTemplateMasters{
+	}}), export.BulkTemplateMasters{
 		IssueTypes: []export.NamedRef{{ID: 11, Name: "タスク"}},
 		Statuses:   []export.NamedRef{{ID: 1, Name: "未対応"}},
 		Priorities: []export.NamedRef{{ID: 3, Name: "中"}},

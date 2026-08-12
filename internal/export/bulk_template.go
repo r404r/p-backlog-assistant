@@ -377,13 +377,33 @@ var bulkGuideLines = [][2]string{
 	{"実行にかかる時間", "1 件ずつ Backlog へ送信するため、1,000 件でおおよそ 8〜10 分かかります。"},
 }
 
+// BulkTemplateSeq はテンプレート行を 1 件ずつ供給するイテレータ(R4)。
+//
+// 出力側は yield へ渡された行をその場でセルへ変換し、保持しない。
+// そのため供給側は 1 件ぶんの構造体を使い回してよい。
+// yield が返したエラーは加工せずそのまま返すこと(IssueSeq と同じ契約)。
+type BulkTemplateSeq func(yield func(*BulkTemplateRow) error) error
+
+// BulkTemplateSlice は []BulkTemplateRow を BulkTemplateSeq に変換する
+// (既に全件がメモリにある小規模な呼び出し・テスト用の互換手段)。
+func BulkTemplateSlice(rows []BulkTemplateRow) BulkTemplateSeq {
+	return func(yield func(*BulkTemplateRow) error) error {
+		for i := range rows {
+			if err := yield(&rows[i]); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+}
+
 // ExportBulkTemplateToFile は一括更新テンプレートを xlsx として path に書き出す。
 // 書き出しに失敗した場合、書きかけのファイルは残さない。
 //
 // projectID は出力対象プロジェクト(「記入方法」シートへ埋め込み、取り込み時の
 // プロジェクト一致検証に使う。0 以下なら埋め込まない)。
 // masters は「マスタ」シートに載せる選択候補(空でも出力できる)。
-func ExportBulkTemplateToFile(path string, projectID int64, rows []BulkTemplateRow, masters BulkTemplateMasters) error {
+func ExportBulkTemplateToFile(path string, projectID int64, rows BulkTemplateSeq, masters BulkTemplateMasters) error {
 	// 列定義の検証はファイル生成前に済ませ、不正な定義で空ファイルを作らない
 	if err := validateBulkCustomFields(masters.CustomFields); err != nil {
 		return err
@@ -394,8 +414,8 @@ func ExportBulkTemplateToFile(path string, projectID int64, rows []BulkTemplateR
 }
 
 // ExportBulkTemplate は一括更新テンプレートを xlsx として w に書き出す。
-// rows が空でも「記入方法」付きの空テンプレート(新規追加専用)として出力する。
-func ExportBulkTemplate(w io.Writer, projectID int64, rows []BulkTemplateRow, masters BulkTemplateMasters) error {
+// rows が空・nil でも「記入方法」付きの空テンプレート(新規追加専用)として出力する。
+func ExportBulkTemplate(w io.Writer, projectID int64, rows BulkTemplateSeq, masters BulkTemplateMasters) error {
 	if err := validateBulkCustomFields(masters.CustomFields); err != nil {
 		return err
 	}
@@ -565,7 +585,8 @@ func writeBulkGuideSheet(f *excelize.File, projectID int64) error {
 }
 
 // writeBulkTemplateSheet はデータシートを StreamWriter で書き出す。
-func writeBulkTemplateSheet(f *excelize.File, rows []BulkTemplateRow, masters BulkTemplateMasters) error {
+// 行は rows から 1 件ずつ受け取り、セルへ変換したらすぐ捨てる(R4)。
+func writeBulkTemplateSheet(f *excelize.File, rows BulkTemplateSeq, masters BulkTemplateMasters) error {
 	sw, err := f.NewStreamWriter(SheetBulkTemplate)
 	if err != nil {
 		return err
@@ -608,18 +629,21 @@ func writeBulkTemplateSheet(f *excelize.File, rows []BulkTemplateRow, masters Bu
 		return err
 	}
 
-	// 2 行目以降: テンプレートデータ。
+	// 2 行目以降: テンプレートデータ。セル値のスライスは 1 本を使い回す。
 	values := make([]any, colCount)
-	for n := range rows {
-		row := &rows[n]
-		for i, c := range cols {
-			values[i] = c.value(row)
-		}
-		cell, err := excelize.CoordinatesToCellName(1, n+2)
-		if err != nil {
-			return err
-		}
-		if err := sw.SetRow(cell, values); err != nil {
+	count := 0
+	if rows != nil {
+		if err := rows(func(row *BulkTemplateRow) error {
+			for i, c := range cols {
+				values[i] = c.value(row)
+			}
+			count++
+			cell, err := excelize.CoordinatesToCellName(1, count+1)
+			if err != nil {
+				return err
+			}
+			return sw.SetRow(cell, values)
+		}); err != nil {
 			return err
 		}
 	}
@@ -634,7 +658,9 @@ func writeBulkTemplateSheet(f *excelize.File, rows []BulkTemplateRow, masters Bu
 	}
 	// データ入力規則もオートフィルタと同じく Flush 前に設定する
 	// (Flush 後はシートが書き出し済みになり、追加が反映されない)。
-	if err := addBulkDropDowns(f, masters, len(rows)); err != nil {
+	// 行数は書き出しを終えた時点で確定するため、逐次書き出しでも
+	// 全データ行にドロップダウンが掛かる。
+	if err := addBulkDropDowns(f, masters, count); err != nil {
 		return err
 	}
 	return sw.Flush()

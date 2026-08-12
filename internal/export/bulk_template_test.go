@@ -74,7 +74,7 @@ func exportBulkToTempFile(t *testing.T, rows []BulkTemplateRow) string {
 func exportBulkToTempFileWith(t *testing.T, rows []BulkTemplateRow, masters BulkTemplateMasters) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "bulk.xlsx")
-	if err := ExportBulkTemplateToFile(path, testTemplateProjectID, rows, masters); err != nil {
+	if err := ExportBulkTemplateToFile(path, testTemplateProjectID, BulkTemplateSlice(rows), masters); err != nil {
 		t.Fatalf("ExportBulkTemplateToFile: %v", err)
 	}
 	return path
@@ -445,7 +445,7 @@ func TestExportBulkTemplate_EmbedsProjectID(t *testing.T) {
 // 行を出力しないことを確認する(取り込み側は「メタ情報無し」として扱う)。
 func TestExportBulkTemplate_OmitsUnknownProjectID(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "bulk.xlsx")
-	if err := ExportBulkTemplateToFile(path, 0, sampleBulkRows(), sampleBulkMasters()); err != nil {
+	if err := ExportBulkTemplateToFile(path, 0, BulkTemplateSlice(sampleBulkRows()), sampleBulkMasters()); err != nil {
 		t.Fatal(err)
 	}
 	f := openExported(t, path)
@@ -460,7 +460,7 @@ func TestExportBulkTemplate_OmitsUnknownProjectID(t *testing.T) {
 
 func TestExportBulkTemplate_WriterOutput(t *testing.T) {
 	var buf bytes.Buffer
-	if err := ExportBulkTemplate(&buf, testTemplateProjectID, sampleBulkRows(), sampleBulkMasters()); err != nil {
+	if err := ExportBulkTemplate(&buf, testTemplateProjectID, BulkTemplateSlice(sampleBulkRows()), sampleBulkMasters()); err != nil {
 		t.Fatal(err)
 	}
 	f, err := excelize.OpenReader(bytes.NewReader(buf.Bytes()))
@@ -483,7 +483,7 @@ func TestExportBulkTemplate_WriterOutput(t *testing.T) {
 func TestExportBulkTemplateToFile_InvalidPath(t *testing.T) {
 	dir := t.TempDir()
 	// ディレクトリをパスに指定すると置換(リネーム)が失敗する
-	if err := ExportBulkTemplateToFile(dir, testTemplateProjectID, sampleBulkRows(), sampleBulkMasters()); err == nil {
+	if err := ExportBulkTemplateToFile(dir, testTemplateProjectID, BulkTemplateSlice(sampleBulkRows()), sampleBulkMasters()); err == nil {
 		t.Fatal("ディレクトリへの書き出しが成功してしまった")
 	}
 }
@@ -653,7 +653,7 @@ func TestExportBulkTemplate_RejectsDuplicateCustomFieldName(t *testing.T) {
 		{ID: 32, TypeID: customfield.TypeText, Name: "顧客名"},
 	}
 	path := filepath.Join(t.TempDir(), "bulk.xlsx")
-	err := ExportBulkTemplateToFile(path, testTemplateProjectID, sampleBulkRows(), masters)
+	err := ExportBulkTemplateToFile(path, testTemplateProjectID, BulkTemplateSlice(sampleBulkRows()), masters)
 	if err == nil {
 		t.Fatal("定義名が重複しているのに出力できた")
 	}

@@ -247,10 +247,35 @@ func resolveColumns(keys []string, defs []customfield.Def) ([]column, error) {
 	return out, nil
 }
 
+// IssueSeq は課題を 1 件ずつ供給するイテレータ(R4)。
+//
+// 出力側は yield へ渡された課題をその場でセルへ変換し、保持しない。
+// そのため供給側は 1 件ぶんの構造体を使い回してよく、100 万件規模でも
+// メモリ使用量は行数に比例しない。
+//
+// 約束: yield が返したエラーは加工せずそのまま返すこと。呼び出し側は
+// errors.Is で自分の打ち切り理由(件数上限等)を判定する。
+type IssueSeq func(yield func(*store.Issue) error) error
+
+// IssueSlice は []store.Issue を IssueSeq に変換する。
+// 既に全件がメモリにある小規模な呼び出し(テスト等)のための互換手段で、
+// 大量データの経路では store のカーソル走査から直接供給すること。
+func IssueSlice(rows []store.Issue) IssueSeq {
+	return func(yield func(*store.Issue) error) error {
+		for i := range rows {
+			if err := yield(&rows[i]); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+}
+
 // ExportIssuesToFile は課題一覧を xlsx として path に書き出す。
 // 一時ファイルへ書き切ってから置換するため、失敗しても出力先の既存ファイルは
 // そのまま残り、書きかけのファイルも残らない(writeFileAtomic。R5)。
-func ExportIssuesToFile(path string, rows []store.Issue, opts Options) error {
+// rows が途中でエラーを返した場合も同様で、出力先には手を付けない。
+func ExportIssuesToFile(path string, rows IssueSeq, opts Options) error {
 	// 列指定の検証はファイル生成前に済ませ、不正指定で空ファイルを作らない。
 	if _, err := resolveColumns(opts.Columns, opts.CustomFields); err != nil {
 		return err
@@ -262,7 +287,8 @@ func ExportIssuesToFile(path string, rows []store.Issue, opts Options) error {
 
 // ExportIssues は課題一覧を xlsx として w に書き出す。
 // columns が空なら DefaultColumns を使う。未知の列キーは ErrUnknownColumn を返す。
-func ExportIssues(w io.Writer, rows []store.Issue, opts Options) error {
+// rows が nil なら課題 0 件(ヘッダのみ)として出力する。
+func ExportIssues(w io.Writer, rows IssueSeq, opts Options) error {
 	cols, err := resolveColumns(opts.Columns, opts.CustomFields)
 	if err != nil {
 		return err
@@ -272,14 +298,20 @@ func ExportIssues(w io.Writer, rows []store.Issue, opts Options) error {
 	defer f.Close()
 
 	// 既定シートを課題シートにリネームし、情報シートを 2 枚目として追加する。
+	// 件数は逐次書き出しが終わるまで分からないため、ここでは枠だけ作り、
+	// 値は書き出し後に埋める(シートの並び順を保つための順序)。
 	if err := f.SetSheetName(f.GetSheetName(0), SheetIssues); err != nil {
 		return err
 	}
-	if err := writeInfoSheet(f, len(rows)); err != nil {
+	if err := newInfoSheet(f); err != nil {
 		return err
 	}
 
-	if err := writeIssueSheet(f, cols, rows, opts); err != nil {
+	count, err := writeIssueSheet(f, cols, rows, opts)
+	if err != nil {
+		return err
+	}
+	if err := setInfoCount(f, count); err != nil {
 		return err
 	}
 	return f.Write(w)
@@ -287,21 +319,25 @@ func ExportIssues(w io.Writer, rows []store.Issue, opts Options) error {
 
 // writeInfoSheet は生成メタを情報シートに書き出す。
 // 実データ(スペース名・プロジェクト名等)は書かない方針のため、件数のみを記載する。
+// 件数が先に分かっている出力(ユーザ・一括結果)から使う。
 func writeInfoSheet(f *excelize.File, count int) error {
+	if err := newInfoSheet(f); err != nil {
+		return err
+	}
+	return setInfoCount(f, count)
+}
+
+// newInfoSheet は情報シートを作り、見出しだけを書く(件数は setInfoCount で埋める)。
+func newInfoSheet(f *excelize.File) error {
 	if _, err := f.NewSheet(SheetInfo); err != nil {
 		return err
 	}
 	if err := f.SetColWidth(SheetInfo, "A", "A", 16); err != nil {
 		return err
 	}
-	cells := []struct {
-		axis  string
-		value any
-	}{
-		{"A1", "項目"}, {"B1", "値"},
-		{"A2", "件数"}, {"B2", count},
-	}
-	for _, c := range cells {
+	for _, c := range []struct{ axis, value string }{
+		{"A1", "項目"}, {"B1", "値"}, {"A2", "件数"},
+	} {
 		if err := f.SetCellValue(SheetInfo, c.axis, c.value); err != nil {
 			return err
 		}
@@ -309,11 +345,17 @@ func writeInfoSheet(f *excelize.File, count int) error {
 	return nil
 }
 
-// writeIssueSheet は課題シートを StreamWriter で書き出す。
-func writeIssueSheet(f *excelize.File, cols []column, rows []store.Issue, opts Options) error {
+// setInfoCount は情報シートの件数を書き込む(逐次書き出し後に確定する)。
+func setInfoCount(f *excelize.File, count int) error {
+	return f.SetCellValue(SheetInfo, "B2", count)
+}
+
+// writeIssueSheet は課題シートを StreamWriter で書き出し、書き出した行数を返す。
+// 課題は rows から 1 件ずつ受け取り、セルへ変換したらすぐ捨てる(R4)。
+func writeIssueSheet(f *excelize.File, cols []column, rows IssueSeq, opts Options) (int, error) {
 	sw, err := f.NewStreamWriter(SheetIssues)
 	if err != nil {
-		return err
+		return 0, err
 	}
 
 	withBaseUpdated := opts.WithBaseUpdated
@@ -325,12 +367,12 @@ func writeIssueSheet(f *excelize.File, cols []column, rows []store.Issue, opts O
 	// 列幅・固定行は最初の SetRow より前に設定する(StreamWriter の制約)。
 	for i, c := range cols {
 		if err := sw.SetColWidth(i+1, i+1, c.width); err != nil {
-			return err
+			return 0, err
 		}
 	}
 	if withBaseUpdated {
 		if err := sw.SetColWidth(colCount, colCount, 22); err != nil {
-			return err
+			return 0, err
 		}
 	}
 	// ヘッダ行(1 行目)を固定表示にする。
@@ -341,7 +383,7 @@ func writeIssueSheet(f *excelize.File, cols []column, rows []store.Issue, opts O
 		ActivePane:  "bottomLeft",
 		Selection:   []excelize.Selection{{Pane: "bottomLeft", ActiveCell: "A2", SQRef: "A2"}},
 	}); err != nil {
-		return err
+		return 0, err
 	}
 
 	headerStyle, err := f.NewStyle(&excelize.Style{
@@ -349,7 +391,7 @@ func writeIssueSheet(f *excelize.File, cols []column, rows []store.Issue, opts O
 		Fill: excelize.Fill{Type: "pattern", Pattern: 1, Color: []string{"#DDEBF7"}},
 	})
 	if err != nil {
-		return err
+		return 0, err
 	}
 
 	// 1 行目: 日本語ヘッダ。
@@ -361,54 +403,62 @@ func writeIssueSheet(f *excelize.File, cols []column, rows []store.Issue, opts O
 		header = append(header, excelize.Cell{StyleID: headerStyle, Value: BaseUpdatedHeader})
 	}
 	if err := sw.SetRow("A1", header); err != nil {
-		return err
+		return 0, err
 	}
 
 	// 2 行目以降: 課題データ。
 	// カスタム属性列があるときだけ、行ごとに生 JSON を 1 回解析して値を引く
 	// (固定列だけの出力に解析コストを掛けない)。
+	// セル値のスライスは 1 本を使い回し、課題も受け取った 1 件だけを見る。
 	hasCustom := containsCustomColumn(cols)
 	values := make([]any, colCount)
 	var custom map[int64]string
-	for n := range rows {
-		issue := &rows[n]
-		if hasCustom {
-			custom = customValuesOf(issue)
-		}
-		for i, c := range cols {
-			switch {
-			case c.customFieldID != 0:
-				// 値を持たない課題・解析できない課題では空欄になる
-				values[i] = custom[c.customFieldID]
-			case c.parentIssue:
-				// 生 JSON が無い・壊れている課題は親なし(空欄)へ縮退する
-				values[i] = FormatParentIssueRef(store.ParentIssueID(issue.RawJSON), opts.ParentIssueKeys)
-			default:
-				values[i] = c.value(issue)
+	count := 0
+	if rows != nil {
+		err = rows(func(issue *store.Issue) error {
+			if hasCustom {
+				custom = customValuesOf(issue)
 			}
-		}
-		if withBaseUpdated {
-			// 競合検知の基準値は整形せず、取得時の生値をそのまま埋め込む。
-			values[colCount-1] = issue.Updated
-		}
-		cell, err := excelize.CoordinatesToCellName(1, n+2)
+			for i, c := range cols {
+				switch {
+				case c.customFieldID != 0:
+					// 値を持たない課題・解析できない課題では空欄になる
+					values[i] = custom[c.customFieldID]
+				case c.parentIssue:
+					// 生 JSON が無い・壊れている課題は親なし(空欄)へ縮退する
+					values[i] = FormatParentIssueRef(store.ParentIssueID(issue.RawJSON), opts.ParentIssueKeys)
+				default:
+					values[i] = c.value(issue)
+				}
+			}
+			if withBaseUpdated {
+				// 競合検知の基準値は整形せず、取得時の生値をそのまま埋め込む。
+				values[colCount-1] = issue.Updated
+			}
+			count++
+			cell, err := excelize.CoordinatesToCellName(1, count+1)
+			if err != nil {
+				return err
+			}
+			return sw.SetRow(cell, values)
+		})
 		if err != nil {
-			return err
-		}
-		if err := sw.SetRow(cell, values); err != nil {
-			return err
+			return 0, err
 		}
 	}
 
 	// オートフィルタはヘッダ行に設定する(Flush 前に設定する必要がある)。
 	lastCol, err := excelize.ColumnNumberToName(colCount)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	if err := f.AutoFilter(SheetIssues, fmt.Sprintf("A1:%s1", lastCol), nil); err != nil {
-		return err
+		return 0, err
 	}
-	return sw.Flush()
+	if err := sw.Flush(); err != nil {
+		return 0, err
+	}
+	return count, nil
 }
 
 // containsCustomColumn は解決済みの列にカスタム属性列が含まれるかを返す

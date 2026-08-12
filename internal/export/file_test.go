@@ -152,13 +152,13 @@ func TestExportToFile_ReplacesExistingFileWithoutLeftovers(t *testing.T) {
 		export func(path string) error
 	}{
 		{"課題", func(path string) error {
-			return ExportIssuesToFile(path, sampleIssues(), Options{})
+			return ExportIssuesToFile(path, IssueSlice(sampleIssues()), Options{})
 		}},
 		{"ユーザ", func(path string) error {
 			return ExportUsersToFile(path, sampleUsers(), UserOptions{})
 		}},
 		{"一括テンプレート", func(path string) error {
-			return ExportBulkTemplateToFile(path, testTemplateProjectID, sampleBulkRows(), sampleBulkMasters())
+			return ExportBulkTemplateToFile(path, testTemplateProjectID, BulkTemplateSlice(sampleBulkRows()), sampleBulkMasters())
 		}},
 		{"実行結果", func(path string) error {
 			return ExportBulkResultToFile(path, sampleBulkResultRows())
@@ -198,7 +198,7 @@ func TestExportToFile_KeepsExistingFileOnValidationError(t *testing.T) {
 	if err := os.WriteFile(path, []byte("old"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := ExportIssuesToFile(path, sampleIssues(), Options{Columns: []string{"nosuchcolumn"}}); err == nil {
+	if err := ExportIssuesToFile(path, IssueSlice(sampleIssues()), Options{Columns: []string{"nosuchcolumn"}}); err == nil {
 		t.Fatal("未知の列でエラーにならなかった")
 	}
 	got, err := os.ReadFile(path)

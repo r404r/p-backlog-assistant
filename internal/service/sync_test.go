@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -145,8 +146,10 @@ func TestSyncIssues_ThenSearchAndFilterOptions(t *testing.T) {
 }
 
 // TestSearchIssues_ReportsTruncated は上限で切り詰めた検索結果が Truncated =
-// true で返ること(中 3)を確認する。app.go の ExportIssuesExcel は
-// このフラグを見て「上限超過」を黙殺せずエラーにする。
+// true で返ること(中 3)を確認する。画面プレビューはこのフラグと Total で
+// 「N 件中 M 件を表示」を示す。
+// (Excel 出力は上限を溜め込まない走査経路へ移したため、このフラグを使わない。
+// TestIterateIssues_StreamsAllMatchingIssues を参照。R4)
 func TestSearchIssues_ReportsTruncated(t *testing.T) {
 	fake := &fakeConnector{
 		info: testInfo(),
@@ -183,6 +186,59 @@ func TestSearchIssues_ReportsTruncated(t *testing.T) {
 	}
 	if cut.Total != 3 || len(cut.Issues) != 2 {
 		t.Errorf("切り詰め時の結果 = {total:%d rows:%d}, want {3 2}", cut.Total, len(cut.Issues))
+	}
+}
+
+// TestIterateIssues_StreamsAllMatchingIssues は Excel 出力の走査経路(R4)が
+// 上限に関わらず条件一致全件を 1 件ずつ渡すこと、および visit のエラーで
+// 打ち切れることを確認する。
+func TestIterateIssues_StreamsAllMatchingIssues(t *testing.T) {
+	fake := &fakeConnector{
+		info: testInfo(),
+		issues: []backlogclient.Issue{
+			fakeIssue(1, "EXA-1", 1, "課題 1", "2026-01-01T00:00:00Z", "2026-08-01T00:00:00Z"),
+			fakeIssue(2, "EXA-2", 1, "課題 2", "2026-02-01T00:00:00Z", "2026-08-02T00:00:00Z"),
+			fakeIssue(3, "EXA-3", 1, "課題 3", "2026-03-01T00:00:00Z", "2026-08-03T00:00:00Z"),
+		},
+		activities: []backlogclient.Activity{{ID: 900, Type: 4, ProjectID: 1, ProjectKey: "EXA"}},
+	}
+	s, id := newSyncTestService(t, fake)
+	ctx := context.Background()
+	if _, err := s.SyncIssues(ctx, id, 1, "full", ""); err != nil {
+		t.Fatal(err)
+	}
+
+	// Limit を指定しても走査は打ち切られない(出力は「条件一致全件」が契約)
+	var keys []string
+	res, err := s.IterateIssues(ctx, id, store.IssueFilter{ProjectID: 1, Limit: 2},
+		func(is *store.Issue) error {
+			keys = append(keys, is.IssueKey)
+			return nil
+		})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(keys) != 3 || res.Total != 3 {
+		t.Errorf("走査結果 = %v / total %d, want 3 件", keys, res.Total)
+	}
+
+	// visit のエラーで打ち切れること(件数上限の打ち切りがこの経路)
+	stop := errors.New("打ち切り")
+	visited := 0
+	if _, err := s.IterateIssues(ctx, id, store.IssueFilter{ProjectID: 1},
+		func(*store.Issue) error {
+			visited++
+			return stop
+		}); !errors.Is(err, stop) {
+		t.Fatalf("err = %v, want %v", err, stop)
+	}
+	if visited != 1 {
+		t.Errorf("走査した件数 = %d, want 1", visited)
+	}
+
+	// 打ち切った後もローカル DB を続けて使えること(読み取り Tx が残らないこと)
+	if _, err := s.SearchIssues(ctx, id, store.IssueFilter{ProjectID: 1}); err != nil {
+		t.Fatalf("打ち切り後の検索に失敗: %v", err)
 	}
 }
 

@@ -757,12 +757,38 @@ type ExportResultDTO struct {
 	Unverifiable int `json:"unverifiable"`
 }
 
-// exportSearchLimit は Excel 出力時の取得上限。フロント契約では「条件一致全件」
+// exportSearchLimit は Excel 出力の件数上限。フロント契約では「条件一致全件」
 // を出力するため、実質無制限の大きな値を使う。
 const exportSearchLimit = 1_000_000
 
+// errExportRowLimit は出力対象が exportSearchLimit を超えたことを表す番兵エラー。
+//
+// 課題は全件をメモリへ載せず 1 件ずつ書き出すため(R4)、総件数が判明するのは
+// 走査を終えた時点になる。上限判定は走査の途中で行い、超えた行に達した時点で
+// このエラーで打ち切る(残りを読み切ってから判定するより速く終わる)。
+// 打ち切った出力は一時ファイルごと破棄されるため、出力先の既存ファイルは
+// 変更されない(export.writeFileAtomic。R5)。
+var errExportRowLimit = errors.New("対象件数が上限(100 万件)を超えています。条件で絞り込んでください")
+
+// limitedIssueVisitor は「limit 件までは yield へ渡し、超えたら errExportRowLimit で
+// 打ち切る」課題ビジターを返す(上限を超えた行は書き出さない)。
+func limitedIssueVisitor(limit int, yield func(*store.Issue) error) store.IssueVisitor {
+	n := 0
+	return func(is *store.Issue) error {
+		n++
+		if n > limit {
+			return errExportRowLimit
+		}
+		return yield(is)
+	}
+}
+
 // ExportIssuesExcel は検索条件に一致する課題全件を Excel に出力する。
 // 保存先は OS の保存ダイアログでユーザが選択する(キャンセル時は path 空)。
+//
+// 課題はローカル DB のカーソルから 1 件ずつ受け取り、そのまま StreamWriter へ
+// 流す(R4)。以前は最大 100 万件を []store.Issue へ載せてから書き出しており、
+// 生 JSON・詳細を含む大規模プロジェクトでメモリ枯渇の恐れがあった。
 func (a *App) ExportIssuesExcel(profileID string, query store.IssueFilter, columns []string) (*ExportResultDTO, error) {
 	const op = "ExportIssuesExcel"
 	attrs := append(a.searchAttrs(profileID, query), slog.Int("columns", len(columns)))
@@ -772,15 +798,9 @@ func (a *App) ExportIssuesExcel(profileID string, query store.IssueFilter, colum
 		a.logEnd(op, err, attrs...)
 		return nil, err
 	}
-	query.Limit = exportSearchLimit
-	res, err := s.SearchIssues(a.ctx, profileID, query)
-	if err != nil {
-		a.logEnd(op, err, attrs...)
-		return nil, err
-	}
-	// 上限で切り詰められた場合は黙って部分出力せず、明示的にエラーを返す(中 3)
-	if res.Truncated {
-		err := errors.New("対象件数が上限(100 万件)を超えています。条件で絞り込んでください")
+	// 抽出条件の不備は走査を始める前に弾く。逐次出力では条件エラーが
+	// 保存ダイアログの後まで表面化しないため(R4)。
+	if err := store.ValidateIssueFilter(query); err != nil {
 		a.logEnd(op, err, attrs...)
 		return nil, err
 	}
@@ -825,7 +845,18 @@ func (a *App) ExportIssuesExcel(profileID string, query store.IssueFilter, colum
 	// 保存先・ファイル名はユーザが決めるため、ローカルユーザ名や顧客名を
 	// 含みうる。パスもファイル名も記録せず、拡張子だけを残す(低 1)。
 	fileAttr := fileExtAttr(path)
-	if err := export.ExportIssuesToFile(path, res.Issues, opts); err != nil {
+	// ローカル DB のカーソル走査を Excel 出力のイテレータへ直結する。
+	// 課題はこのクロージャを通り抜けるだけで、どこにも溜まらない。
+	var res store.IssueIterateResult
+	seq := func(yield func(*store.Issue) error) error {
+		var err error
+		res, err = s.IterateIssues(a.ctx, profileID, query,
+			limitedIssueVisitor(exportSearchLimit, yield))
+		return err
+	}
+	// 上限超過(errExportRowLimit)はそのまま画面へ返る。黙って部分出力しないのは
+	// 従来どおりで、判定の時点だけが「取得後」から「書き出し中」に変わっている。
+	if err := export.ExportIssuesToFile(path, seq, opts); err != nil {
 		// 失敗時のエラーメッセージにも保存先のフルパスが含まれるため、
 		// ログへ渡す前にプレースホルダへ置換する(高 2 / 2 回目 低 1)。
 		// 画面へ返すエラーは、ユーザ自身が選んだパスなのでそのままにする。
@@ -834,10 +865,10 @@ func (a *App) ExportIssuesExcel(profileID string, query store.IssueFilter, colum
 	}
 	a.logEnd(op, nil, append(attrs,
 		fileAttr,
-		slog.Int("rows", len(res.Issues)),
+		slog.Int("rows", res.Total),
 		slog.Int("unverifiable", res.Unverifiable))...)
 	// 判定できず出力から外れた件数も返す(黙って欠落させない)
-	return &ExportResultDTO{Path: path, Rows: len(res.Issues), Unverifiable: res.Unverifiable}, nil
+	return &ExportResultDTO{Path: path, Rows: res.Total, Unverifiable: res.Unverifiable}, nil
 }
 
 // ---- M3: ユーザ抽出(frontend/src/lib/backend.ts の契約と対) ----
@@ -918,6 +949,13 @@ func (a *App) ListUsers(profileID string, query store.UserFilter) (*UserListDTO,
 }
 
 // ExportUsersExcel は条件に一致するユーザ全件を Excel に出力する。
+//
+// 課題出力(R4)と違い、こちらは全件を一度にメモリへ載せたままにしている。
+// ユーザはスペース全体でも数百〜数千件で、1 行あたりの情報量も小さく
+// (生 JSON・詳細本文のような大きな列を持たない)、逐次化しても得られる
+// メモリ削減より、所属チーム・参加プロジェクトを行へ畳み込む既存処理を
+// 崩す方の危険が大きいため。件数が問題になる規模になったら
+// store.IterateIssues と同じ形で逐次化する。
 func (a *App) ExportUsersExcel(profileID string, query store.UserFilter, columns []string) (*ExportResultDTO, error) {
 	const op = "ExportUsersExcel"
 	attrs := append(userAttrs(profileID, query), slog.Int("columns", len(columns)))
@@ -1075,7 +1113,36 @@ func namedRefsOf(items []bulk.NamedID) []export.NamedRef {
 	return out
 }
 
+// bulkTemplateRowOf は課題 1 件をテンプレート行へ詰め替える。
+//
+// 逐次書き出し(R4)では課題を保持しないため、変換は 1 件のみで完結させる
+// (種別 ID・優先度 ID・親課題・カスタム属性はいずれも当該課題の生 JSON と、
+// 事前に用意した課題キーの対応表だけで決まる)。
+func bulkTemplateRowOf(is *store.Issue, parentKeys map[int64]string) export.BulkTemplateRow {
+	typeID, priorityID := rawIssueIDs(is.RawJSON)
+	return export.BulkTemplateRow{
+		IssueKey:       is.IssueKey,
+		Summary:        is.Summary,
+		IssueTypeID:    typeID,
+		IssueTypeName:  is.IssueTypeName,
+		StatusID:       is.StatusID,
+		StatusName:     is.StatusName,
+		PriorityID:     priorityID,
+		PriorityName:   is.PriorityName,
+		AssigneeID:     is.AssigneeID,
+		AssigneeName:   is.AssigneeName,
+		DueDate:        is.DueDate,
+		Description:    is.Description,
+		ParentIssueKey: parentIssueKeyOf(is.RawJSON, parentKeys),
+		BaseUpdated:    is.Updated,
+		CustomFields:   bulkCustomFieldValues(is.RawJSON),
+	}
+}
+
 // ExportBulkTemplate は一括更新テンプレート(既存課題 + base_updated)を Excel 出力する。
+//
+// 課題抽出の Excel 出力と同じく、ローカル DB のカーソルから 1 件ずつ受け取って
+// StreamWriter へ流す(R4)。
 func (a *App) ExportBulkTemplate(profileID string, projectID int64, query store.IssueFilter) (*ExportResultDTO, error) {
 	const op = "ExportBulkTemplate"
 	attrs := []slog.Attr{slog.String("profileId", profileID), slog.Int64("projectId", projectID)}
@@ -1086,14 +1153,8 @@ func (a *App) ExportBulkTemplate(profileID string, projectID int64, query store.
 		return nil, err
 	}
 	query.ProjectID = projectID
-	query.Limit = exportSearchLimit
-	res, err := s.SearchIssues(a.ctx, profileID, query)
-	if err != nil {
-		a.logEnd(op, err, attrs...)
-		return nil, err
-	}
-	if res.Truncated {
-		err := errors.New("対象件数が上限(100 万件)を超えています。条件で絞り込んでください")
+	// 抽出条件の不備は保存ダイアログを出す前に弾く(課題抽出の出力と同じ理由)。
+	if err := store.ValidateIssueFilter(query); err != nil {
 		a.logEnd(op, err, attrs...)
 		return nil, err
 	}
@@ -1126,34 +1187,25 @@ func (a *App) ExportBulkTemplate(profileID string, projectID int64, query store.
 		a.logEnd(op, nil, append(attrs, slog.Bool("canceled", true))...)
 		return &ExportResultDTO{Path: "", Rows: 0}, nil
 	}
-	rows := make([]export.BulkTemplateRow, 0, len(res.Issues))
-	for _, is := range res.Issues {
-		typeID, priorityID := rawIssueIDs(is.RawJSON)
-		rows = append(rows, export.BulkTemplateRow{
-			IssueKey:       is.IssueKey,
-			Summary:        is.Summary,
-			IssueTypeID:    typeID,
-			IssueTypeName:  is.IssueTypeName,
-			StatusID:       is.StatusID,
-			StatusName:     is.StatusName,
-			PriorityID:     priorityID,
-			PriorityName:   is.PriorityName,
-			AssigneeID:     is.AssigneeID,
-			AssigneeName:   is.AssigneeName,
-			DueDate:        is.DueDate,
-			Description:    is.Description,
-			ParentIssueKey: parentIssueKeyOf(is.RawJSON, parentKeys),
-			BaseUpdated:    is.Updated,
-			CustomFields:   bulkCustomFieldValues(is.RawJSON),
-		})
-	}
 	fileAttr := fileExtAttr(path)
-	if err := export.ExportBulkTemplateToFile(path, projectID, rows, masters); err != nil {
+	// 課題 → テンプレート行の変換をカーソル走査の中で行い、行は書き出したら捨てる。
+	var res store.IssueIterateResult
+	seq := func(yield func(*export.BulkTemplateRow) error) error {
+		var err error
+		res, err = s.IterateIssues(a.ctx, profileID, query,
+			limitedIssueVisitor(exportSearchLimit, func(is *store.Issue) error {
+				row := bulkTemplateRowOf(is, parentKeys)
+				return yield(&row)
+			}))
+		return err
+	}
+	// 上限超過(errExportRowLimit)は課題抽出と同じ扱い(部分出力せずエラー)。
+	if err := export.ExportBulkTemplateToFile(path, projectID, seq, masters); err != nil {
 		a.logEnd(op, maskPathInError(err, path), append(attrs, fileAttr)...)
 		return nil, err
 	}
-	a.logEnd(op, nil, append(attrs, fileAttr, slog.Int("rows", len(rows)))...)
-	return &ExportResultDTO{Path: path, Rows: len(rows)}, nil
+	a.logEnd(op, nil, append(attrs, fileAttr, slog.Int("rows", res.Total))...)
+	return &ExportResultDTO{Path: path, Rows: res.Total}, nil
 }
 
 // ImportBulkFile は記入済み Excel を選択して取り込み、検証 + dry-run プレビューを返す。
