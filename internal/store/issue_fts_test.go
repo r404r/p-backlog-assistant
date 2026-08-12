@@ -2,7 +2,6 @@ package store
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -57,34 +56,16 @@ func TestMigrate_V2ToV3RebuildsFTSIndex(t *testing.T) {
 
 	// v2 相当の DB を手で作る(v1 + v2 のマイグレーションのみ適用)。
 	func() {
-		db, err := sql.Open("sqlite", path)
-		if err != nil {
-			t.Fatal(err)
-		}
+		db := createLegacyDB(t, path, 2)
 		defer db.Close()
-		if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)`); err != nil {
-			t.Fatal(err)
-		}
-		for _, stmts := range migrations[:2] {
-			for _, st := range stmts {
-				if _, err := db.Exec(st); err != nil {
-					t.Fatalf("v2 スキーマの作成に失敗: %v (%s)", err, st)
-				}
-			}
-		}
-		if _, err := db.Exec(
+		mustExec(t, db,
 			`INSERT INTO issues (id, issue_key, project_id, summary, description,
 				status_id, status_name, assignee_id, assignee_name, issue_type_name,
 				priority_name, created, updated, due_date, raw_json, search_text, fetched_at, deleted)
 			 VALUES (1, 'EXA-1', 1, 'ログイン不具合', '再現手順',
 				1, '未対応', 0, '', 'バグ',
 				'中', '2026-01-01T00:00:00Z', '2026-01-02T00:00:00Z', '', '', ?, '', 0)`,
-			NormalizeSearchText("ログイン不具合\n再現手順")); err != nil {
-			t.Fatal(err)
-		}
-		if _, err := db.Exec(`INSERT INTO meta(key, value) VALUES('schema_version', '2')`); err != nil {
-			t.Fatal(err)
-		}
+			NormalizeSearchText("ログイン不具合\n再現手順"))
 	}()
 
 	s, err := Open(path)

@@ -2,6 +2,7 @@ package sync
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	stdsync "sync"
@@ -9,6 +10,15 @@ import (
 
 	"backlog-assistant/internal/backlogclient"
 	"backlog-assistant/internal/store"
+)
+
+// ユーザ同期の DB 反映段階(R7)。反映は単一トランザクションで行うため、
+// テストから「途中で失敗した場合」を作るには段階を指定して失敗を注入する。
+const (
+	applyStageUsers        = "users"
+	applyStageTeams        = "teams"
+	applyStageProjectUsers = "projectUsers"
+	applyStageSyncState    = "syncState"
 )
 
 // ユーザ・チーム同期のモード(Result.Mode)。
@@ -123,48 +133,84 @@ func (e *Engine) SyncUsers(ctx context.Context) (*Result, error) {
 	// 縮退パスの部分失敗。取得できたユーザ集合はスペース全体を網羅していない。
 	partial := degraded && stats.userFailed > 0
 
-	// 5. users の反映。縮退時はプロジェクト参加者から合成する。
+	// 5〜8. DB への反映は単一トランザクションで行う(R7)。
+	//
+	// ここへ到達した時点で API 取得はすべて終わっており、残るのは DB 操作だけ。
+	// users / teams / team_members / project_users / sync_state を別々に
+	// コミットすると、途中で失敗したときに新旧世代が混在したキャッシュが残る
+	// (例: ユーザは新しいのに参加関係は前回のもの、あるいは同期完了時刻だけ
+	// 進んで中身が古いまま)。1 つのトランザクションにまとめることで、
+	// 失敗時は必ず「同期前の状態」へ戻る。
+	//
+	// 縮退・据え置きの判断(R1・高 1・高 2・中 1)は反映前に確定しており、
+	// トランザクション化しても分岐は変わらない。「書かない」と決めた対象は
+	// トランザクション内でも書かない。
 	users := spaceUsers
 	if degraded {
 		users = synthesizeUsers(fetched)
 	}
 	rows := toStoreUsers(users, fetchedAt)
-	if partial {
-		// 取得できたユーザだけを UPSERT する(既存ユーザは削除しない。高 2)。
-		if err := e.st.UpsertUsers(ctx, rows); err != nil {
-			return nil, err
+	now := e.now().UTC()
+	if err := e.st.WithTx(ctx, func(tx *sql.Tx) error {
+		// 5. users の反映。縮退時はプロジェクト参加者から合成する。
+		if err := e.applyUsersStage(applyStageUsers); err != nil {
+			return err
 		}
-		res.warn("一部プロジェクトの取得に失敗したためユーザの削除反映は行っていません")
-	} else if err := e.st.ReplaceUsers(ctx, rows); err != nil {
+		if partial {
+			// 取得できたユーザだけを UPSERT する(既存ユーザは削除しない。高 2)。
+			if err := store.UpsertUsers(ctx, tx, rows); err != nil {
+				return err
+			}
+			res.warn("一部プロジェクトの取得に失敗したためユーザの削除反映は行っていません")
+		} else if err := store.ReplaceUsers(ctx, tx, rows); err != nil {
+			return err
+		}
+
+		// 6. teams / team_members の反映。判定基準はスペース /teams の結果(中 1)。
+		if err := e.applyUsersStage(applyStageTeams); err != nil {
+			return err
+		}
+		if err := e.applyTeams(ctx, tx, spaceTeams, spaceTeamsErr, fetched, stats.teamFailed, projectsSynced, res, fetchedAt); err != nil {
+			return err
+		}
+
+		// 7. project_users をプロジェクト単位で置換する。
+		//    参加者・管理者の両方を取得できたプロジェクトのみが対象(中 1)。
+		if err := e.applyUsersStage(applyStageProjectUsers); err != nil {
+			return err
+		}
+		for _, pm := range fetched {
+			if !pm.membersComplete {
+				continue
+			}
+			if err := store.ReplaceProjectUsers(ctx, tx, pm.projectID, pm.members); err != nil {
+				return err
+			}
+		}
+
+		// 8. 完了時刻を保存する(users はスペース共通なので project_id = 0)。
+		if err := e.applyUsersStage(applyStageSyncState); err != nil {
+			return err
+		}
+		return store.SetSyncCompleted(ctx, tx, store.DataKindUsers, store.ProjectScopeAll,
+			now.Format(time.RFC3339), now.Format("2006-01-02"))
+	}); err != nil {
 		return nil, err
 	}
+
 	res.Fetched = len(users)
 	res.Upserted = len(rows)
-
-	// 6. teams / team_members の反映。判定基準はスペース /teams の結果(中 1)。
-	if err := e.applyTeams(ctx, spaceTeams, spaceTeamsErr, fetched, stats.teamFailed, projectsSynced, res, fetchedAt); err != nil {
-		return nil, err
-	}
-
-	// 7. project_users をプロジェクト単位で置換する。
-	//    参加者・管理者の両方を取得できたプロジェクトのみが対象(中 1)。
-	for _, pm := range fetched {
-		if !pm.membersComplete {
-			continue
-		}
-		if err := e.st.ReplaceProjectUsers(ctx, pm.projectID, pm.members); err != nil {
-			return nil, err
-		}
-	}
-
-	// 8. 完了時刻を保存する(users はスペース共通なので project_id = 0)。
-	now := e.now().UTC()
-	if err := e.st.SetSyncCompleted(ctx, store.DataKindUsers, store.ProjectScopeAll,
-		now.Format(time.RFC3339), now.Format("2006-01-02")); err != nil {
-		return nil, err
-	}
 	res.DurationMs = e.now().Sub(start).Milliseconds()
 	return res, nil
+}
+
+// applyUsersStage は反映トランザクション内のテストフックを呼ぶ
+// (未設定なら何もしない)。
+func (e *Engine) applyUsersStage(stage string) error {
+	if e.applyUsersStageHook == nil {
+		return nil
+	}
+	return e.applyUsersStageHook(stage)
 }
 
 // projectsSynced はプロジェクト同期が 1 度でも完了しているかを返す(R1)。
@@ -338,10 +384,13 @@ func (e *Engine) fillProjectMembers(ctx context.Context, pm *projectMembers, use
 //
 // teamFailed はプロジェクト単位のチーム取得に失敗した件数。
 // projectsSynced はプロジェクト同期が完了しているか(R1)。
-func (e *Engine) applyTeams(ctx context.Context, spaceTeams []backlogclient.Team, spaceErr error,
+//
+// tx は SyncUsers の反映トランザクション(R7)。この関数は独自にコミットせず、
+// 呼び出し元のトランザクションへ書き込む。
+func (e *Engine) applyTeams(ctx context.Context, tx *sql.Tx, spaceTeams []backlogclient.Team, spaceErr error,
 	fetched []projectMembers, teamFailed int, projectsSynced bool, res *Result, fetchedAt string) error {
 	if spaceErr == nil {
-		return e.st.ReplaceTeams(ctx, toStoreTeams(spaceTeams, fetchedAt))
+		return store.ReplaceTeams(ctx, tx, toStoreTeams(spaceTeams, fetchedAt))
 	}
 
 	projectTeams := mergeTeams(collectProjectTeams(fetched))
@@ -349,7 +398,7 @@ func (e *Engine) applyTeams(ctx context.Context, spaceTeams []backlogclient.Team
 		if len(projectTeams) == 0 {
 			return nil
 		}
-		return e.st.MergeTeams(ctx, toStoreTeams(projectTeams, fetchedAt))
+		return store.MergeTeams(ctx, tx, toStoreTeams(projectTeams, fetchedAt))
 	}
 
 	if !errors.Is(spaceErr, backlogclient.ErrPermissionDenied) {
@@ -386,7 +435,7 @@ func (e *Engine) applyTeams(ctx context.Context, spaceTeams []backlogclient.Team
 		return nil
 	}
 
-	if err := e.st.ReplaceTeams(ctx, toStoreTeams(projectTeams, fetchedAt)); err != nil {
+	if err := store.ReplaceTeams(ctx, tx, toStoreTeams(projectTeams, fetchedAt)); err != nil {
 		return err
 	}
 	if len(projectTeams) == 0 {

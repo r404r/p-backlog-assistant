@@ -81,7 +81,13 @@ type JobSummary struct {
 	Skipped  int `json:"skipped"`
 }
 
-// validJobStatuses / validRowStatuses は許可する状態値。
+// validJobKinds / validJobStatuses / validRowStatuses は許可する値。
+// v4 マイグレーションの CHECK 制約と同じ集合であること
+// (TestV4_CheckConstraintsMatchGoConstants で照合する)。
+var validJobKinds = map[string]bool{
+	JobKindCreate: true, JobKindUpdate: true, JobKindMixed: true,
+}
+
 var validJobStatuses = map[string]bool{
 	JobStatusPending: true, JobStatusRunning: true,
 	JobStatusDone: true, JobStatusCanceled: true,
@@ -123,9 +129,7 @@ func (s *Store) CreateJob(ctx context.Context, kind string, projectID int64, sou
 	if len(rows) == 0 {
 		return 0, errors.New("取り込む行がありません")
 	}
-	switch kind {
-	case JobKindCreate, JobKindUpdate, JobKindMixed:
-	default:
+	if !validJobKinds[kind] {
 		return 0, fmt.Errorf("不明なジョブ種別です: %s", kind)
 	}
 	createdAt := time.Now().UTC().Format(time.RFC3339)

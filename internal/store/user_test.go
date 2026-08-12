@@ -15,6 +15,18 @@ func testUser(id int64, code, name, mail string, roleType int) *User {
 	}
 }
 
+// seedProjectRows は project_users の FK(v4)を満たすためのプロジェクト行を作る。
+func seedProjectRows(t *testing.T, s *Store, ids ...int64) {
+	t.Helper()
+	for _, id := range ids {
+		if err := s.UpsertProject(context.Background(), &Project{
+			ID: id, ProjectKey: fmt.Sprintf("EX%d", id), Name: "検証用",
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
 // TestReplaceUsers_ReplacesAll は users がスペース単位の全置換であること
 // (退会ユーザが残らないこと)を確認する(設計書 3 節)。
 func TestReplaceUsers_ReplacesAll(t *testing.T) {
@@ -91,6 +103,7 @@ func TestReplaceTeams_ReplacesTeamsAndMembers(t *testing.T) {
 func TestReplaceProjectUsers_PerProject(t *testing.T) {
 	s := openTempStore(t)
 	ctx := context.Background()
+	seedProjectRows(t, s, 1, 2)
 
 	if err := s.ReplaceProjectUsers(ctx, 1, []ProjectUser{
 		{UserID: 1, IsAdmin: true}, {UserID: 2},

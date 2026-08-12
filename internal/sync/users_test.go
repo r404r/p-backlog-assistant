@@ -872,3 +872,106 @@ func TestSyncUsers_TeamsTransientErrorKeepsCache(t *testing.T) {
 		t.Errorf("所属チーム = %+v, want 据え置き", rows)
 	}
 }
+
+// --- 反映の原子性(R7)-----------------------------------------------------
+
+// TestSyncUsers_ApplyIsAtomic は DB 反映の途中で失敗した場合に、
+// users / teams / team_members / project_users / sync_state のいずれも
+// 更新されず、旧世代が丸ごと残ることを確認する(R7)。
+// 反映を段階ごとに別コミットしていると、ここで新旧世代が混在する
+// (例: users だけ新しく、参加関係は旧世代のまま)。
+func TestSyncUsers_ApplyIsAtomic(t *testing.T) {
+	stages := []string{applyStageUsers, applyStageTeams, applyStageProjectUsers, applyStageSyncState}
+	for _, stage := range stages {
+		t.Run(stage, func(t *testing.T) {
+			api := newFakeAPI()
+			api.users = []backlogclient.User{fakeUser(1, "admin", "あ 管理", 1)}
+			api.teams = []backlogclient.Team{{ID: 1, Name: "新チーム", MemberIDs: []int64{1}}}
+			api.projectUsers[1] = []backlogclient.User{fakeUser(1, "admin", "あ 管理", 1)}
+			api.projectAdmins[1] = []backlogclient.User{fakeUser(1, "admin", "あ 管理", 1)}
+
+			s := openTempStore(t)
+			ctx := context.Background()
+			seedProjects(t, s, store.Project{ID: 1, ProjectKey: "EXA", Name: "検証用 A"})
+
+			// 旧世代のキャッシュ(反映が失敗したら丸ごと残るべきもの)
+			if err := s.ReplaceUsers(ctx, []*store.User{{ID: 99, UserCode: "old", Name: "旧 ユーザ"}}); err != nil {
+				t.Fatal(err)
+			}
+			if err := s.ReplaceTeams(ctx, []*store.Team{{ID: 999, Name: "旧チーム", MemberIDs: []int64{99}}}); err != nil {
+				t.Fatal(err)
+			}
+			if err := s.ReplaceProjectUsers(ctx, 1, []store.ProjectUser{{UserID: 99}}); err != nil {
+				t.Fatal(err)
+			}
+
+			e := newTestEngine(t, api, s)
+			e.applyUsersStageHook = func(got string) error {
+				if got == stage {
+					return fmt.Errorf("フェイク: %s の反映に失敗", stage)
+				}
+				return nil
+			}
+			if _, err := e.SyncUsers(ctx); err == nil {
+				t.Fatal("反映失敗でもエラーにならなかった")
+			}
+
+			rows := userRows(t, s)
+			if len(rows) != 1 || rows[0].UserCode != "old" {
+				t.Fatalf("users = %+v, want 旧世代のみ", rows)
+			}
+			if len(rows[0].TeamNames) != 1 || rows[0].TeamNames[0] != "旧チーム" {
+				t.Errorf("teams / team_members = %v, want [旧チーム]", rows[0].TeamNames)
+			}
+			if len(rows[0].ProjectKeys) != 1 || rows[0].ProjectKeys[0] != "EXA" {
+				t.Errorf("project_users = %v, want [EXA]", rows[0].ProjectKeys)
+			}
+			st, err := s.GetSyncState(ctx, store.DataKindUsers, store.ProjectScopeAll)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if st != nil && st.LastSyncedAt != "" {
+				t.Errorf("同期状態 = %+v, want 未更新", st)
+			}
+		})
+	}
+}
+
+// TestSyncUsers_DegradedPartialApplyIsAtomic は縮退パスの部分失敗
+// (ユーザは UPSERT に留め、削除反映を行わない経路。高 2)でも
+// 反映が単一トランザクションであることを確認する(R7)。
+// UPSERT だけ先にコミットされると、同期に失敗したのにユーザ情報だけ
+// 新しくなった中途半端なキャッシュが残る。
+func TestSyncUsers_DegradedPartialApplyIsAtomic(t *testing.T) {
+	api := newFakeAPI()
+	api.usersErr = backlogclient.ErrPermissionDenied
+	api.teamsErr = backlogclient.ErrPermissionDenied
+	// プロジェクト 1 は取得成功、プロジェクト 2 は失敗 = 部分失敗
+	api.projectUsers[1] = []backlogclient.User{fakeUser(1, "admin", "あ 管理", 1)}
+	api.projectAdmins[1] = []backlogclient.User{fakeUser(1, "admin", "あ 管理", 1)}
+	api.projectUsersErr[2] = errors.New("フェイク: 取得失敗")
+
+	s := openTempStore(t)
+	ctx := context.Background()
+	seedProjects(t, s,
+		store.Project{ID: 1, ProjectKey: "EXA", Name: "検証用 A"},
+		store.Project{ID: 2, ProjectKey: "EXB", Name: "検証用 B"})
+	if err := s.ReplaceUsers(ctx, []*store.User{{ID: 99, UserCode: "old", Name: "旧 ユーザ"}}); err != nil {
+		t.Fatal(err)
+	}
+
+	e := newTestEngine(t, api, s)
+	e.applyUsersStageHook = func(stage string) error {
+		if stage == applyStageProjectUsers {
+			return errors.New("フェイク: 参加関係の反映に失敗")
+		}
+		return nil
+	}
+	if _, err := e.SyncUsers(ctx); err == nil {
+		t.Fatal("反映失敗でもエラーにならなかった")
+	}
+	rows := userRows(t, s)
+	if len(rows) != 1 || rows[0].UserCode != "old" {
+		t.Errorf("users = %+v, want 旧世代のみ(UPSERT もロールバックされる)", rows)
+	}
+}

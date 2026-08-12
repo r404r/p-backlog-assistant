@@ -70,6 +70,31 @@ func sanitizeFileComponent(s string) string {
 	}, s)
 }
 
+// dsnFor は DB ファイルパスから接続文字列を組み立てる。
+//
+// foreign_keys は接続単位の設定で、PRAGMA を 1 度実行しただけでは
+// 「その接続」にしか効かない。database/sql のプールが接続を破棄して
+// 張り直すと参照整合性が黙って無効になり、v4 で導入した FK 制約
+// (孤児行の防止。R8)が働かなくなる。DSN に載せておけば、
+// ドライバがすべての新規接続で適用する。
+//
+// パスに '?' を含む場合はエラーにする。modernc.org/sqlite は
+// "file:" で始まらない DSN の '?' 以降をクエリとして解釈するため、
+// 素通ししてもパスは切り詰められ(別の場所に DB を作ってしまう)、
+// クエリの指定も壊れる。file: URI 形式でパーセントエンコードすれば
+// 扱えるが、Windows のドライブレター・UNC パスまで正しく URI 化するのは
+// 複雑で、得られるものは「実運用で発生しないパスへの対応」でしかない。
+// DB パスは設定ディレクトリ配下に DBPathIn が組み立てるもの(ホスト名は
+// sanitizeFileComponent 済み)なので、明確なエラーで十分に安全と判断した。
+// なお '#' や '%' はドライバもドライバ経由の SQLite も特別扱いしない
+// (URI として解釈されるのは "file:" で始まる名前だけ)ため、対象外。
+func dsnFor(path string) (string, error) {
+	if strings.Contains(path, "?") {
+		return "", fmt.Errorf("DB ファイルのパスに '?' は使えません: %s", path)
+	}
+	return path + "?_pragma=foreign_keys(1)", nil
+}
+
 // Open は DB ファイルを開き(無ければ作成し)、マイグレーションを適用する。
 //
 // ファイル権限: SQLite に作成を任せると umask 依存(0644 等)になり得るため、
@@ -77,6 +102,11 @@ func sanitizeFileComponent(s string) string {
 // WAL/SHM ファイルは SQLite が DB 本体の権限を引き継いで作成するため、
 // DB 本体を 0600 にしておけば十分。
 func Open(path string) (*Store, error) {
+	// 接続文字列を先に組み立てて検証する(ファイルを作る前に弾く)
+	dsn, err := dsnFor(path)
+	if err != nil {
+		return nil, err
+	}
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, fmt.Errorf("データディレクトリの作成に失敗しました: %w", err)
@@ -85,9 +115,9 @@ func Open(path string) (*Store, error) {
 	if err := os.Chmod(dir, 0o700); err != nil {
 		return nil, fmt.Errorf("データディレクトリの権限設定に失敗しました: %w", err)
 	}
-	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o600)
-	if err != nil {
-		return nil, fmt.Errorf("DB ファイルの作成に失敗しました: %w", err)
+	f, ferr := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o600)
+	if ferr != nil {
+		return nil, fmt.Errorf("DB ファイルの作成に失敗しました: %w", ferr)
 	}
 	if err := f.Close(); err != nil {
 		return nil, err
@@ -96,13 +126,15 @@ func Open(path string) (*Store, error) {
 	if err := os.Chmod(path, 0o600); err != nil {
 		return nil, fmt.Errorf("DB ファイルの権限設定に失敗しました: %w", err)
 	}
-	db, err := sql.Open("sqlite", path)
+	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("DB を開けません: %w", err)
 	}
 	// modernc.org/sqlite は同時書き込みに弱いため接続数を絞る
 	db.SetMaxOpenConns(1)
-	if _, err := db.Exec(`PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;`); err != nil {
+	// journal_mode は DB ファイルに永続化されるためここで 1 度設定すればよい
+	// (foreign_keys は接続単位なので DSN 側で設定する。dsnFor 参照)。
+	if _, err := db.Exec(`PRAGMA journal_mode = WAL;`); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("PRAGMA の設定に失敗しました: %w", err)
 	}

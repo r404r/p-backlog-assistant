@@ -110,6 +110,9 @@ type Engine struct {
 	now func() time.Time
 	// applyDeletionsHook はテスト用のフック(トランザクション内で失敗を注入する)。
 	applyDeletionsHook func() error
+	// applyUsersStageHook はテスト用のフック(ユーザ同期の反映トランザクション内で、
+	// 段階を指定して失敗を注入する。R7)。
+	applyUsersStageHook func(stage string) error
 }
 
 // NewEngine は同期エンジンを生成する。

@@ -58,6 +58,7 @@ func TestGetIssueByKey_ExcludesDeleted(t *testing.T) {
 func TestListProjectUserRefs(t *testing.T) {
 	s := openTempStore(t)
 	ctx := context.Background()
+	seedProjectRows(t, s, 1, 2)
 
 	if err := s.ReplaceUsers(ctx, []*User{
 		{ID: 1, UserCode: "a", Name: "山田 太郎"},

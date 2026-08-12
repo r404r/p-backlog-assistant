@@ -113,6 +113,10 @@ func TestListAssigneeCandidates(t *testing.T) {
 	}
 
 	// 参加者が同期済みならプロジェクト参加者に限定する
+	// (project_users は projects への FK を持つ(v4)ため、先に行を作る)
+	if err := st.UpsertProject(ctx, &store.Project{ID: 1, ProjectKey: "EXA", Name: "検証用 A"}); err != nil {
+		t.Fatal(err)
+	}
 	if err := st.ReplaceProjectUsers(ctx, 1, []store.ProjectUser{{UserID: 501}}); err != nil {
 		t.Fatal(err)
 	}

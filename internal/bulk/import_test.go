@@ -626,6 +626,15 @@ func TestImport_AssigneeLimitedToProjectMembers(t *testing.T) {
 	st := openTestStore(t)
 	ctx := context.Background()
 	// 山田 太郎(501)のみ参加。山田 花子(502)は別プロジェクトの参加者。
+	// project_users は projects への FK を持つ(v4)ため、先に行を作る。
+	for _, p := range []store.Project{
+		{ID: testProjectID, ProjectKey: "EXA", Name: "検証用 A"},
+		{ID: 2, ProjectKey: "EXB", Name: "検証用 B"},
+	} {
+		if err := st.UpsertProject(ctx, &p); err != nil {
+			t.Fatal(err)
+		}
+	}
 	if err := st.ReplaceProjectUsers(ctx, testProjectID, []store.ProjectUser{{UserID: 501}}); err != nil {
 		t.Fatal(err)
 	}
