@@ -60,6 +60,34 @@ var migrations = [][]string{
 	{
 		`ALTER TABLE jobs ADD COLUMN completed_at TEXT`,
 	},
+	// v3: キーワード検索の FTS5 化(R3)。search_text の LIKE '%語%' は
+	// 索引が使えず全走査になるため、trigram トークナイザの全文検索索引を持つ。
+	//
+	// external content 方式(content='issues')にして本文の二重保存を避け、
+	// issues の INSERT / UPDATE / DELETE をトリガーで索引へ反映する。
+	// content_rowid='id' により issues_fts.rowid = issues.id となる。
+	// トークナイザの選定理由は issue_fts.go の冒頭コメントを参照。
+	{
+		`CREATE VIRTUAL TABLE IF NOT EXISTS issues_fts USING fts5(
+			search_text,
+			content='issues',
+			content_rowid='id',
+			tokenize='trigram')`,
+		`CREATE TRIGGER IF NOT EXISTS issues_fts_ai AFTER INSERT ON issues BEGIN
+			INSERT INTO issues_fts(rowid, search_text) VALUES (new.id, new.search_text);
+		END`,
+		`CREATE TRIGGER IF NOT EXISTS issues_fts_ad AFTER DELETE ON issues BEGIN
+			INSERT INTO issues_fts(issues_fts, rowid, search_text) VALUES ('delete', old.id, old.search_text);
+		END`,
+		// external content 方式では、更新前の値で 'delete' を発行してから
+		// 新しい値を入れる(旧テキストの索引語が残らないようにするため)。
+		`CREATE TRIGGER IF NOT EXISTS issues_fts_au AFTER UPDATE ON issues BEGIN
+			INSERT INTO issues_fts(issues_fts, rowid, search_text) VALUES ('delete', old.id, old.search_text);
+			INSERT INTO issues_fts(rowid, search_text) VALUES (new.id, new.search_text);
+		END`,
+		// 既存 DB(v2 まで)に溜まっている課題を索引へ一括投入する。
+		`INSERT INTO issues_fts(issues_fts) VALUES ('rebuild')`,
+	},
 }
 
 // LatestSchemaVersion は最新スキーマバージョン。

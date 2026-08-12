@@ -19,7 +19,7 @@ import (
 // 出す前にこれで弾くこと。判定内容は IterateIssues / SearchIssues の
 // 入口と同じ(プロジェクト必須・カスタム属性条件の妥当性)。
 func ValidateIssueFilter(f IssueFilter) error {
-	if _, _, err := f.buildFilter(); err != nil {
+	if _, err := f.buildFilter(); err != nil {
 		return err
 	}
 	return customfield.ValidateFilters(customfield.ActiveFilters(f.CustomFieldFilters))
@@ -62,7 +62,7 @@ type IssueIterateResult struct {
 // issue_iterate_test.go で確認済み。ID を先に集めてチャンク読みする方式は
 // 不要と判断した。)
 func IterateIssues(ctx context.Context, q dbtx, f IssueFilter, visit IssueVisitor) (IssueIterateResult, error) {
-	where, args, err := f.buildFilter()
+	spec, err := f.buildFilter()
 	if err != nil {
 		return IssueIterateResult{}, err
 	}
@@ -77,7 +77,7 @@ func IterateIssues(ctx context.Context, q dbtx, f IssueFilter, visit IssueVisito
 		match = customFieldMatcher(cfFilters)
 	}
 	// 打ち切られた場合も、そこまでの集計を返す(呼び出し側のログ用)。
-	total, unverifiable, err := iterateIssueRows(ctx, q, issueQuery(where), match, visit, args...)
+	total, unverifiable, err := iterateIssueRows(ctx, q, spec.selectQuery(), match, visit, spec.args...)
 	return IssueIterateResult{Total: total, Unverifiable: unverifiable}, err
 }
 

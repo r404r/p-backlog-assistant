@@ -86,24 +86,26 @@ func TestSearchIssues_Keyword(t *testing.T) {
 // TestBuildFilter_KeywordSplit はキーワードが半角・全角スペースで分割され、
 // 語ごとに LIKE 条件が組み立てられること(既定は AND)を確認する。
 func TestBuildFilter_KeywordSplit(t *testing.T) {
-	where, args, err := IssueFilter{ProjectID: 1, Keyword: "ログイン　timeout 改善"}.buildFilter()
+	spec, err := IssueFilter{ProjectID: 1, Keyword: "ログイン　timeout 改善"}.buildFilter()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if n := strings.Count(where, "search_text LIKE ?"); n != 3 {
-		t.Errorf("LIKE 条件の数 = %d, want 3 (where = %q)", n, where)
+	if n := strings.Count(spec.where, "issues.search_text LIKE ?"); n != 3 {
+		t.Errorf("LIKE 条件の数 = %d, want 3 (where = %q)", n, spec.where)
 	}
-	if strings.Contains(where, " OR ") {
-		t.Errorf("既定モードで OR が使われている: %q", where)
+	if strings.Contains(spec.where, " OR ") {
+		t.Errorf("既定モードで OR が使われている: %q", spec.where)
 	}
-	// project_id の引数に続いて語ごとのパターンが並ぶ
-	want := []any{int64(1), "%ログイン%", "%timeout%", "%改善%"}
-	if len(args) != len(want) {
-		t.Fatalf("引数 = %v, want %v", args, want)
+	// project_id・FTS の MATCH 式に続いて語ごとのパターンが並ぶ。
+	// 「改善」は 2 文字なので trigram 索引を使えず MATCH 式から外れるが、
+	// LIKE 条件は全語ぶん残るため結果集合は変わらない(AND モード)。
+	want := []any{int64(1), `"ログイン" AND "timeout"`, "%ログイン%", "%timeout%", "%改善%"}
+	if len(spec.args) != len(want) {
+		t.Fatalf("引数 = %v, want %v", spec.args, want)
 	}
 	for i := range want {
-		if args[i] != want[i] {
-			t.Errorf("args[%d] = %v, want %v", i, args[i], want[i])
+		if spec.args[i] != want[i] {
+			t.Errorf("args[%d] = %v, want %v", i, spec.args[i], want[i])
 		}
 	}
 }
@@ -112,15 +114,15 @@ func TestBuildFilter_KeywordSplit(t *testing.T) {
 // project_id 等の他条件と正しく AND 結合されることを確認する
 // (括弧が無いと OR が全体に広がり、別プロジェクトの課題が混入する)。
 func TestBuildFilter_KeywordOrIsParenthesized(t *testing.T) {
-	where, _, err := IssueFilter{ProjectID: 1, Keyword: "ログイン 改善", KeywordMode: "or"}.buildFilter()
+	spec, err := IssueFilter{ProjectID: 1, Keyword: "ログイン 改善", KeywordMode: "or"}.buildFilter()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(where, `(search_text LIKE ? ESCAPE '\' OR search_text LIKE ? ESCAPE '\')`) {
-		t.Errorf("OR 条件が括弧で括られていない: %q", where)
+	if !strings.Contains(spec.where, `(issues.search_text LIKE ? ESCAPE '\' OR issues.search_text LIKE ? ESCAPE '\')`) {
+		t.Errorf("OR 条件が括弧で括られていない: %q", spec.where)
 	}
-	if !strings.HasPrefix(where, "deleted = 0 AND project_id = ? AND (") {
-		t.Errorf("他条件との結合が AND になっていない: %q", where)
+	if !strings.HasPrefix(spec.where, "issues.deleted = 0 AND issues.project_id = ? AND ") {
+		t.Errorf("他条件との結合が AND になっていない: %q", spec.where)
 	}
 }
 
@@ -128,15 +130,18 @@ func TestBuildFilter_KeywordOrIsParenthesized(t *testing.T) {
 // LIKE 条件が付かないことを確認する。
 func TestBuildFilter_KeywordBlank(t *testing.T) {
 	for _, kw := range []string{"", "   ", "　", " 　 "} {
-		where, args, err := IssueFilter{ProjectID: 1, Keyword: kw, KeywordMode: "or"}.buildFilter()
+		spec, err := IssueFilter{ProjectID: 1, Keyword: kw, KeywordMode: "or"}.buildFilter()
 		if err != nil {
 			t.Fatal(err)
 		}
-		if strings.Contains(where, "search_text") {
-			t.Errorf("キーワード %q で LIKE 条件が付いた: %q", kw, where)
+		if strings.Contains(spec.where, "search_text") {
+			t.Errorf("キーワード %q で LIKE 条件が付いた: %q", kw, spec.where)
 		}
-		if len(args) != 1 {
-			t.Errorf("キーワード %q の引数 = %v, want [1]", kw, args)
+		if strings.Contains(spec.from, "issues_fts") {
+			t.Errorf("キーワード %q で FTS が使われた: %q", kw, spec.from)
+		}
+		if len(spec.args) != 1 {
+			t.Errorf("キーワード %q の引数 = %v, want [1]", kw, spec.args)
 		}
 	}
 }

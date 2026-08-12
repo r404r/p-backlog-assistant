@@ -17,8 +17,11 @@ const DefaultSearchLimit = 5000
 // IssueFilter は課題抽出(画面 2)の検索条件。
 // ProjectID は必須(スペース横断検索は行わない)。
 type IssueFilter struct {
-	ProjectID int64  `json:"projectId"` // 必須
-	Keyword   string `json:"keyword"`   // 件名 + 詳細の部分一致(search_text へ LIKE)。空白区切りで複数語
+	ProjectID int64 `json:"projectId"` // 必須
+	// Keyword は件名 + 詳細の部分一致(search_text が対象)。空白区切りで複数語。
+	// 3 文字以上の語は FTS5 索引で候補を絞り込んでから LIKE で再判定し、
+	// 3 文字未満の語は LIKE のみで判定する(結果は従来と同一。issue_fts.go 参照)。
+	Keyword string `json:"keyword"`
 	// KeywordMode は複数語の連結方法("and" = 全語を含む / "or" = いずれかを含む)。
 	// 空文字・未知の値は "and" として扱う。
 	KeywordMode  string `json:"keywordMode"`
@@ -54,21 +57,57 @@ type FilterOptions struct {
 	AssigneeNames []string `json:"assigneeNames"`
 }
 
-// buildFilter は WHERE 句と引数を組み立てる(deleted = 0 のみ対象)。
-func (f IssueFilter) buildFilter() (string, []any, error) {
+// issueQuerySpec は課題検索の SQL 断片(FROM 句・WHERE 句・並び順・引数)。
+// FTS 索引を使うかどうかで FROM 句と並び順が変わるため、WHERE 句だけでなく
+// まとめて持ち回る(issue_fts.go 参照)。
+type issueQuerySpec struct {
+	from    string
+	where   string
+	orderBy string
+	args    []any
+}
+
+// selectQuery は条件に一致する課題を ID 昇順で取り出す SELECT 文を組み立てる
+// (検索・走査で同じ並びを使うため 1 か所にまとめる)。
+func (s issueQuerySpec) selectQuery() string {
+	return `SELECT ` + issueColumns + ` FROM ` + s.from +
+		` WHERE ` + s.where + ` ORDER BY ` + s.orderBy
+}
+
+// countQuery は条件に一致する課題の総件数を数える SELECT 文を組み立てる。
+func (s issueQuerySpec) countQuery() string {
+	return `SELECT COUNT(*) FROM ` + s.from + ` WHERE ` + s.where
+}
+
+// buildFilter は検索条件から SQL 断片を組み立てる(deleted = 0 のみ対象)。
+//
+// 列名はすべて issues. で修飾する。FTS を使う場合の FROM 句には
+// issues_fts が加わり、search_text 等の列名が曖昧になるため。
+func (f IssueFilter) buildFilter() (issueQuerySpec, error) {
 	if f.ProjectID == 0 {
-		return "", nil, errors.New("プロジェクトが指定されていません")
+		return issueQuerySpec{}, errors.New("プロジェクトが指定されていません")
 	}
-	where := []string{"deleted = 0", "project_id = ?"}
+	spec := issueQuerySpec{from: issuesFrom, orderBy: issuesOrderBy}
+	where := []string{"issues.deleted = 0", "issues.project_id = ?"}
 	args := []any{f.ProjectID}
 
 	if terms := splitKeywords(f.Keyword); len(terms) > 0 {
+		or := isOrKeywordMode(f.KeywordMode)
+		// FTS5 索引による事前絞り込み(R3)。索引を使えない語しか無い場合は
+		// 従来どおり LIKE だけで検索する。LIKE 条件は FTS を使う場合も残し、
+		// 結果集合が従来と完全に一致することを保証する(issue_fts.go 参照)。
+		if expr, ok := ftsMatchExpr(terms, or); ok {
+			spec.from = issuesFTSFrom
+			spec.orderBy = issuesFTSOrderBy
+			where = append(where, ftsMatchCond)
+			args = append(args, expr)
+		}
 		conds := make([]string, 0, len(terms))
 		for _, t := range terms {
-			conds = append(conds, `search_text LIKE ? ESCAPE '\'`)
+			conds = append(conds, `issues.search_text LIKE ? ESCAPE '\'`)
 			args = append(args, "%"+escapeLike(t)+"%")
 		}
-		if isOrKeywordMode(f.KeywordMode) {
+		if or {
 			// OR は必ず括弧で括る。括らないと project_id 等の他条件まで
 			// OR の被演算子になり、別プロジェクトの課題が混入する。
 			where = append(where, "("+strings.Join(conds, " OR ")+")")
@@ -86,18 +125,20 @@ func (f IssueFilter) buildFilter() (string, []any, error) {
 			args = append(args, rangeEnd(to))
 		}
 	}
-	addRange("created", f.CreatedFrom, f.CreatedTo)
-	addRange("updated", f.UpdatedFrom, f.UpdatedTo)
+	addRange("issues.created", f.CreatedFrom, f.CreatedTo)
+	addRange("issues.updated", f.UpdatedFrom, f.UpdatedTo)
 
 	if f.StatusName != "" {
-		where = append(where, "status_name = ?")
+		where = append(where, "issues.status_name = ?")
 		args = append(args, f.StatusName)
 	}
 	if f.AssigneeName != "" {
-		where = append(where, "assignee_name = ?")
+		where = append(where, "issues.assignee_name = ?")
 		args = append(args, f.AssigneeName)
 	}
-	return strings.Join(where, " AND "), args, nil
+	spec.where = strings.Join(where, " AND ")
+	spec.args = args
+	return spec, nil
 }
 
 // KeywordMode の値(IssueFilter.KeywordMode)。
@@ -168,10 +209,11 @@ func isDateOnly(v string) bool {
 }
 
 // issueColumns は Issue の SELECT 列。
-const issueColumns = `id, issue_key, project_id, summary, description,
-	status_id, status_name, assignee_id, assignee_name,
-	issue_type_name, priority_name, created, updated, due_date,
-	raw_json, fetched_at`
+// FTS 索引と結合する場合に列名が曖昧にならないよう issues. で修飾する。
+const issueColumns = `issues.id, issues.issue_key, issues.project_id, issues.summary, issues.description,
+	issues.status_id, issues.status_name, issues.assignee_id, issues.assignee_name,
+	issues.issue_type_name, issues.priority_name, issues.created, issues.updated, issues.due_date,
+	issues.raw_json, issues.fetched_at`
 
 func scanIssues(ctx context.Context, q dbtx, query string, args ...any) ([]Issue, error) {
 	rows, err := q.QueryContext(ctx, query, args...)
@@ -188,12 +230,6 @@ func scanIssues(ctx context.Context, q dbtx, query string, args ...any) ([]Issue
 		out = append(out, i)
 	}
 	return out, rows.Err()
-}
-
-// issueQuery は条件に一致する課題を ID 昇順で取り出す SELECT 文を組み立てる
-// (検索・走査で同じ並びを使うため 1 か所にまとめる)。
-func issueQuery(where string) string {
-	return `SELECT ` + issueColumns + ` FROM issues WHERE ` + where + ` ORDER BY id`
 }
 
 // scanIssueRow は issueColumns の並びで 1 行を Issue に読み込む
@@ -328,7 +364,7 @@ func customFieldMatcher(filters []customfield.Filter) func(*Issue) issueMatch {
 // この経路では SQL 側で LIMIT / COUNT(*) を使えない(絞り込み前の件数になる)ため、
 // 上限と総件数は Go 側の走査で決める。
 func SearchIssues(ctx context.Context, q dbtx, f IssueFilter) (*IssueSearchResult, error) {
-	where, args, err := f.buildFilter()
+	spec, err := f.buildFilter()
 	if err != nil {
 		return nil, err
 	}
@@ -344,7 +380,7 @@ func SearchIssues(ctx context.Context, q dbtx, f IssueFilter) (*IssueSearchResul
 	}
 	if len(cfFilters) > 0 {
 		issues, total, unverifiable, err := scanIssuesMatching(ctx, q,
-			issueQuery(where), customFieldMatcher(cfFilters), limit, args...)
+			spec.selectQuery(), customFieldMatcher(cfFilters), limit, spec.args...)
 		if err != nil {
 			return nil, err
 		}
@@ -357,11 +393,11 @@ func SearchIssues(ctx context.Context, q dbtx, f IssueFilter) (*IssueSearchResul
 	}
 
 	var total int
-	if err := q.QueryRowContext(ctx, `SELECT COUNT(*) FROM issues WHERE `+where, args...).Scan(&total); err != nil {
+	if err := q.QueryRowContext(ctx, spec.countQuery(), spec.args...).Scan(&total); err != nil {
 		return nil, err
 	}
 	issues, err := scanIssues(ctx, q,
-		issueQuery(where)+` LIMIT `+strconv.Itoa(limit), args...)
+		spec.selectQuery()+` LIMIT `+strconv.Itoa(limit), spec.args...)
 	if err != nil {
 		return nil, err
 	}

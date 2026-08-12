@@ -80,14 +80,27 @@ func (s *Store) UpsertIssue(ctx context.Context, i *Issue) error {
 	return UpsertIssue(ctx, s.db, i)
 }
 
-// SearchIssueIDs はキーワードで search_text を LIKE 部分一致検索し、
+// SearchIssueIDs はキーワードで search_text を部分一致検索し、
 // 該当課題 ID を返す。検索語にも保存時と同じ正規化を適用する。
+//
+// SearchIssues と同じく、3 文字以上のキーワードは FTS5 索引で候補を絞り込み、
+// LIKE で再判定する(結果は LIKE のみの場合と同一。issue_fts.go 参照)。
+// キーワードは分割せず 1 語として扱う(空白も部分一致の対象)。
 func SearchIssueIDs(ctx context.Context, q dbtx, keyword string) ([]int64, error) {
 	kw := NormalizeSearchText(keyword)
 	pattern := "%" + escapeLike(kw) + "%"
+	from := issuesFrom
+	where := `issues.deleted = 0 AND issues.search_text LIKE ? ESCAPE '\'`
+	orderBy := issuesOrderBy
+	args := []any{pattern}
+	if expr, ok := ftsMatchExpr([]string{kw}, false); ok {
+		from = issuesFTSFrom
+		where = ftsMatchCond + ` AND ` + where
+		orderBy = issuesFTSOrderBy
+		args = append([]any{expr}, args...)
+	}
 	rows, err := q.QueryContext(ctx,
-		`SELECT id FROM issues WHERE deleted = 0 AND search_text LIKE ? ESCAPE '\' ORDER BY id`,
-		pattern)
+		`SELECT issues.id FROM `+from+` WHERE `+where+` ORDER BY `+orderBy, args...)
 	if err != nil {
 		return nil, err
 	}
