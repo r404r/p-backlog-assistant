@@ -45,6 +45,10 @@ func TestBulkRowActionAndStatusLabel(t *testing.T) {
 		{store.JobRow{IssueKey: "", Status: store.RowStatusDone}, "新規追加"},
 		{store.JobRow{IssueKey: "EXA-1", Status: store.RowStatusDone}, "更新"},
 		{store.JobRow{IssueKey: "EXA-1", Status: store.RowStatusSkip}, "変更なし"},
+		// 成功した新規追加行には作成された課題のキーが入る(結果レポートの
+		// issueKey 列を埋めるため)。処理区分は作成された課題 ID の有無で判断し、
+		// 課題キーが入ったことで「更新」と表示しないようにする
+		{store.JobRow{IssueKey: "EXA-9", ResultIssueID: 9, Status: store.RowStatusDone}, "新規追加"},
 	}
 	for _, c := range cases {
 		if got := bulkRowAction(c.row); got != c.want {

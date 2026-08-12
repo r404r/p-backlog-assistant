@@ -23,6 +23,7 @@ import {
 } from '../lib/backend'
 import { issueUrl } from '../lib/backlogUrl'
 import { errorMessage, formatDateTime, formatElapsed, syncModeLabel } from '../lib/format'
+import { buildIssueQuery, newIssueConditions, resetIssueConditions } from '../lib/issueQuery'
 import { useModalFocus } from '../lib/modalFocus'
 import {
   resolveProjectSelection,
@@ -352,17 +353,9 @@ async function loadCustomFields() {
 // 条件フォーム
 // ---------------------------------------------------------------------------
 
-const cond = reactive({
-  keyword: '',
-  /** 複数キーワードの連結方法(既定は AND = すべて含む) */
-  keywordMode: 'and' as 'and' | 'or',
-  updatedFrom: '',
-  updatedTo: '',
-  createdFrom: '',
-  createdTo: '',
-  statusName: '',
-  assigneeName: '',
-})
+// 条件の定義と IssueQuery への変換は lib/issueQuery に置き、
+// 一括更新のテンプレート出力(BulkUpdateView)と同じものを使う
+const cond = reactive(newIssueConditions())
 
 const statusOptions = ref<string[]>([])
 const assigneeOptions = ref<string[]>([])
@@ -435,18 +428,7 @@ watch(selectedProjectId, () => {
 
 /** 現在の条件を IssueQuery に変換する(空文字の条件は送らない) */
 function buildQuery(withLimit: boolean): IssueQuery {
-  const q: IssueQuery = { projectId: selectedProjectId.value }
-  if (cond.keyword.trim()) {
-    q.keyword = cond.keyword.trim()
-    // キーワードが空なら連結方法は意味を持たないため送らない
-    q.keywordMode = cond.keywordMode
-  }
-  if (cond.updatedFrom) q.updatedFrom = cond.updatedFrom
-  if (cond.updatedTo) q.updatedTo = cond.updatedTo
-  if (cond.createdFrom) q.createdFrom = cond.createdFrom
-  if (cond.createdTo) q.createdTo = cond.createdTo
-  if (cond.statusName) q.statusName = cond.statusName
-  if (cond.assigneeName) q.assigneeName = cond.assigneeName
+  const q: IssueQuery = buildIssueQuery(selectedProjectId.value, cond)
   // 未入力のカスタム属性は送らない(空の条件を送っても Go 側で無視されるが、
   // 送らない方が「カスタム属性条件あり」の 2 段階検索を無駄に起動させない)
   const customFieldFilters = buildCustomFieldFilters()
@@ -456,14 +438,7 @@ function buildQuery(withLimit: boolean): IssueQuery {
 }
 
 function clearConditions() {
-  cond.keyword = ''
-  cond.keywordMode = 'and'
-  cond.updatedFrom = ''
-  cond.updatedTo = ''
-  cond.createdFrom = ''
-  cond.createdTo = ''
-  cond.statusName = ''
-  cond.assigneeName = ''
+  resetIssueConditions(cond)
   resetCustomFieldConditions()
 }
 

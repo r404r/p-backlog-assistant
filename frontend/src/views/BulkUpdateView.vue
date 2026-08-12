@@ -8,7 +8,7 @@
 // この画面は Backlog のデータを変更する唯一の画面のため、
 // 「実行前に必ず dry-run プレビューを見せる」「競合は黙って上書きしない」
 // 「中断した sending 行は自動再送しない」を UI 上でも徹底する。
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import {
   actionLabel,
   getBackend,
@@ -22,6 +22,7 @@ import {
   type Project,
 } from '../lib/backend'
 import { errorMessage, formatDateTime } from '../lib/format'
+import { buildIssueQuery, newIssueConditions, resetIssueConditions } from '../lib/issueQuery'
 import { issueSyncRunning } from '../lib/syncState'
 import {
   resolveProjectSelection,
@@ -95,21 +96,67 @@ async function loadProjects() {
   } finally {
     projectsLoading.value = false
   }
+}
+
+/** 選択中プロジェクトに紐づくデータ(マスタ・絞り込み候補)を読み込む */
+async function loadProjectData() {
   await loadMaster()
+  await loadFilterOptions()
 }
 
 /**
- * プロジェクトを変えたら、取り込み済みの内容(別プロジェクト向け)は無効になるため破棄する。
- * 取り込み結果を残したままプロジェクトだけ切り替えて実行する事故を防ぐ。
+ * 「再読込」ボタン: プロジェクト一覧と、選択中プロジェクトに紐づくデータを取り直す
+ * (マスタ・候補の取得に失敗したときの再試行の導線でもある)。
+ *
+ * 選択が変わった場合は watch(selectedProjectId) が読み直すため、ここでは読まない
+ * (二重に取りに行かないようにする)。
  */
-async function onProjectChange() {
+async function reloadProjects() {
+  const before = selectedProjectId.value
+  await loadProjects()
+  if (selectedProjectId.value === before) await loadProjectData()
+}
+
+/**
+ * 初期化(プロジェクト選択の復元 → 一覧取得 → 選択の解決)が完了したか
+ * (IssuesView の同名の仕組みと同じ理由)。
+ *
+ * 初期化中の選択は「保存値 → 一覧に無ければ先頭」と 2 段階で動きうるため、
+ * その途中の値で watch を走らせるとマスタ・候補を二重に取りに行く。
+ * 初期化中の変化は watch では扱わず、選択が確定してから onMounted で 1 回読む。
+ */
+let selectionInitialized = false
+
+/**
+ * プロジェクトの選択が変わったら、取り込み済みの内容(別プロジェクト向け)は
+ * 無効になるため破棄する。取り込み結果を残したままプロジェクトだけ切り替えて
+ * 実行する事故を防ぐ。
+ *
+ * テンプレート出力の検索条件も、状態・担当者の候補が別プロジェクトのものになるため
+ * 初期化する(前のプロジェクトで選んだ状態名のまま出力して 0 件になる事故を防ぐ)。
+ *
+ * セレクタの @change ではなく選択そのものを watch する(1 回目 中 1)。
+ * 参加解除等で選択中のプロジェクトが一覧から消え、resolveProjectSelection が
+ * 別のプロジェクトへ自動フォールバックした場合、@change は発火しないため
+ * 前のプロジェクト向けの条件・取り込み結果が残ってしまう。
+ *
+ * TDD 例外(GUI): 画面の結線のためフロントのテスト基盤では固定できず、
+ * 手動確認で担保する(選択の解決規則そのものは projectSelection.test.ts が固定)。
+ */
+watch(selectedProjectId, () => {
+  if (!selectionInitialized) return
   importResult.value = null
   runResult.value = null
   importCanceled.value = false
   exportPath.value = ''
   exportCanceled.value = false
-  await loadMaster()
-}
+  // 実行確認も破棄する。残すと、別プロジェクトの取り込み後に旧ジョブの確認が
+  // 再表示され、旧プロジェクトへ書き込めてしまう
+  confirming.value = false
+  confirmJobId.value = 0
+  resetIssueConditions(cond)
+  void loadProjectData()
+})
 
 // ---------------------------------------------------------------------------
 // マスタデータ(既定優先度の選択に使う)
@@ -152,8 +199,86 @@ async function loadMaster() {
 }
 
 // ---------------------------------------------------------------------------
-// ① テンプレート出力
+// ① テンプレート出力(検索条件・出力)
 // ---------------------------------------------------------------------------
+
+/**
+ * テンプレートに載せる課題の絞り込み条件(空欄なら全件)。
+ *
+ * 条件の形と IssueQuery への変換は課題抽出(IssuesView)と共通のものを使う
+ * (lib/issueQuery)。カスタム属性での絞り込みは今回の対象外
+ * (必要になったら IssuesView と同じ形で追加する)。
+ */
+const cond = reactive(newIssueConditions())
+
+const statusOptions = ref<string[]>([])
+const assigneeOptions = ref<string[]>([])
+const optionsLoading = ref(false)
+/** 絞り込み候補の取得に失敗した場合の説明(空 = 正常。出力自体は行える) */
+const optionsError = ref('')
+
+/**
+ * loadFilterOptions の世代番号(loadMaster の masterRequestSeq と同じ理由)。
+ * ガードのトークンはプロファイル単位のため、同一プロファイル内で
+ * プロジェクトを A→B と切り替えた場合の古い応答を弾けない。
+ */
+let filterOptionsRequestSeq = 0
+
+/** 状態・担当者の候補を、同期済みのローカルデータから読み込む */
+async function loadFilterOptions() {
+  const seq = ++filterOptionsRequestSeq
+  const token = selectionGuard.begin()
+  statusOptions.value = []
+  assigneeOptions.value = []
+  optionsError.value = '' // 前回の失敗表示を残さない(再取得のたびに出し直す)
+  if (!profileId.value || !selectedProjectId.value) {
+    // 世代を進めた後の早期 return。最新要求であるこの経路で読込中表示を下ろす
+    if (seq === filterOptionsRequestSeq) optionsLoading.value = false
+    return
+  }
+  optionsLoading.value = true
+  try {
+    const opts = await backend.listFilterOptions(profileId.value, selectedProjectId.value)
+    // 破棄済み・プロファイル切替後、または後発の要求がある場合は反映しない
+    if (!selectionGuard.isCurrent(token) || seq !== filterOptionsRequestSeq) return
+    statusOptions.value = opts.statuses
+    assigneeOptions.value = opts.assignees
+    // 選択済みの値が候補に無くなった場合は「すべて」へ戻す
+    if (cond.statusName && !opts.statuses.includes(cond.statusName)) cond.statusName = ''
+    if (cond.assigneeName && !opts.assignees.includes(cond.assigneeName)) cond.assigneeName = ''
+  } catch (e) {
+    if (!selectionGuard.isCurrent(token) || seq !== filterOptionsRequestSeq) return
+    optionsError.value = `絞り込み候補の取得に失敗しました: ${errorMessage(e)}`
+  } finally {
+    // 読込中表示は最新の要求だけが下ろす(古い応答が新しい要求の表示を消さないため)
+    if (seq === filterOptionsRequestSeq) optionsLoading.value = false
+  }
+}
+
+/** 条件をすべて未入力に戻す */
+function clearConditions() {
+  resetIssueConditions(cond)
+}
+
+/**
+ * 検索条件の入力を固定するか。
+ *
+ * 出力中は条件が変わっても既に走っている出力には反映されないため固定する。
+ * 実行中・課題同期中はそもそもテンプレート出力できない(exportTemplate のコメント参照)。
+ */
+const conditionsLocked = computed(() => exporting.value || running.value || issueSyncRunning.value)
+
+/** 何らかの条件を指定しているか(「全件を出力します」の案内の出し分けに使う) */
+const hasConditions = computed(
+  () =>
+    !!cond.keyword.trim() ||
+    !!cond.updatedFrom ||
+    !!cond.updatedTo ||
+    !!cond.createdFrom ||
+    !!cond.createdTo ||
+    !!cond.statusName ||
+    !!cond.assigneeName,
+)
 
 const exporting = ref(false)
 const exportPath = ref('')
@@ -165,9 +290,9 @@ const exportError = ref('')
  * 課題同期中はテンプレート出力・取り込み・実行を行わない(R10)。
  *
  * - テンプレート出力: 読み取りトランザクションを保持したまま対象プロジェクトの
- *   課題を全件走査する(app.ExportBulkTemplate → service.IterateIssues)。
+ *   課題を走査する(app.ExportBulkTemplate → service.IterateIssues)。
  *   同期の途中で走らせると、取り込み済みの課題だけが載った不完全なテンプレートが
- *   「全件」として保存されてしまう。単一 DB 接続(SetMaxOpenConns(1))の
+ *   「条件に一致する全件」として保存されてしまう。単一 DB 接続(SetMaxOpenConns(1))の
  *   奪い合いで双方が長時間待たされる問題も課題抽出の Excel 出力と同じ。
  * - 取り込み(dry-run)・実行: どちらも Go 側で同期と直列化される
  *   (service.ImportBulkFile / RunBulkJob が syncMu を取る)。同期中に呼ぶと
@@ -185,10 +310,13 @@ async function exportTemplate() {
   exportPath.value = ''
   exportCanceled.value = false
   try {
-    // MVP では条件指定を持たず、対象プロジェクトの全件をテンプレート化する
-    const res = await backend.exportBulkTemplate(profileId.value, selectedProjectId.value, {
-      projectId: selectedProjectId.value,
-    })
+    // 検索条件に一致した課題だけをテンプレート化する(条件が空なら全件)。
+    // 条件の解釈・検証は Go 側(store.ValidateIssueFilter)が行う
+    const res = await backend.exportBulkTemplate(
+      profileId.value,
+      selectedProjectId.value,
+      buildIssueQuery(selectedProjectId.value, cond),
+    )
     if (!res.path) {
       exportCanceled.value = true
     } else {
@@ -514,7 +642,13 @@ onMounted(async () => {
   if (profileId.value && selectionGuard.isAlive()) {
     // 保存済みの選択(他画面で選んだ値・前回起動時の値)を先に復元してから一覧を読む
     restoreProjectSelection(profileId.value)
-    await loadProjects() // 末尾で loadMaster を呼ぶため、選択に応じたマスタも読み込まれる
+    const token = selectionGuard.begin()
+    await loadProjects()
+    if (!selectionGuard.isCurrent(token)) return
+    // 選択が確定してから、それに紐づくデータを 1 回だけ読む
+    // (以降の切替は watch(selectedProjectId) が担う)
+    selectionInitialized = true
+    await loadProjectData()
     await loadJobs()
   }
 })
@@ -573,18 +707,15 @@ onUnmounted(() => {
         <h2>① テンプレート出力</h2>
         <div class="row">
           <label for="b-project">プロジェクト</label>
-          <select
-            id="b-project"
-            v-model.number="selectedProjectId"
-            :disabled="selectionLocked"
-            @change="onProjectChange"
-          >
+          <!-- 選択の変化は watch(selectedProjectId) で拾う(@change では
+               一覧から消えたプロジェクトの自動フォールバックを検出できないため) -->
+          <select id="b-project" v-model.number="selectedProjectId" :disabled="selectionLocked">
             <option v-if="projects.length === 0" :value="0">(プロジェクトがありません)</option>
             <option v-for="p in projects" :key="p.id" :value="p.id">
               {{ p.name }}({{ p.projectKey }})
             </option>
           </select>
-          <button :disabled="selectionLocked" @click="loadProjects">再読込</button>
+          <button :disabled="selectionLocked" @click="reloadProjects">再読込</button>
         </div>
         <!-- 課題同期中に止まる操作をまとめて案内する(R10。exportTemplate のコメント参照)。
              この画面は同期を開始しないため、実行中の同期は必ず他画面が始めたもの -->
@@ -594,10 +725,91 @@ onUnmounted(() => {
           (ジョブ履歴の確認と結果の Excel 出力は行えます)。
         </p>
         <p class="hint">
-          対象プロジェクトの課題を全件テンプレート化します(条件による絞り込みは行いません)。
           テンプレートにはプロジェクトが固定で埋め込まれるため、行ごとにプロジェクトは変えられません。
           種別・状態・優先度・担当者は、名前列のドロップダウンで編集できます(名前列が空の行は ID 列の値を使います)。
           名前列に値がある行は常に名前列が優先され、食い違う ID 列は無視して警告を表示します。
+        </p>
+
+        <!-- テンプレートに載せる課題の絞り込み(空欄なら全件)。
+             課題抽出の検索条件と同じ項目・同じ流儀で指定する。
+             キーワード欄の Enter では出力しない(保存ダイアログが不意に開く
+             誤操作を避けるため、出力は必ずボタン操作で行う) -->
+        <h3>出力する課題の条件</h3>
+        <div class="row">
+          <label for="b-keyword">キーワード</label>
+          <input
+            id="b-keyword"
+            v-model="cond.keyword"
+            type="text"
+            class="wide"
+            placeholder="件名 + 詳細の部分一致(スペース区切りで複数指定)"
+            :disabled="conditionsLocked"
+          />
+        </div>
+        <div class="row">
+          <label>複数キーワード</label>
+          <label class="radio">
+            <input v-model="cond.keywordMode" type="radio" value="and" :disabled="conditionsLocked" />
+            すべて含む(AND)
+          </label>
+          <label class="radio">
+            <input v-model="cond.keywordMode" type="radio" value="or" :disabled="conditionsLocked" />
+            いずれかを含む(OR)
+          </label>
+        </div>
+
+        <div class="row">
+          <label for="b-updated-from">更新日</label>
+          <input
+            id="b-updated-from"
+            v-model="cond.updatedFrom"
+            type="date"
+            :disabled="conditionsLocked"
+          />
+          <span>〜</span>
+          <input v-model="cond.updatedTo" type="date" :disabled="conditionsLocked" />
+        </div>
+
+        <div class="row">
+          <label for="b-created-from">作成日</label>
+          <input
+            id="b-created-from"
+            v-model="cond.createdFrom"
+            type="date"
+            :disabled="conditionsLocked"
+          />
+          <span>〜</span>
+          <input v-model="cond.createdTo" type="date" :disabled="conditionsLocked" />
+        </div>
+
+        <div class="row">
+          <label for="b-status">状態</label>
+          <select id="b-status" v-model="cond.statusName" :disabled="conditionsLocked || optionsLoading">
+            <option value="">すべて</option>
+            <option v-for="s in statusOptions" :key="s" :value="s">{{ s }}</option>
+          </select>
+          <label for="b-assignee" class="inline-label">担当者</label>
+          <select
+            id="b-assignee"
+            v-model="cond.assigneeName"
+            :disabled="conditionsLocked || optionsLoading"
+          >
+            <option value="">すべて</option>
+            <option v-for="a in assigneeOptions" :key="a" :value="a">{{ a }}</option>
+          </select>
+          <button :disabled="conditionsLocked || !hasConditions" @click="clearConditions">
+            条件をクリア
+          </button>
+        </div>
+        <p v-if="!optionsLoading && statusOptions.length === 0 && assigneeOptions.length === 0" class="hint">
+          状態・担当者の候補は同期済みの課題から作成されます(「課題抽出」画面で同期すると選択できるようになります)。
+        </p>
+        <p v-if="optionsError" class="hint warn">{{ optionsError }}</p>
+        <p class="hint">
+          条件に一致した課題だけがテンプレートに載ります(すべて空欄なら全件)。
+          <template v-if="hasConditions">現在は条件を指定しています。</template>
+          <template v-else>現在は条件を指定していないため、全件が出力されます。</template>
+          検索対象は同期済みのローカルデータです(カスタム属性での絞り込みは未対応)。
         </p>
 
         <div class="row buttons">
@@ -937,11 +1149,15 @@ onUnmounted(() => {
                       <tbody>
                         <tr v-for="r in jobRowDetails" :key="r.rowNo">
                           <td class="nowrap">{{ r.rowNo }}</td>
+                          <!-- 作成済みの課題 ID が入るのは新規追加が成立した行だけ。
+                               その行には作成された課題のキーも記録されるため、
+                               キーの有無より先に見て「(新規)」の目印を残す
+                               (キーだけを出すと更新行と区別が付かなくなる) -->
                           <td class="nowrap">
-                            <template v-if="r.issueKey">{{ r.issueKey }}</template>
-                            <template v-else-if="r.resultIssueId > 0">
-                              (新規)作成済み ID: {{ r.resultIssueId }}
+                            <template v-if="r.resultIssueId > 0">
+                              (新規){{ r.issueKey || `作成済み ID: ${r.resultIssueId}` }}
                             </template>
+                            <template v-else-if="r.issueKey">{{ r.issueKey }}</template>
                             <template v-else>(新規)</template>
                           </td>
                           <td class="nowrap">
@@ -981,6 +1197,12 @@ h1 {
 h2 {
   font-size: 1.05rem;
   margin: 0 0 0.75rem;
+}
+
+/* セクション内の小見出し(テンプレート出力の検索条件) */
+h3 {
+  font-size: 0.95rem;
+  margin: 1rem 0 0.6rem;
 }
 
 .panel {
@@ -1063,11 +1285,28 @@ h2 {
   min-width: 8rem;
 }
 
+/* 「担当者」のように 2 つ目以降に並ぶラベル(ラベル幅を詰めて隣へ置く) */
+.row .inline-label {
+  min-width: auto;
+  margin-left: 0.75rem;
+}
+
 .row.buttons {
   margin-top: 0.75rem;
   margin-bottom: 0;
 }
 
+.radio {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  font-size: 0.9rem;
+  font-weight: 400;
+  min-width: auto;
+}
+
+input[type='text'],
+input[type='date'],
 select {
   padding: 0.4rem 0.5rem;
   border: 1px solid #d0d7de;
@@ -1077,6 +1316,11 @@ select {
   color: #1f2328;
 }
 
+input.wide {
+  width: 320px;
+}
+
+input:disabled,
 select:disabled {
   background: #f6f8fa;
   color: #8c959f;

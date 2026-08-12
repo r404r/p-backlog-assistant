@@ -38,6 +38,9 @@ type fakeAPI struct {
 	listCalls        []backlogclient.IssueQuery
 	customFieldCalls []string
 	nextIssue        int64
+	// createNoIssueKey は課題追加の応答から課題キーを落とす
+	// (応答が不完全な場合に完了扱いしないことの検証用)。
+	createNoIssueKey bool
 	createErr        error
 	updateErr        error
 	getErr           error
@@ -116,8 +119,12 @@ func (f *fakeAPI) CreateIssue(ctx context.Context, in backlogclient.IssueCreate)
 		return nil, f.createErr
 	}
 	f.nextIssue++
+	issueKey := fmt.Sprintf("EXA-%d", f.nextIssue)
+	if f.createNoIssueKey {
+		issueKey = ""
+	}
 	return &backlogclient.Issue{
-		ID: f.nextIssue, IssueKey: fmt.Sprintf("EXA-%d", f.nextIssue),
+		ID: f.nextIssue, IssueKey: issueKey,
 		ProjectID: in.ProjectID, Summary: in.Summary,
 	}, nil
 }

@@ -148,6 +148,11 @@ func TestRun_UpdatesAndCreates(t *testing.T) {
 	if rows[3].ResultIssueID == 0 {
 		t.Errorf("作成された課題 ID が記録されていない: %+v", rows[3])
 	}
+	// 課題キーも記録する(結果レポート・行明細で新規追加行のキーを表示するため)。
+	// 書き込むのは done へ遷移する時だけ(送信中に書くと再開時に更新行と誤認される)
+	if want := "EXA-" + strconv.FormatInt(rows[3].ResultIssueID, 10); rows[3].IssueKey != want {
+		t.Errorf("課題キー = %q, want %q", rows[3].IssueKey, want)
+	}
 	if len(progress) == 0 || progress[len(progress)-1].Processed != 2 || progress[len(progress)-1].Total != 2 {
 		t.Errorf("進捗 = %+v", progress)
 	}
@@ -408,6 +413,10 @@ func TestRun_ResendSkipsAlreadyCreatedIssue(t *testing.T) {
 	row := rowStatuses(t, st, jobID)[3]
 	if row.Status != store.RowStatusDone || row.ResultIssueID != 2002 {
 		t.Errorf("行 3 = %+v(done かつ作成済み課題 ID を期待)", row)
+	}
+	// 突合で見つけた課題のキーも記録する(送信して作成した場合と同じ扱い)
+	if row.IssueKey != "EXA-2002" {
+		t.Errorf("行 3 の課題キー = %q, want EXA-2002", row.IssueKey)
 	}
 	if !strings.Contains(strings.Join(res.Warnings, "\n"), "作成済みを検出したため再送しませんでした") {
 		t.Errorf("警告 = %v", res.Warnings)
@@ -720,6 +729,94 @@ func TestRun_UncertainErrorKeepsRowSending(t *testing.T) {
 	}
 	if !strings.Contains(strings.Join(res.Warnings, "\n"), "送信結果を確認できませんでした") {
 		t.Errorf("警告 = %v", res.Warnings)
+	}
+}
+
+// TestRun_UnfinishedCreateRowKeepsEmptyIssueKey は、結末が確定していない
+// 新規追加行に課題キーを書かないことを確認する。
+//
+// row.IssueKey == "" が「新規追加行」の目印であり、送信中(sending)・失敗(error)の
+// 行にキーが入ると、再開時に更新行と誤認して再送前突合(二重作成防止)が
+// 働かなくなる。キーを書き込むのは done へ遷移する時だけ。
+func TestRun_UnfinishedCreateRowKeepsEmptyIssueKey(t *testing.T) {
+	ctx := context.Background()
+	// 成否不明(sending のまま残る)
+	st, api, jobID := newRunFixture(t)
+	api.createErr = &backlogclient.UncertainError{
+		Op: "課題の追加", Err: errors.New("応答を受信できませんでした"),
+	}
+	if _, err := newTestEngine(api, st).Run(ctx, jobID, RunOptions{}, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if row := rowStatuses(t, st, jobID)[3]; row.Status != store.RowStatusSending || row.IssueKey != "" {
+		t.Errorf("行 3 = %+v(sending かつ課題キーは空を期待)", row)
+	}
+
+	// 確定的拒否(error として確定する)
+	st2, api2, jobID2 := newRunFixture(t)
+	api2.createErr = &backlogclient.RejectedError{
+		StatusCode: 400, Method: "POST", Path: "/api/v2/issues", Message: "summary は必須です",
+	}
+	if _, err := newTestEngine(api2, st2).Run(ctx, jobID2, RunOptions{}, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if row := rowStatuses(t, st2, jobID2)[3]; row.Status != store.RowStatusError || row.IssueKey != "" {
+		t.Errorf("行 3 = %+v(error かつ課題キーは空を期待)", row)
+	}
+}
+
+// TestRun_IncompleteCreateResponseKeepsSending は、作成の応答から課題を
+// 特定できない(ID・課題キーのどちらかが欠ける)場合に完了扱いせず、
+// sending のまま残して回復可能にすることを確認する(1 回目 中 2)。
+//
+// done にしてしまうと、その行は二度と再送・突合の対象にならないため、
+// 「作成されたかもしれない課題」を追えなくなる。成否不明の書き込み(高 4)と
+// 同じく、判断を先送りして利用者の再送指示に委ねる。
+func TestRun_IncompleteCreateResponseKeepsSending(t *testing.T) {
+	ctx := context.Background()
+	// 送信して作成した経路: 応答に課題キーが無い
+	st, api, jobID := newRunFixture(t)
+	api.createNoIssueKey = true
+
+	res, err := newTestEngine(api, st).Run(ctx, jobID, RunOptions{}, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 完了は更新行の 1 件だけ(不完全な応答の行は数えない)
+	if res.Done != 1 || res.Failed != 0 {
+		t.Errorf("結果 = %+v", res)
+	}
+	row := rowStatuses(t, st, jobID)[3]
+	if row.Status != store.RowStatusSending || row.IssueKey != "" || row.ResultIssueID != 0 {
+		t.Errorf("行 3 = %+v(sending・課題キー空・結果 ID 0 を期待)", row)
+	}
+	if !strings.Contains(strings.Join(res.Warnings, "\n"), "作成された課題を特定できませんでした") {
+		t.Errorf("警告 = %v", res.Warnings)
+	}
+
+	// 再送前突合の経路: 突合で見つけた課題に課題キーが無い
+	st2, api2, jobID2 := newRunFixture(t)
+	markRowSending(t, st2, jobID2, 3)
+	matched := createdIssue(t, st2, jobID2, 2002)
+	matched.IssueKey = ""
+	api2.listed = []backlogclient.Issue{matched}
+
+	res2, err := newTestEngine(api2, st2).Run(ctx, jobID2, RunOptions{ResendSending: true}, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(api2.creates) != 0 {
+		t.Fatalf("作成済みなのに再送された: %+v", api2.creates)
+	}
+	if res2.Done != 1 {
+		t.Errorf("結果 = %+v(完了は更新行の 1 件のみを期待)", res2)
+	}
+	row2 := rowStatuses(t, st2, jobID2)[3]
+	if row2.Status != store.RowStatusSending || row2.IssueKey != "" || row2.ResultIssueID != 0 {
+		t.Errorf("行 3 = %+v(sending・課題キー空・結果 ID 0 を期待)", row2)
+	}
+	if !strings.Contains(strings.Join(res2.Warnings, "\n"), "作成された課題を特定できませんでした") {
+		t.Errorf("警告 = %v", res2.Warnings)
 	}
 }
 

@@ -346,14 +346,18 @@ func (a *App) GetBulkJobRows(profileID string, jobID int64) ([]BulkJobRowDTO, er
 }
 
 // bulkRowAction は行の処理区分の表示名を返す。
-// payload を解析せず、行状態と課題キーの有無だけで判断する
+// payload を解析せず、行状態と課題キー・作成された課題 ID の有無だけで判断する
 // (送信内容を画面・Excel へ持ち出さないため)。
 // 表示名は取り込み時のプレビューと同じ bulk.ActionLabel を使う(R14)。
+//
+// 作成された課題 ID(ResultIssueID)が入るのは新規追加が成立した行だけで、
+// その行には作成された課題のキーも記録される。課題キーの有無より先に
+// 判定しないと、成功した新規追加行が「更新」と表示されてしまう。
 func bulkRowAction(row store.JobRow) string {
 	switch {
 	case row.Status == store.RowStatusSkip:
 		return bulk.ActionLabel(bulk.ActionSkip)
-	case row.IssueKey == "":
+	case row.ResultIssueID > 0 || row.IssueKey == "":
 		return bulk.ActionLabel(bulk.ActionCreate)
 	default:
 		return bulk.ActionLabel(bulk.ActionUpdate)

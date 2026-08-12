@@ -28,7 +28,8 @@ type BulkResultRow struct {
 	RowNo int
 	// Action は処理区分(追加 / 更新 / 変更なし 等)。
 	Action string
-	// IssueKey は更新対象の課題キー(新規追加行は空)。
+	// IssueKey は対象の課題キー。更新行はテンプレートに記入されたキー、
+	// 新規追加行は作成に成功した課題のキー(未作成・失敗した行は空)。
 	IssueKey string
 	// ResultIssueID は新規追加で作成された課題 ID(それ以外は 0 = 空セル)。
 	ResultIssueID int64

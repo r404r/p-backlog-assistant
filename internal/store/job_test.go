@@ -124,6 +124,84 @@ func TestUpdateRowStatus_RejectsInvalidTransition(t *testing.T) {
 	}
 }
 
+// TestUpdateRowResult_RecordsIssueKeyOnDone は、新規追加が成功した行に
+// 作成された課題のキーを記録することを確認する(結果レポート・行明細の表示用)。
+func TestUpdateRowResult_RecordsIssueKeyOnDone(t *testing.T) {
+	s := openTempStore(t)
+	ctx := context.Background()
+	id := newTestJob(t, s)
+
+	if err := s.UpdateRowStatus(ctx, id, 3, RowStatusSending, 0, ""); err != nil {
+		t.Fatal(err)
+	}
+	// 送信中の間は課題キーを書かない(row.IssueKey == "" が新規追加行の目印)。
+	// done へ遷移する UPDATE と同じ文でだけ書き込む。
+	if got := jobRowOf(t, s, id, 3); got.IssueKey != "" {
+		t.Fatalf("送信中の行に課題キーが入っています: %+v", got)
+	}
+	if err := s.UpdateRowResult(ctx, id, 3, RowStatusDone, 777, "EXA-777", ""); err != nil {
+		t.Fatal(err)
+	}
+	row := jobRowOf(t, s, id, 3)
+	if row.Status != RowStatusDone || row.ResultIssueID != 777 || row.IssueKey != "EXA-777" {
+		t.Errorf("row = %+v", row)
+	}
+}
+
+// TestUpdateRowResult_RejectsIssueKeyOnNonDone は done 以外の遷移で
+// 課題キーを書けないことを確認する。
+//
+// row.IssueKey == "" は「新規追加行」の判定(bulk.Engine)と再開時の突合に
+// 使われるため、送信中(sending)の行にキーを書くと、再開時に更新行と
+// 誤認して二重作成防止が働かなくなる。
+func TestUpdateRowResult_RejectsIssueKeyOnNonDone(t *testing.T) {
+	s := openTempStore(t)
+	ctx := context.Background()
+	id := newTestJob(t, s)
+
+	if err := s.UpdateRowResult(ctx, id, 3, RowStatusSending, 0, "EXA-777", ""); err == nil {
+		t.Fatal("done 以外への遷移で課題キーの記録が許可された")
+	}
+	row := jobRowOf(t, s, id, 3)
+	if row.IssueKey != "" || row.Status != RowStatusPending {
+		t.Errorf("行が書き換わっています: %+v", row)
+	}
+}
+
+// TestUpdateRowResult_KeepsExistingIssueKey は、更新行(既に課題キーを持つ行)を
+// done にしてもキーが消えないことを確認する。
+func TestUpdateRowResult_KeepsExistingIssueKey(t *testing.T) {
+	s := openTempStore(t)
+	ctx := context.Background()
+	id := newTestJob(t, s)
+
+	if err := s.UpdateRowStatus(ctx, id, 2, RowStatusSending, 0, ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.UpdateRowStatus(ctx, id, 2, RowStatusDone, 0, ""); err != nil {
+		t.Fatal(err)
+	}
+	if row := jobRowOf(t, s, id, 2); row.IssueKey != "EXA-1" {
+		t.Errorf("row = %+v", row)
+	}
+}
+
+// jobRowOf は行番号で 1 行を取り出す(検証用)。
+func jobRowOf(t *testing.T, s *Store, jobID int64, rowNo int) JobRow {
+	t.Helper()
+	rows, err := s.ListJobRows(context.Background(), jobID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range rows {
+		if r.RowNo == rowNo {
+			return r
+		}
+	}
+	t.Fatalf("行 %d がありません", rowNo)
+	return JobRow{}
+}
+
 // TestResumeTargets は pending 行と sending 行を区別して返すことを確認する。
 // sending 行は再開時に自動再送してはならない(設計書 5 節)。
 func TestResumeTargets(t *testing.T) {

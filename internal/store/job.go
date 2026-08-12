@@ -272,16 +272,33 @@ func (s *Store) ResumeTargets(ctx context.Context, jobID int64) (pending, sendin
 	return pending, sending, nil
 }
 
-// UpdateRowStatus は行の状態を遷移させる。
+// UpdateRowStatus は行の状態を遷移させる(結果の課題キーは記録しない)。
 // status が done のときは resultIssueID(新規追加で作成された課題 ID)、
 // error のときは errMsg を併せて記録する。
+func UpdateRowStatus(ctx context.Context, q dbtx, jobID int64, rowNo int, status string, resultIssueID int64, errMsg string) error {
+	return UpdateRowResult(ctx, q, jobID, rowNo, status, resultIssueID, "", errMsg)
+}
+
+// UpdateRowResult は行の状態を遷移させ、done のときは結果
+// (作成された課題の ID と課題キー)も併せて記録する。
 //
 // 遷移規則(allowedRowTransitions)に反する更新はエラーにする。
 // 特に done → sending を許すと、完了済みの新規追加行を再送して
 // 課題を二重作成しうる。
-func UpdateRowStatus(ctx context.Context, q dbtx, jobID int64, rowNo int, status string, resultIssueID int64, errMsg string) error {
+//
+// resultIssueKey(新規追加で作成された課題のキー)は done への遷移でのみ
+// 指定できる。job_rows.issue_key が空であることは「新規追加行」の目印であり、
+// 実行エンジンの再開時突合(二重作成防止)がこれを見て判断するため、
+// 結末が確定していない行(sending)や失敗した行に書くと、再開時に
+// 更新行と誤認されてしまう。done 以外で指定された場合はエラーにする
+// (呼び出し側の誤りを黙って通さない)。
+func UpdateRowResult(ctx context.Context, q dbtx, jobID int64, rowNo int, status string,
+	resultIssueID int64, resultIssueKey, errMsg string) error {
 	if !validRowStatuses[status] {
 		return fmt.Errorf("不明な行状態です: %s", status)
+	}
+	if resultIssueKey != "" && status != RowStatusDone {
+		return fmt.Errorf("行 %d: 完了以外の状態(%s)で課題キーは記録できません", rowNo, status)
 	}
 	var current string
 	err := q.QueryRowContext(ctx,
@@ -295,24 +312,38 @@ func UpdateRowStatus(ctx context.Context, q dbtx, jobID int64, rowNo int, status
 	if !allowedRowTransitions[current][status] {
 		return fmt.Errorf("行 %d の状態遷移が不正です(%s → %s)", rowNo, current, status)
 	}
-	// result_issue_id は done のときのみ更新し、それ以外では既存値を保つ
-	// (再実行で結果が消えないようにする)。
-	if status == RowStatusDone && resultIssueID > 0 {
-		_, err = q.ExecContext(ctx,
-			`UPDATE job_rows SET status = ?, result_issue_id = ?, error = ? WHERE job_id = ? AND row_no = ?`,
-			status, resultIssueID, errMsg, jobID, rowNo)
-		return err
+	// result_issue_id・issue_key は done のときだけ更新し、それ以外では既存値を保つ
+	// (再実行で結果が消えない・更新行の課題キーを空にしないようにする)。
+	// 状態と結果は 1 つの UPDATE で書き、「done へ遷移した行にだけ結果が入る」
+	// 状態を保つ(途中で失敗して状態だけ・結果だけが残ることが無い)。
+	sets := []string{"status = ?", "error = ?"}
+	args := []any{status, errMsg}
+	if status == RowStatusDone {
+		if resultIssueID > 0 {
+			sets = append(sets, "result_issue_id = ?")
+			args = append(args, resultIssueID)
+		}
+		if resultIssueKey != "" {
+			sets = append(sets, "issue_key = ?")
+			args = append(args, resultIssueKey)
+		}
 	}
+	args = append(args, jobID, rowNo)
 	_, err = q.ExecContext(ctx,
-		`UPDATE job_rows SET status = ?, error = ? WHERE job_id = ? AND row_no = ?`,
-		status, errMsg, jobID, rowNo)
+		`UPDATE job_rows SET `+strings.Join(sets, ", ")+` WHERE job_id = ? AND row_no = ?`, args...)
 	return err
 }
 
 // UpdateRowStatus は Store 直接実行版(状態確認と更新を 1 トランザクションで行う)。
 func (s *Store) UpdateRowStatus(ctx context.Context, jobID int64, rowNo int, status string, resultIssueID int64, errMsg string) error {
+	return s.UpdateRowResult(ctx, jobID, rowNo, status, resultIssueID, "", errMsg)
+}
+
+// UpdateRowResult は Store 直接実行版(状態確認と更新を 1 トランザクションで行う)。
+func (s *Store) UpdateRowResult(ctx context.Context, jobID int64, rowNo int, status string,
+	resultIssueID int64, resultIssueKey, errMsg string) error {
 	return s.WithTx(ctx, func(tx *sql.Tx) error {
-		return UpdateRowStatus(ctx, tx, jobID, rowNo, status, resultIssueID, errMsg)
+		return UpdateRowResult(ctx, tx, jobID, rowNo, status, resultIssueID, resultIssueKey, errMsg)
 	})
 }
 

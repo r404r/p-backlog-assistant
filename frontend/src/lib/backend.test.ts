@@ -244,3 +244,32 @@ describe('モックバックエンドの getIssueDetail', () => {
     await expect(getBackend().getIssueDetail('p1', projectId, 'SAMPLE-99999')).rejects.toThrow()
   })
 })
+
+/**
+ * モックバックエンドのテンプレート出力(一括更新・追加の①)。
+ *
+ * テンプレートは検索条件で絞り込めるため(条件なし = 全件)、
+ * モックでも条件を反映することを固定する。Wails 外の画面確認で
+ * 「条件を入れても件数が変わらない」という食い違いを起こさないため。
+ */
+describe('モックバックエンドの exportBulkTemplate', () => {
+  /** モックの初期データはプロジェクト 101(SAMPLE)に投入されている */
+  const projectId = 101
+
+  it('条件なしなら全件を出力する', async () => {
+    const all = await getBackend().exportBulkTemplate('p1', projectId, { projectId })
+    expect(all.rows).toBeGreaterThan(0)
+  })
+
+  it('検索条件に一致した課題だけを出力する', async () => {
+    const backend = getBackend()
+    const all = await backend.exportBulkTemplate('p1', projectId, { projectId })
+    const filtered = await backend.exportBulkTemplate('p1', projectId, {
+      projectId,
+      statusName: '処理中',
+    })
+
+    expect(filtered.rows).toBeGreaterThan(0)
+    expect(filtered.rows).toBeLessThan(all.rows)
+  })
+})

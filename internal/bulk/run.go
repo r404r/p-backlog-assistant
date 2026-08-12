@@ -287,10 +287,15 @@ func (e *Engine) processRow(ctx context.Context, job *store.Job, row store.JobRo
 		}
 		switch match.kind {
 		case matchFound:
-			claimed[match.issue.ID] = true
-			res.Done++
-			res.warn("行 %d: 作成済みを検出したため再送しませんでした(課題 %s)", row.RowNo, match.issue.IssueKey)
-			return e.markRow(ctx, row, store.RowStatusDone, match.issue.ID, "", res)
+			recorded, merr := e.markRowCreated(ctx, row, match.issue, claimed, res)
+			if merr != nil {
+				return merr
+			}
+			if recorded {
+				res.warn("行 %d: 作成済みを検出したため再送しませんでした(課題 %s)",
+					row.RowNo, match.issue.IssueKey)
+			}
+			return nil
 		case matchAmbiguous:
 			// 候補が複数ある / 件名しか一致しない場合は、再送すれば二重作成、
 			// 完了扱いにすれば取りこぼしになる。判断は利用者に委ねる(高 1(c))。
@@ -312,9 +317,8 @@ func (e *Engine) processRow(ctx context.Context, job *store.Job, row store.JobRo
 		if cerr != nil {
 			return e.handleWriteError(ctx, row, cerr, res)
 		}
-		claimed[issue.ID] = true // 同一ジョブ内の他行が同じ課題を拾わないようにする
-		res.Done++
-		return e.markRow(ctx, row, store.RowStatusDone, issue.ID, "", res)
+		_, cerr = e.markRowCreated(ctx, row, *issue, claimed, res)
+		return cerr
 	}
 	e.waitBeforeCall() // 書き込み間隔を空ける(中 4)
 	_, uerr := e.api.UpdateIssue(ctx, row.IssueKey, updateParamsOf(payload))
@@ -585,6 +589,38 @@ func (e *Engine) markRow(ctx context.Context, row store.JobRow, status string, r
 		return fmt.Errorf("行 %d の状態を保存できませんでした: %w", row.RowNo, err)
 	}
 	return nil
+}
+
+// markRowCreated は新規追加が成立した行(送信して作成できた行・再送前突合で
+// 作成済みを検出した行)を done にし、課題の ID とキーを記録する。
+// 記録したときだけ完了件数を数え、同一ジョブ内の他行が同じ課題を拾わないよう
+// claimed へ加える。戻り値の recorded は「done として記録したか」。
+//
+// 課題キーを書き込むのは、この「done へ遷移する 1 つの UPDATE」だけに限る
+// (store.UpdateRowResult も done 以外での指定を拒否する)。
+// job_rows.issue_key が空であることは新規追加行の目印であり、送信前(sending)に
+// 書いてしまうと、再開時に更新行と誤認して再送前突合(二重作成防止)が
+// 働かなくなるため。
+//
+// 応答から課題を特定できない(ID・課題キーのどちらかが欠ける)場合は done に
+// せず、行を sending のまま残して警告する(2 回目 中 2)。不完全なまま done に
+// すると、その行は二度と再送・突合の対象にならず、「作成されたかもしれない
+// 課題」を追えなくなる。成否不明の書き込み(高 4)と同じく判断を先送りし、
+// 次回の再送指示で改めて突合させる。
+func (e *Engine) markRowCreated(ctx context.Context, row store.JobRow, issue backlogclient.Issue,
+	claimed map[int64]bool, res *RunResult) (recorded bool, err error) {
+	if issue.ID <= 0 || issue.IssueKey == "" {
+		res.warn("行 %d: 応答から作成された課題を特定できませんでした(ID %d / キー %q)。"+
+			"作成済みかを Backlog 上で確認のうえ、再送を指示してください", row.RowNo, issue.ID, issue.IssueKey)
+		return false, nil // sending のまま残す(状態を変えない)
+	}
+	if err := e.st.UpdateRowResult(ctx, row.JobID, row.RowNo,
+		store.RowStatusDone, issue.ID, issue.IssueKey, ""); err != nil {
+		return false, fmt.Errorf("行 %d の状態を保存できませんでした: %w", row.RowNo, err)
+	}
+	claimed[issue.ID] = true
+	res.Done++
+	return true, nil
 }
 
 // createParamsOf は payload を課題追加のパラメータへ変換する。

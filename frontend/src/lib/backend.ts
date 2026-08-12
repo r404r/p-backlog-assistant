@@ -805,7 +805,8 @@ export interface Backend {
    * 一括更新テンプレート(xlsx)を出力する。
    * 保存先は Go 側の保存ダイアログで選択する。キャンセル時は path が空文字。
    * @param projectId 対象プロジェクト ID(テンプレートに固定される)
-   * @param query     テンプレートに含める課題の条件(現状は projectId のみを使う)
+   * @param query     テンプレートに含める課題の条件(条件が空なら対象プロジェクトの全件。
+   *                  カスタム属性での絞り込みは未対応)
    */
   exportBulkTemplate(
     profileId: string,
@@ -1972,13 +1973,17 @@ function createMockBackend(): Backend {
       }
     },
 
-    async exportBulkTemplate(_profileId, projectId) {
+    async exportBulkTemplate(_profileId, projectId, query) {
       await delay(700)
       const all = issuesByProject.get(projectId) ?? []
+      // テンプレートは検索条件で絞り込める(条件なし = 全件)。
+      // 課題抽出の Excel 出力と同じ絞り込みを通し、件数が条件に追従することを
+      // Wails 外の画面確認でも再現する
+      const { rows: matched } = filterMockIssues(all, query)
       // モックでは保存ダイアログを出せないため、ダミーのパスを返す
       return {
         path: '(モック)保存ダイアログは Wails 実行時のみ表示されます',
-        rows: all.length,
+        rows: matched.length,
         unverifiable: 0,
       }
     },
@@ -2133,8 +2138,13 @@ function createMockBackend(): Backend {
           row.status = 'done'
           row.error = ''
           if (!row.issueKey) {
-            // 新規追加行は作成済みの課題 ID が付く(再送時の二重作成防止の突合に使う)
+            // 新規追加行には、作成された課題の ID(再送時の二重作成防止の突合に使う)と
+            // 課題キー(結果レポート・行明細の表示に使う)が付く。
+            // Go 側も完了(done)へ遷移するときにだけ課題キーを記録する
             row.resultIssueId = 900000 + row.rowNo
+            const projectKey =
+              projects.find((p) => p.id === job.projectId)?.projectKey ?? 'MOCK'
+            row.issueKey = `${projectKey}-${row.resultIssueId}`
           }
         }
         emitMockProgress({ jobId, processed: i + 1, total })
