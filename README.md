@@ -11,6 +11,8 @@ Nulab [Backlog](https://backlog.com/ja/) の課題とユーザ情報を、ロー
 
 [Releases](https://github.com/r404r/p-backlog-assistant/releases) から最新版の zip(Windows / macOS)をダウンロードして展開してください。開発中の最新ビルドは Actions の Artifacts にあります。
 
+インストール手順・各画面の操作方法・Excel テンプレートの記入規則は [ユーザガイド](docs/USER_GUIDE.md) を参照してください。
+
 ## 機能
 
 ### 接続設定
