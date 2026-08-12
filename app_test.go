@@ -484,6 +484,61 @@ func TestExportIssuesToFile_RowLimitLeavesExistingFile(t *testing.T) {
 	}
 }
 
+// TestNewProjectRows は、プロジェクト一覧と同期状態一覧(1 回の取得)の
+// 突き合わせが、プロジェクトごとに同期状態を引いていた頃と同じ結果になることを
+// 確認する(R18: N+1 解消)。
+func TestNewProjectRows(t *testing.T) {
+	projects := []store.Project{
+		{ID: 1, ProjectKey: "EXA", Name: "検証用"},
+		{ID: 2, ProjectKey: "SUB", Name: "未同期"},
+	}
+	states := []store.SyncState{
+		// 課題以外の種別・別プロジェクトの行が混ざっていても取り違えない
+		{DataKind: store.DataKindUsers, ProjectID: store.ProjectScopeAll, LastSyncedAt: "2026-08-10T00:00:00Z"},
+		{DataKind: store.DataKindIssues, ProjectID: 1, LastSyncedAt: "2026-08-12T09:00:00Z"},
+		{DataKind: store.DataKindProjects, ProjectID: 2, LastSyncedAt: "2026-08-11T00:00:00Z"},
+	}
+
+	got := newProjectRows(projects, states, false)
+	want := []ProjectRow{
+		{ID: 1, ProjectKey: "EXA", Name: "検証用", LastSyncedAt: "2026-08-12T09:00:00Z"},
+		{ID: 2, ProjectKey: "SUB", Name: "未同期", LastSyncedAt: ""},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("行数 = %d, want %d(%+v)", len(got), len(want), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("行 %d = %+v, want %+v", i, got[i], want[i])
+		}
+	}
+}
+
+// TestNewProjectRows_UnknownSyncState は、同期状態を取得できなかった場合に
+// 全行が「不明」になり、最終同期時刻を「未同期」と断定しないことを確認する(中 1)。
+func TestNewProjectRows_UnknownSyncState(t *testing.T) {
+	projects := []store.Project{{ID: 1, ProjectKey: "EXA", Name: "検証用"}}
+
+	got := newProjectRows(projects, nil, true)
+	if len(got) != 1 {
+		t.Fatalf("行数 = %d, want 1", len(got))
+	}
+	if !got[0].SyncStateUnknown {
+		t.Errorf("SyncStateUnknown = false, want true(%+v)", got[0])
+	}
+	if got[0].LastSyncedAt != "" {
+		t.Errorf("LastSyncedAt = %q, want \"\"", got[0].LastSyncedAt)
+	}
+}
+
+// TestNewProjectRows_EmptyIsNotNil は、プロジェクトが 0 件でも JSON が
+// null にならない(フロントが配列として扱える)ことを確認する。
+func TestNewProjectRows_EmptyIsNotNil(t *testing.T) {
+	if got := newProjectRows(nil, nil, false); got == nil {
+		t.Error("newProjectRows = nil, want 空スライス")
+	}
+}
+
 // TestSyncProgressPayload は課題同期の進捗イベント(sync:progress)の
 // ペイロードが、フロントエンド(backend.ts の SyncProgress)の期待どおりの
 // キー・型で組み立てられることを確認する。

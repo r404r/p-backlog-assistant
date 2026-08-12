@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -151,6 +152,43 @@ func TestDBPathIn(t *testing.T) {
 	got = DBPathIn("/base", "bad/host\\name", 1)
 	if filepath.Base(got) != "bad_host_name_1.db" {
 		t.Errorf("サニタイズ結果 = %q", filepath.Base(got))
+	}
+}
+
+// TestDsnFor は接続文字列に接続単位の PRAGMA が載ること、
+// パスに '?' を含む場合はエラーになることを確認する(R18)。
+func TestDsnFor(t *testing.T) {
+	dsn, err := dsnFor("/base/example.backlog.jp_1.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(dsn, "/base/example.backlog.jp_1.db?") {
+		t.Errorf("DSN = %q, want パスで始まること", dsn)
+	}
+	// FK は接続単位のため DSN で全接続に適用する(既存仕様)
+	if !strings.Contains(dsn, "_pragma=foreign_keys(1)") {
+		t.Errorf("DSN = %q, want foreign_keys(1) を含むこと", dsn)
+	}
+	// ロック待ちで即座に SQLITE_BUSY を返さないようにする(R18)
+	if !strings.Contains(dsn, "_pragma=busy_timeout(5000)") {
+		t.Errorf("DSN = %q, want busy_timeout(5000) を含むこと", dsn)
+	}
+
+	if _, err := dsnFor("/base/what?.db"); err == nil {
+		t.Error("'?' を含むパスがエラーにならなかった")
+	}
+}
+
+// TestOpen_BusyTimeoutApplied は DSN の busy_timeout が実際の接続へ
+// 適用されていることを確認する(綴り間違い等で黙って無視されないように)。
+func TestOpen_BusyTimeoutApplied(t *testing.T) {
+	s := openTempStore(t)
+	var ms int
+	if err := s.DB().QueryRow(`PRAGMA busy_timeout`).Scan(&ms); err != nil {
+		t.Fatal(err)
+	}
+	if ms != 5000 {
+		t.Errorf("busy_timeout = %d, want 5000", ms)
 	}
 }
 

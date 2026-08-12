@@ -25,7 +25,40 @@ type ProjectRow struct {
 	SyncStateUnknown bool `json:"syncStateUnknown"`
 }
 
+// newProjectRows はプロジェクト一覧と同期状態一覧を突き合わせて一覧の行を組み立てる。
+//
+// 同期状態は「課題(issues)」の行だけを見る。プロジェクト一覧の鮮度表示は
+// 課題同期の最終時刻を指すため、ユーザ・チーム等の行を拾ってはならない。
+// syncStateUnknown が真のときは全行を「不明」にする(取得自体が失敗したため、
+// どのプロジェクトについても未同期と断定できない。中 1)。
+func newProjectRows(projects []store.Project, states []store.SyncState, syncStateUnknown bool) []ProjectRow {
+	lastSyncedAt := make(map[int64]string, len(states))
+	for _, st := range states {
+		if st.DataKind == store.DataKindIssues {
+			lastSyncedAt[st.ProjectID] = st.LastSyncedAt
+		}
+	}
+	rows := make([]ProjectRow, 0, len(projects))
+	for _, p := range projects {
+		last := ""
+		if !syncStateUnknown {
+			last = lastSyncedAt[p.ID]
+		}
+		rows = append(rows, ProjectRow{
+			ID:               p.ID,
+			ProjectKey:       p.ProjectKey,
+			Name:             p.Name,
+			LastSyncedAt:     last,
+			SyncStateUnknown: syncStateUnknown,
+		})
+	}
+	return rows
+}
+
 // ListProjects はローカル DB のプロジェクト一覧を返す。
+//
+// 同期状態はプロジェクトごとに引かず、ListSyncStates で一度に取得して
+// メモリ上で突き合わせる(以前はプロジェクト数 + 1 回のクエリを発行していた。R18)。
 func (a *App) ListProjects(profileID string) ([]ProjectRow, error) {
 	attrs := []slog.Attr{slog.String("profileId", profileID)}
 	return appOp(a, "ListProjects", attrs,
@@ -34,29 +67,13 @@ func (a *App) ListProjects(profileID string) ([]ProjectRow, error) {
 			if err != nil {
 				return nil, nil, err
 			}
-			rows := make([]ProjectRow, 0, len(projects))
-			for _, p := range projects {
-				last := ""
-				unknown := false
-				st, serr := s.GetSyncState(a.ctx, profileID, "", p.ID)
-				switch {
-				case serr != nil:
-					// 鮮度が取れないと同期済みでも「未同期」と表示されてしまうため、
-					// 「不明」であることを UI へ伝えつつ原因をログに残す(黙って握り潰さない)
-					unknown = true
-					a.log.OpError("ListProjects 同期状態の取得", serr,
-						slog.String("profileId", profileID), slog.Int64("projectId", p.ID))
-				case st != nil:
-					last = st.LastSyncedAt
-				}
-				rows = append(rows, ProjectRow{
-					ID:               p.ID,
-					ProjectKey:       p.ProjectKey,
-					Name:             p.Name,
-					LastSyncedAt:     last,
-					SyncStateUnknown: unknown,
-				})
+			states, serr := s.ListSyncStates(a.ctx, profileID)
+			if serr != nil {
+				// 鮮度が取れないと同期済みでも「未同期」と表示されてしまうため、
+				// 「不明」であることを UI へ伝えつつ原因をログに残す(黙って握り潰さない)
+				a.log.OpError("ListProjects 同期状態の取得", serr, slog.String("profileId", profileID))
 			}
+			rows := newProjectRows(projects, states, serr != nil)
 			return rows, []slog.Attr{slog.Int("count", len(rows))}, nil
 		})
 }

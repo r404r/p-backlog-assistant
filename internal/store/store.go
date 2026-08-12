@@ -70,9 +70,20 @@ func sanitizeFileComponent(s string) string {
 	}, s)
 }
 
+// busyTimeoutMs はロック待ちの上限(ミリ秒)。
+//
+// 待たずに即 SQLITE_BUSY を返す既定(0)だと、他プロセスが同じ DB ファイルを
+// 開いている間(バックアップソフト・SQLite ビューア・旧プロセスの終了直後など)に
+// 操作が理由の分かりにくいエラーで失敗する。本アプリは接続を 1 本に絞っている
+// (SetMaxOpenConns(1))ため自プロセス内の競合は起きないが、外部プロセスの
+// アクセスは防げないため、短時間の待機で自動回復させる。
+// 5 秒は「一時的なロックは吸収し、恒久的なロックでは画面が固まったと感じる前に
+// エラーを返す」折衷値。
+const busyTimeoutMs = 5000
+
 // dsnFor は DB ファイルパスから接続文字列を組み立てる。
 //
-// foreign_keys は接続単位の設定で、PRAGMA を 1 度実行しただけでは
+// foreign_keys / busy_timeout は接続単位の設定で、PRAGMA を 1 度実行しただけでは
 // 「その接続」にしか効かない。database/sql のプールが接続を破棄して
 // 張り直すと参照整合性が黙って無効になり、v4 で導入した FK 制約
 // (孤児行の防止。R8)が働かなくなる。DSN に載せておけば、
@@ -92,7 +103,7 @@ func dsnFor(path string) (string, error) {
 	if strings.Contains(path, "?") {
 		return "", fmt.Errorf("DB ファイルのパスに '?' は使えません: %s", path)
 	}
-	return path + "?_pragma=foreign_keys(1)", nil
+	return fmt.Sprintf("%s?_pragma=foreign_keys(1)&_pragma=busy_timeout(%d)", path, busyTimeoutMs), nil
 }
 
 // Open は DB ファイルを開き(無ければ作成し)、マイグレーションを適用する。
@@ -133,7 +144,7 @@ func Open(path string) (*Store, error) {
 	// modernc.org/sqlite は同時書き込みに弱いため接続数を絞る
 	db.SetMaxOpenConns(1)
 	// journal_mode は DB ファイルに永続化されるためここで 1 度設定すればよい
-	// (foreign_keys は接続単位なので DSN 側で設定する。dsnFor 参照)。
+	// (foreign_keys・busy_timeout は接続単位なので DSN 側で設定する。dsnFor 参照)。
 	if _, err := db.Exec(`PRAGMA journal_mode = WAL;`); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("PRAGMA の設定に失敗しました: %w", err)

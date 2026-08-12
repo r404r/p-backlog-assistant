@@ -90,10 +90,7 @@ func TestSyncUsers_ThenListUsers(t *testing.T) {
 	}
 
 	// 同期状態(users / project_id 0)が記録される
-	state, err := s.GetSyncState(ctx, id, store.DataKindUsers, store.ProjectScopeAll)
-	if err != nil {
-		t.Fatal(err)
-	}
+	state := findSyncState(t, s, id, store.DataKindUsers, store.ProjectScopeAll)
 	if state == nil || state.LastSyncedAt == "" {
 		t.Errorf("同期状態 = %+v", state)
 	}

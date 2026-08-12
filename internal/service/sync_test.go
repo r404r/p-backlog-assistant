@@ -25,6 +25,21 @@ func newSyncTestService(t *testing.T, fake *fakeConnector) (*ProfileService, str
 	return s, res.Profile.ID
 }
 
+// findSyncState は ListSyncStates から該当する 1 行を取り出す(見つからなければ nil)。
+func findSyncState(t *testing.T, s *ProfileService, profileID, dataKind string, projectID int64) *store.SyncState {
+	t.Helper()
+	states, err := s.ListSyncStates(context.Background(), profileID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range states {
+		if states[i].DataKind == dataKind && states[i].ProjectID == projectID {
+			return &states[i]
+		}
+	}
+	return nil
+}
+
 func fakeIssue(id int64, key string, projectID int64, summary, created, updated string) backlogclient.Issue {
 	raw, _ := json.Marshal(map[string]any{"id": id, "issueKey": key, "summary": summary})
 	return backlogclient.Issue{
@@ -133,10 +148,7 @@ func TestSyncIssues_ThenSearchAndFilterOptions(t *testing.T) {
 		t.Errorf("状態候補 = %v", opts.StatusNames)
 	}
 
-	state, err := s.GetSyncState(ctx, id, "", 1)
-	if err != nil {
-		t.Fatal(err)
-	}
+	state := findSyncState(t, s, id, store.DataKindIssues, 1)
 	if state == nil || state.LastSyncedAt == "" {
 		t.Errorf("同期状態 = %+v", state)
 	}
@@ -276,16 +288,18 @@ func TestSyncIssues_RejectsUnknownMode(t *testing.T) {
 	}
 }
 
-func TestGetSyncState_UnsyncedReturnsNil(t *testing.T) {
+// TestListSyncStates_UnsyncedIsEmpty は、一度も同期していないプロファイルで
+// 同期状態が空になること(未同期の判定材料になること)を確認する。
+func TestListSyncStates_UnsyncedIsEmpty(t *testing.T) {
 	fake := &fakeConnector{info: testInfo()}
 	s, id := newSyncTestService(t, fake)
 
-	state, err := s.GetSyncState(context.Background(), id, store.DataKindIssues, 99)
+	states, err := s.ListSyncStates(context.Background(), id)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if state != nil {
-		t.Errorf("未同期の状態 = %+v, want nil", state)
+	if len(states) != 0 {
+		t.Errorf("未同期の状態 = %+v, want 空", states)
 	}
 }
 

@@ -34,7 +34,9 @@ const (
 	// pageSize は課題一覧・アクティビティの 1 ページ件数(API 上限)。
 	pageSize = backlogclient.MaxPageSize
 	// deleteConfirmLimit は削除候補を個別 GET で確認する上限(設計書 3 節)。
-	// これ以上はリコンシリエーション待ちとし、誤削除を避けて保留する。
+	// これ以上は誤削除・大量 API 呼び出しを避けて削除を保留する(警告のみ)。
+	// 保留は自動では解除されない(候補がこの件数未満に減るまで、フル同期を
+	// 繰り返しても同じ判断になる)ため、警告文で利用者の対処を案内する。
 	deleteConfirmLimit = 100
 	// maxPages はページングの安全上限(API 異常での無限ループ防止)。
 	// pageSize=100 なので課題 500,000 件相当。
@@ -279,8 +281,8 @@ func (e *Engine) fullSyncIssues(ctx context.Context, projectID int64, onProgress
 
 // confirmDeleteCandidates は削除候補を GET /issues/:issueKey の 404 で確認し、
 // 削除確定した課題 ID と、200 で取得できた(= 実在する)課題を返す。
-// 候補が deleteConfirmLimit 以上の場合は確認せず警告のみ返す
-// (リコンシリエーションで回収する。設計書 3 節)。
+// 候補が deleteConfirmLimit 以上の場合は確認せず警告のみ返し、削除は行わない
+// (設計書 3 節。保留は自動解除されないため、警告文で対処を案内する)。
 func (e *Engine) confirmDeleteCandidates(ctx context.Context, projectID int64, seen map[int64]bool, res *Result) ([]int64, []backlogclient.Issue, error) {
 	refs, err := e.st.ListIssueRefs(ctx, projectID)
 	if err != nil {
@@ -296,7 +298,14 @@ func (e *Engine) confirmDeleteCandidates(ctx context.Context, projectID int64, s
 		return nil, nil, nil
 	}
 	if len(candidates) >= deleteConfirmLimit {
-		res.warn("削除候補が %d 件と多数のため、今回は削除を保留しました(次回のリコンシリエーションで確定します)", len(candidates))
+		// 保留は自動では解除されない(次のフル同期でも候補は同じだけ残る)。
+		// 「次回確定します」と案内すると待てば直ると誤解させるため、
+		// 実際に必要な対処まで書く。
+		res.warn("削除候補が %d 件と多数のため、削除の反映を保留しました(誤削除の防止)。"+
+			"候補が %d 件未満にならない限り、フル同期を繰り返しても保留は解除されません。"+
+			"Backlog 側で実際に大量の課題を削除した場合は、アプリを終了してから"+
+			"ローカル DB ファイル(保存先はアプリ情報画面に表示。同名の -wal・-shm ファイルも含む)を削除し、"+
+			"再起動後にフル同期を実行してください", len(candidates), deleteConfirmLimit)
 		return nil, nil, nil
 	}
 	var confirmed []int64

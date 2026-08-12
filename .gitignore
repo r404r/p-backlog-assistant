@@ -13,6 +13,8 @@ frontend/dist
 *.db-journal
 # 動作ログ(パスや操作内容を含む)
 logs/
+# 起動失敗の記録(動作ログを開けなかった場合に実行ファイル横へ出力される)
+crash.txt
 # シークレット(スペース URL・API キー等)
 .env
 .env.*

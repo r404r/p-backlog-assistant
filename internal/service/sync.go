@@ -262,23 +262,11 @@ func (s *ProfileService) ListFilterOptions(ctx context.Context, profileID string
 	return st.ListFilterOptions(ctx, projectID)
 }
 
-// GetSyncState はデータ種別ごとの同期状態を返す(画面 5 の鮮度表示用)。
-// 未同期の場合は nil を返す。dataKind の既定は "issues"。
-func (s *ProfileService) GetSyncState(ctx context.Context, profileID, dataKind string, projectID int64) (*store.SyncState, error) {
-	// store を使う操作はプロファイルの削除・保存と排他する(高 2)
-	s.profileMu.RLock()
-	defer s.profileMu.RUnlock()
-	if dataKind == "" {
-		dataKind = store.DataKindIssues
-	}
-	st, err := s.storeForProfile(profileID)
-	if err != nil {
-		return nil, err
-	}
-	return st.GetSyncState(ctx, dataKind, projectID)
-}
-
-// ListSyncStates は全同期状態を返す(同期状態画面用)。
+// ListSyncStates は全同期状態を返す(同期状態画面・プロジェクト一覧の鮮度表示用)。
+//
+// 種別・プロジェクト単位の取得メソッドは置いていない。呼び出し側(画面)は
+// 一覧をまとめて受け取り、必要な行を選ぶ。プロジェクトごとに引くと
+// プロジェクト数ぶんのクエリになるため(R18)。
 func (s *ProfileService) ListSyncStates(ctx context.Context, profileID string) ([]store.SyncState, error) {
 	// store を使う操作はプロファイルの削除・保存と排他する(高 2)
 	s.profileMu.RLock()

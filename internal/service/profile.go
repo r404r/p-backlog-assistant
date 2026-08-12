@@ -74,7 +74,7 @@ type ProfileService struct {
 	// そのプロファイルを使う操作(同期・store 参照)を排他する(高 2)。
 	//   - Lock  : SaveProfile / DeleteProfile
 	//   - RLock : SyncProjects / SyncIssues / SearchIssues / ListFilterOptions /
-	//             GetSyncState / ListSyncStates / ListProjects
+	//             ListSyncStates / ListProjects
 	//             (= storeForProfile を使う操作)
 	//             TestConnectionForProfile / GetPermissionStatus
 	//             (= 保存済み設定・キーチェーン・クライアントキャッシュを使う操作。中 1)

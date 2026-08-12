@@ -236,8 +236,19 @@ func TestFullSync_TooManyCandidatesSkipsDeletion(t *testing.T) {
 	if len(api.getIssueCalls) != 0 {
 		t.Errorf("多数候補なのに個別確認が走った: %d 件", len(api.getIssueCalls))
 	}
-	if len(res.Warnings) == 0 || !strings.Contains(strings.Join(res.Warnings, "/"), "削除候補") {
+	// 警告文は実装どおりの内容であること(「次回自動的に確定する」等、
+	// 実際には起こらないことを利用者に期待させない)
+	warns := strings.Join(res.Warnings, "/")
+	if len(res.Warnings) == 0 || !strings.Contains(warns, "削除候補が 120 件") {
 		t.Errorf("警告 = %v", res.Warnings)
+	}
+	if !strings.Contains(warns, "保留") || !strings.Contains(warns, "解除されません") {
+		t.Errorf("保留が自動解除されない旨が案内されていない: %v", res.Warnings)
+	}
+	for _, ng := range []string{"次回", "リコンシリエーション"} {
+		if strings.Contains(warns, ng) {
+			t.Errorf("実装と食い違う文言 %q が含まれる: %v", ng, res.Warnings)
+		}
 	}
 	ids, _ := s.ListIssueIDs(ctx, 1)
 	if len(ids) != 121 {
