@@ -8,6 +8,11 @@ const backend = getBackend()
 
 /** リポジトリ・不具合報告の窓口 */
 const REPOSITORY_URL = 'https://github.com/r404r/p-backlog-assistant'
+/** README(リポジトリ先頭の説明) */
+const README_URL = 'https://github.com/r404r/p-backlog-assistant#readme'
+/** ユーザガイド(操作手順の詳細) */
+const USER_GUIDE_URL =
+  'https://github.com/r404r/p-backlog-assistant/blob/main/docs/USER_GUIDE.md'
 /** 連絡先(問い合わせ) */
 const CONTACT_MAIL = 'r404r.dev@gmail.com'
 
@@ -83,6 +88,23 @@ function openLink(url: string): void {
             @click.prevent="openLink(REPOSITORY_URL)"
           >{{ REPOSITORY_URL }}</a>
           <span class="note">不具合の報告・要望はこちらの Issues へお寄せください。</span>
+        </dd>
+
+        <dt>ドキュメント</dt>
+        <dd>
+          <span class="doc-links">
+            <a
+              class="link"
+              :href="README_URL"
+              @click.prevent="openLink(README_URL)"
+            >README</a>
+            <a
+              class="link"
+              :href="USER_GUIDE_URL"
+              @click.prevent="openLink(USER_GUIDE_URL)"
+            >ユーザガイド</a>
+          </span>
+          <span class="note">既定のブラウザで開きます(概要は README、操作手順はユーザガイド)。</span>
         </dd>
 
         <dt>連絡先</dt>
@@ -214,6 +236,13 @@ h2 {
 .link {
   color: #0b5cad;
   cursor: pointer;
+}
+
+/* 複数リンクを横並びにする。狭いウインドウでは折り返す */
+.doc-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 1rem;
 }
 
 .note {
