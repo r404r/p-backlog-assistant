@@ -593,28 +593,41 @@ const spaceUrl = ref('')
 /** 課題キーをクリックで URL コピーできるか(スペース URL が分かる場合のみ) */
 const canCopyIssueUrl = computed(() => !!spaceUrl.value)
 
-/** 「コピーしました」を表示中の課題キー(空 = 非表示) */
-const copiedIssueKey = ref('')
+/**
+ * コピー完了のトーストに表示中の課題キー(空 = 非表示)。
+ *
+ * 以前は課題キーのセル内に「コピーしました」を出していたが、表示・消滅のたびに
+ * 列幅が変わってテーブルがずれるため、レイアウトに影響しない固定位置の
+ * トースト(画面下部中央)に変更した。
+ */
+const copyToastKey = ref('')
 
 /** コピーに失敗したときの説明(空 = 正常) */
 const copyError = ref('')
 
-/** 「コピーしました」の表示時間(ミリ秒) */
-const COPIED_FEEDBACK_MS = 2000
+/** トーストの表示時間(ミリ秒) */
+const COPY_TOAST_MS = 2000
 
 /**
- * 「コピーしました」を消すタイマー。
+ * トーストを消すタイマー。
  * 別の行を続けてクリックした場合・連打した場合に、前のタイマーが後の表示を
  * 消してしまわないよう、常に 1 本だけ持って張り替える。
  */
 let copiedTimer: ReturnType<typeof setTimeout> | null = null
+
+/**
+ * コピー操作の要求番号。連打時に非同期のコピー完了順が逆転しても、
+ * 「最後にクリックした操作」だけがトースト・タイマー・エラーを更新する
+ * (古い完了が新しいトーストを上書き・消去しないため)。
+ */
+let copyRequestSeq = 0
 
 function clearCopiedFeedback() {
   if (copiedTimer !== null) {
     clearTimeout(copiedTimer)
     copiedTimer = null
   }
-  copiedIssueKey.value = ''
+  copyToastKey.value = ''
 }
 
 /**
@@ -640,20 +653,25 @@ async function copyIssueUrl(issueKey: string) {
   const url = issueUrl(spaceUrl.value, issueKey)
   // スペース URL が分からない場合はボタン自体を出していないが、念のため何もしない
   if (!url) return
+  const seq = ++copyRequestSeq
   try {
     await copyToClipboard(url)
+    // 完了までの間に別の課題キーがクリックされていたら、この(古い)結果は反映しない
+    if (seq !== copyRequestSeq) return
     copyError.value = ''
     if (copiedTimer !== null) clearTimeout(copiedTimer)
     // 同じ課題を連続コピーしたときも支援技術(role="status")へ再通知されるよう、
     // 一度空にして次のティックで再設定する(DOM 内容が変化しないと読み上げられない)
-    copiedIssueKey.value = ''
+    copyToastKey.value = ''
     await nextTick()
-    copiedIssueKey.value = issueKey
+    if (seq !== copyRequestSeq) return
+    copyToastKey.value = issueKey
     copiedTimer = setTimeout(() => {
-      copiedIssueKey.value = ''
+      copyToastKey.value = ''
       copiedTimer = null
-    }, COPIED_FEEDBACK_MS)
+    }, COPY_TOAST_MS)
   } catch (e) {
+    if (seq !== copyRequestSeq) return
     // 成功表示が残っていると失敗に気づけないため、先に消してからエラーを出す
     clearCopiedFeedback()
     copyError.value = `課題 URL をコピーできませんでした: ${errorMessage(e)}`
@@ -1195,9 +1213,6 @@ async function exportExcel() {
                     {{ r.issueKey }}
                   </button>
                   <template v-else>{{ r.issueKey }}</template>
-                  <span v-if="copiedIssueKey === r.issueKey" class="copied" role="status">
-                    コピーしました
-                  </span>
                 </td>
                 <td>{{ r.summary }}</td>
                 <td class="nowrap">{{ r.statusName }}</td>
@@ -1275,6 +1290,17 @@ async function exportExcel() {
         </div>
       </section>
     </template>
+
+    <!-- コピー完了の通知(トースト)。
+         行内に出すと課題キー列の幅が変わってテーブルがずれるため、
+         レイアウトに影響しない固定位置(画面下部中央)へ出す。
+         今のところ使うのはこの画面だけなので lib/ へは切り出さない
+         (2 画面目で必要になった時点で共通コンポーネント化する) -->
+    <Transition name="toast">
+      <p v-if="copyToastKey" class="copy-toast" role="status">
+        課題 URL をコピーしました({{ copyToastKey }})
+      </p>
+    </Transition>
   </div>
 </template>
 
@@ -1589,11 +1615,45 @@ button.issue-key:hover {
   color: #094c8f;
 }
 
-/* コピー成功のフィードバック(数秒で消える) */
-.copied {
-  margin-left: 0.4rem;
-  font-size: 0.75rem;
+/* コピー成功のトースト(数秒で自動的に消える)。
+   position: fixed のためテーブルの列幅・スクロール位置に影響しない。
+   配色は既存の成功表示(.result.ok)に合わせる */
+.copy-toast {
+  position: fixed;
+  left: 50%;
+  bottom: 2rem;
+  transform: translateX(-50%);
+  margin: 0;
+  padding: 0.5rem 1rem;
+  border: 1px solid #7fbf90;
+  border-radius: 999px;
+  background: #e9f5ec;
   color: #1a7f37;
+  font-size: 0.85rem;
+  white-space: nowrap;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  /* 表の固定ヘッダ(z-index: 1)より手前に出す。クリックは下の要素へ通す */
+  z-index: 50;
+  pointer-events: none;
+}
+
+/* 表示・消滅のフェード(消える瞬間が唐突にならないように) */
+.toast-enter-active,
+.toast-leave-active {
+  transition: opacity 0.2s ease;
+}
+
+.toast-enter-from,
+.toast-leave-to {
+  opacity: 0;
+}
+
+/* 動きを抑える設定(App.vue のサイドバーと同じ流儀)ではフェードしない */
+@media (prefers-reduced-motion: reduce) {
+  .toast-enter-active,
+  .toast-leave-active {
+    transition: none;
+  }
 }
 
 .columns {
