@@ -886,6 +886,11 @@ interface WailsRuntime {
   EventsOn(name: string, callback: (...data: unknown[]) => void): () => void
   /** 既定のブラウザで URL を開く */
   BrowserOpenURL(url: string): void
+  /**
+   * クリップボードへ文字列を書き込む(Wails v2.13 の公式 API)。
+   * 失敗時は reject する(解決値は成功を表す真偽値)。
+   */
+  ClipboardSetText(text: string): Promise<boolean>
 }
 
 /**
@@ -2165,6 +2170,34 @@ export function openExternalURL(url: string): void {
     return
   }
   window.open(url, '_blank', 'noopener,noreferrer')
+}
+
+/**
+ * クリップボードへ文字列をコピーする。
+ *
+ * Wails ランタイムの ClipboardSetText を第一の経路にする。WebView 内の
+ * navigator.clipboard は権限・フォーカスの条件に左右されるため、デスクトップ
+ * アプリとして確実に動く OS 側の API を優先する。ランタイムが無い環境
+ * (vite dev / テスト)や古いランタイム(ClipboardSetText 未実装)では
+ * navigator.clipboard.writeText へフォールバックする。
+ *
+ * どちらも使えない場合は例外を投げる(コピーできていないのに成功したように
+ * 見せると、利用者が空のクリップボードを貼り付けてしまうため)。
+ */
+export async function copyToClipboard(text: string): Promise<void> {
+  const rt = findWailsRuntimeObject()
+  if (rt && typeof rt.ClipboardSetText === 'function') {
+    // 失敗は reject で届くが、真偽値で失敗を返す実装に備えて false も失敗として扱う
+    const ok = await rt.ClipboardSetText(text)
+    if (ok === false) throw new Error('クリップボードへの書き込みが拒否されました')
+    return
+  }
+  const clipboard = navigator.clipboard as Clipboard | undefined
+  if (clipboard && typeof clipboard.writeText === 'function') {
+    await clipboard.writeText(text)
+    return
+  }
+  throw new Error('この環境ではクリップボードを利用できません')
 }
 
 /**

@@ -8,10 +8,11 @@
  * 数値の桁区切り(toLocaleString)は実行環境のロケールに依存するため、
  * 4 桁以上の値を含む期待値はテスト側でも toLocaleString を通して比較する。
  */
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   CUSTOM_COLUMN_PREFIX,
   actionLabel,
+  copyToClipboard,
   customColumnKey,
   formatSyncProgress,
   newSyncRunId,
@@ -117,5 +118,82 @@ describe('newSyncRunId', () => {
   it('呼び出すたびに異なる ID を返す', () => {
     const ids = new Set(Array.from({ length: 100 }, () => newSyncRunId()))
     expect(ids.size).toBe(100)
+  })
+})
+
+/**
+ * copyToClipboard は Wails ランタイム(window.runtime)と navigator.clipboard を
+ * 実行時に探すだけの薄いヘルパのため、両方を差し替えて経路の選択を検証する
+ * (実際にクリップボードへ書き込めるかは GUI での手動確認。TDD 例外)。
+ */
+describe('copyToClipboard', () => {
+  /** window.runtime を差し替える(削除する場合は undefined を渡す) */
+  function setRuntime(rt: unknown) {
+    const w = window as unknown as Record<string, unknown>
+    if (rt === undefined) delete w['runtime']
+    else w['runtime'] = rt
+  }
+
+  /** navigator.clipboard を差し替える(happy-dom では getter のため defineProperty で上書きする) */
+  function setClipboard(clipboard: unknown) {
+    Object.defineProperty(navigator, 'clipboard', {
+      value: clipboard,
+      configurable: true,
+      writable: true,
+    })
+  }
+
+  afterEach(() => {
+    setRuntime(undefined)
+    setClipboard(undefined)
+  })
+
+  it('Wails ランタイムがあれば ClipboardSetText を使う', async () => {
+    const setText = vi.fn().mockResolvedValue(true)
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    setRuntime({ ClipboardSetText: setText })
+    setClipboard({ writeText })
+
+    await copyToClipboard('https://example.backlog.jp/view/SAMPLE-1')
+
+    expect(setText).toHaveBeenCalledWith('https://example.backlog.jp/view/SAMPLE-1')
+    // ランタイムがある場合はブラウザ API を使わない(WebView の権限に依存させないため)
+    expect(writeText).not.toHaveBeenCalled()
+  })
+
+  it('ClipboardSetText が false を返したら失敗として扱う', async () => {
+    setRuntime({ ClipboardSetText: vi.fn().mockResolvedValue(false) })
+    await expect(copyToClipboard('text')).rejects.toThrow()
+  })
+
+  it('ClipboardSetText が失敗したらそのエラーを伝える', async () => {
+    setRuntime({ ClipboardSetText: vi.fn().mockRejectedValue(new Error('クリップボード異常')) })
+    await expect(copyToClipboard('text')).rejects.toThrow('クリップボード異常')
+  })
+
+  it('ランタイムが無ければ navigator.clipboard へフォールバックする', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    setRuntime(undefined)
+    setClipboard({ writeText })
+
+    await copyToClipboard('text')
+
+    expect(writeText).toHaveBeenCalledWith('text')
+  })
+
+  it('古いランタイム(ClipboardSetText 無し)でも navigator.clipboard を使う', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    setRuntime({ EventsOn: vi.fn() })
+    setClipboard({ writeText })
+
+    await copyToClipboard('text')
+
+    expect(writeText).toHaveBeenCalledWith('text')
+  })
+
+  it('どちらも使えない環境ではエラーにする(黙って成功したことにしない)', async () => {
+    setRuntime(undefined)
+    setClipboard(undefined)
+    await expect(copyToClipboard('text')).rejects.toThrow()
   })
 })

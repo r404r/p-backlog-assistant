@@ -1,7 +1,8 @@
 <script lang="ts" setup>
 // 課題抽出画面。TDD 例外(GUI): フロントエンドにテスト基盤が無いため手動確認で担保する。
-import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import {
+  copyToClipboard,
   customColumnKey,
   formatSyncProgress,
   getBackend,
@@ -18,6 +19,7 @@ import {
   type SyncProgress,
   type SyncResult,
 } from '../lib/backend'
+import { issueUrl } from '../lib/backlogUrl'
 import { errorMessage, formatDateTime, formatElapsed, syncModeLabel } from '../lib/format'
 import {
   resolveProjectSelection,
@@ -214,6 +216,8 @@ onMounted(async () => {
   // 巻き戻してしまう。この時点ではプロファイルが未確定でトークン照合ができないため、
   // 生存確認のみを行う(画面は同時に 1 つしか表示されないため、生存 = 現在の画面)。
   if (!profileId.value || !selectionGuard.isAlive()) return
+  // 課題キーのクリックでコピーする URL の組み立てに使う(失敗時は機能を出さないだけ)
+  void loadSpaceUrl()
   // 保存済みの選択(他画面で選んだ値・前回起動時の値)を復元し、
   // 一覧の取得とフォールバックまで済ませてから、選択に依存するデータを 1 回だけ読む。
   restoreProjectSelection(profileId.value)
@@ -411,6 +415,9 @@ watch(selectedProjectId, () => {
   shownCustomColumns.value = []
   searched.value = false
   searchError.value = ''
+  // 消した一覧に対する「コピーしました」・コピー失敗の表示を残さない
+  clearCopiedFeedback()
+  copyError.value = ''
   syncResult.value = null
   syncError.value = ''
   exportPath.value = ''
@@ -528,6 +535,9 @@ async function search() {
   const seq = ++searchRequestSeq
   searching.value = true
   searchError.value = ''
+  // 前の一覧に対するコピーの表示は、結果が入れ替わる前に消す
+  clearCopiedFeedback()
+  copyError.value = ''
   // 値を取得する列は「この検索の時点で選ばれている列」に固定する
   const requestedColumns = selectedCustomColumns.value
   try {
@@ -566,6 +576,94 @@ function onKeywordEnter(e: KeyboardEvent) {
   if (e.isComposing || e.keyCode === 229) return
   void search()
 }
+
+// ---------------------------------------------------------------------------
+// 課題 URL のコピー(課題キーのクリック)
+// ---------------------------------------------------------------------------
+
+/**
+ * アクティブプロファイルのスペース URL(例: https://example.backlog.jp)。
+ *
+ * 課題 URL は「スペース URL + /view/ + 課題キー」で組み立てられるため、
+ * バックエンドに問い合わせず画面側で作る(追加の API 往復を発生させない)。
+ * 取得できない場合は空文字のままにして、課題キーのコピー機能を出さない。
+ */
+const spaceUrl = ref('')
+
+/** 課題キーをクリックで URL コピーできるか(スペース URL が分かる場合のみ) */
+const canCopyIssueUrl = computed(() => !!spaceUrl.value)
+
+/** 「コピーしました」を表示中の課題キー(空 = 非表示) */
+const copiedIssueKey = ref('')
+
+/** コピーに失敗したときの説明(空 = 正常) */
+const copyError = ref('')
+
+/** 「コピーしました」の表示時間(ミリ秒) */
+const COPIED_FEEDBACK_MS = 2000
+
+/**
+ * 「コピーしました」を消すタイマー。
+ * 別の行を続けてクリックした場合・連打した場合に、前のタイマーが後の表示を
+ * 消してしまわないよう、常に 1 本だけ持って張り替える。
+ */
+let copiedTimer: ReturnType<typeof setTimeout> | null = null
+
+function clearCopiedFeedback() {
+  if (copiedTimer !== null) {
+    clearTimeout(copiedTimer)
+    copiedTimer = null
+  }
+  copiedIssueKey.value = ''
+}
+
+/**
+ * アクティブプロファイルのスペース URL を解決する。
+ *
+ * プロファイル一覧の取得に失敗した場合はコピー機能を静かに無効化する
+ * (課題キーは通常表示のまま)。検索・出力といった本来の機能には影響しない
+ * 付随機能のため、画面上部のエラーで利用者を驚かせない。
+ */
+async function loadSpaceUrl() {
+  spaceUrl.value = ''
+  if (!profileId.value) return
+  try {
+    const profiles = await backend.listProfiles()
+    spaceUrl.value = profiles.find((p) => p.id === profileId.value)?.spaceUrl ?? ''
+  } catch {
+    spaceUrl.value = ''
+  }
+}
+
+/** 課題キーのクリック: 課題 URL をクリップボードへコピーする */
+async function copyIssueUrl(issueKey: string) {
+  const url = issueUrl(spaceUrl.value, issueKey)
+  // スペース URL が分からない場合はボタン自体を出していないが、念のため何もしない
+  if (!url) return
+  try {
+    await copyToClipboard(url)
+    copyError.value = ''
+    if (copiedTimer !== null) clearTimeout(copiedTimer)
+    // 同じ課題を連続コピーしたときも支援技術(role="status")へ再通知されるよう、
+    // 一度空にして次のティックで再設定する(DOM 内容が変化しないと読み上げられない)
+    copiedIssueKey.value = ''
+    await nextTick()
+    copiedIssueKey.value = issueKey
+    copiedTimer = setTimeout(() => {
+      copiedIssueKey.value = ''
+      copiedTimer = null
+    }, COPIED_FEEDBACK_MS)
+  } catch (e) {
+    // 成功表示が残っていると失敗に気づけないため、先に消してからエラーを出す
+    clearCopiedFeedback()
+    copyError.value = `課題 URL をコピーできませんでした: ${errorMessage(e)}`
+  }
+}
+
+// 画面を離れるときにタイマーを残さない(破棄後の ref 更新を避ける)
+onUnmounted(() => {
+  clearCopiedFeedback()
+})
 
 // ---------------------------------------------------------------------------
 // 同期
@@ -1084,7 +1182,23 @@ async function exportExcel() {
             </thead>
             <tbody>
               <tr v-for="r in rows" :key="r.issueKey">
-                <td class="nowrap">{{ r.issueKey }}</td>
+                <!-- 課題キーのクリックで課題 URL をコピーする
+                     (スペース URL が分からない場合は通常表示に留める) -->
+                <td class="nowrap">
+                  <button
+                    v-if="canCopyIssueUrl"
+                    type="button"
+                    class="issue-key"
+                    title="クリックで課題 URL をコピー"
+                    @click="copyIssueUrl(r.issueKey)"
+                  >
+                    {{ r.issueKey }}
+                  </button>
+                  <template v-else>{{ r.issueKey }}</template>
+                  <span v-if="copiedIssueKey === r.issueKey" class="copied" role="status">
+                    コピーしました
+                  </span>
+                </td>
                 <td>{{ r.summary }}</td>
                 <td class="nowrap">{{ r.statusName }}</td>
                 <td class="nowrap">{{ r.assigneeName || '(未設定)' }}</td>
@@ -1098,6 +1212,12 @@ async function exportExcel() {
             </tbody>
           </table>
         </div>
+
+        <p v-if="copyError" class="error">{{ copyError }}</p>
+
+        <p v-if="canCopyIssueUrl && rows.length > 0" class="hint">
+          課題キーをクリックすると、その課題の URL をクリップボードへコピーします。
+        </p>
 
         <p v-if="customColumns.length > 0" class="hint">
           一覧に表示するカスタム属性は、下の「Excel 出力」で選んだ列に連動します。
@@ -1449,6 +1569,31 @@ th {
 
 .nowrap {
   white-space: nowrap;
+}
+
+/* 課題キー(クリックで URL をコピー)。button.link と同じ「文中のアクション」の見た目 */
+button.issue-key {
+  border: none;
+  background: none;
+  padding: 0;
+  font-size: inherit;
+  font-family: inherit;
+  color: #0b5cad;
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+/* 上の button:hover の背景(灰色のボタン面)が付かないよう打ち消す */
+button.issue-key:hover {
+  background: none;
+  color: #094c8f;
+}
+
+/* コピー成功のフィードバック(数秒で消える) */
+.copied {
+  margin-left: 0.4rem;
+  font-size: 0.75rem;
+  color: #1a7f37;
 }
 
 .columns {
