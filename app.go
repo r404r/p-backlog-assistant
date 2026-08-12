@@ -1,8 +1,17 @@
+// app.go は Wails バインディングの土台(App の生成・起動・終了と共通ヘルパ)。
+//
+// バインディングのメソッドは責務ごとに別ファイルへ分けている(R13)。
+// Wails がバインドするのは *App のメソッドなので、ファイル分割は結線に影響しない。
+//
+//	app_info.go        アプリ情報(バージョン・保存データ・動作ログ)
+//	app_profile.go     プロファイル・接続テスト・権限・レート制限
+//	app_sync_search.go 同期(プロジェクト・課題・ユーザ)とローカル検索
+//	app_export.go      Excel 出力(課題・ユーザ)と列メタデータ
+//	app_bulk.go        一括更新・追加
 package main
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -13,13 +22,8 @@ import (
 	wailsruntime "github.com/wailsapp/wails/v2/pkg/runtime"
 
 	"backlog-assistant/internal/applog"
-	"backlog-assistant/internal/backlogclient"
-	"backlog-assistant/internal/bulk"
 	"backlog-assistant/internal/config"
-	"backlog-assistant/internal/customfield"
-	"backlog-assistant/internal/export"
 	"backlog-assistant/internal/service"
-	"backlog-assistant/internal/store"
 )
 
 // App は Wails バインディングの薄い層。ロジックは internal/service に置く。
@@ -105,6 +109,16 @@ func (a *App) shutdown(ctx context.Context) {
 	_ = a.log.Close()
 }
 
+func (a *App) svc() (*service.ProfileService, error) {
+	if a.profiles == nil {
+		if a.initErr != nil {
+			return nil, a.initErr
+		}
+		return nil, errors.New("アプリの初期化が完了していません")
+	}
+	return a.profiles, nil
+}
+
 // ---- 動作ログのヘルパー ------------------------------------------------------
 //
 // 記録するのは操作名と非機密パラメータ(プロファイル ID・プロジェクト ID・件数等)
@@ -124,600 +138,83 @@ func (a *App) logEnd(op string, err error, attrs ...slog.Attr) {
 	a.log.Op(op+" 完了", attrs...)
 }
 
-// LogInfo は動作ログの状態(frontend/src/lib/backend.ts の LogInfo と対)。
-type LogInfo struct {
-	Path    string `json:"path"`
-	Enabled bool   `json:"enabled"`
-}
-
-// GetLogInfo は動作ログの出力先と有効・無効を返す(画面の案内表示用)。
-func (a *App) GetLogInfo() (*LogInfo, error) {
-	return &LogInfo{Path: a.log.Path(), Enabled: a.log.Enabled()}, nil
-}
-
-// StorageInfo は保存データの所在(frontend/src/lib/backend.ts の StorageInfo と対)。
-// 設定・ローカル DB(service 層が解決)と動作ログ(applog)を 1 つにまとめ、
-// 画面側の呼び出しを 1 回で済ませる。
-type StorageInfo struct {
-	ConfigDir string                 `json:"configDir"`
-	Databases []service.DatabaseInfo `json:"databases"`
-	// LogPath / LogEnabled は GetLogInfo と同じ情報(アプリ情報画面での再取得を避ける)
-	LogPath    string `json:"logPath"`
-	LogEnabled bool   `json:"logEnabled"`
-}
-
-// GetStorageInfo は設定ディレクトリ・プロファイルごとのローカル DB・動作ログの
-// 所在を返す(アプリ情報画面の「保存データ」表示用)。
+// opLog は 1 操作ぶんの動作ログ(開始 → 完了 / 失敗)をまとめて扱う(R13)。
 //
-// 動作ログにはパスを記録しない(パスにはユーザ名が含まれうるため。既存の
-// maskPathInError と同じ方針)。記録するのは件数と有効・無効のみ。
-func (a *App) GetStorageInfo() (*StorageInfo, error) {
-	const op = "GetStorageInfo"
-	a.logStart(op)
-	s, err := a.svc()
-	if err != nil {
-		a.logEnd(op, err)
-		return nil, err
-	}
-	info, err := s.GetStorageInfo()
-	if err != nil {
-		a.logEnd(op, err)
-		return nil, err
-	}
-	out := &StorageInfo{
-		ConfigDir:  info.ConfigDir,
-		Databases:  info.Databases,
-		LogPath:    a.log.Path(),
-		LogEnabled: a.log.Enabled(),
-	}
-	a.logEnd(op, nil, slog.Int("count", len(out.Databases)), slog.Bool("logEnabled", out.LogEnabled))
-	return out, nil
+// 「開始を記録 → 失敗したら基本属性だけで失敗を記録 → 成功したら結果属性を足して
+// 完了を記録」という定型が全バインディングで同じだったため、その形をここへ集約した。
+// 記録する内容は集約前と同一(操作名・属性・順序とも変えない)。
+type opLog struct {
+	a     *App
+	op    string
+	attrs []slog.Attr
 }
 
-// AppVersionInfo はアプリのバージョン情報(frontend/src/lib/backend.ts の AppVersion と対)。
-type AppVersionInfo struct {
-	Version string `json:"version"`
+// begin は操作の開始を記録し、完了・失敗を記録するための opLog を返す。
+func (a *App) begin(op string, attrs ...slog.Attr) *opLog {
+	a.logStart(op, attrs...)
+	return &opLog{a: a, op: op, attrs: attrs}
 }
 
-// GetAppVersion はビルド時に埋め込まれたバージョンを返す(フッタ表示・問い合わせ時の特定用)。
-func (a *App) GetAppVersion() (*AppVersionInfo, error) {
-	return &AppVersionInfo{Version: version}, nil
+// add は以降の完了・失敗ログに載せる属性を追加する。
+// 操作の途中で確定する情報(保存先の拡張子など)を、完了・失敗の双方へ
+// 1 度の記述で反映するために使う。
+func (o *opLog) add(attrs ...slog.Attr) {
+	o.attrs = append(o.attrs, attrs...)
 }
 
-func (a *App) svc() (*service.ProfileService, error) {
-	if a.profiles == nil {
-		if a.initErr != nil {
-			return nil, a.initErr
-		}
-		return nil, errors.New("アプリの初期化が完了していません")
-	}
-	return a.profiles, nil
-}
-
-// ListProfiles は保存済みプロファイル一覧を返す。
-func (a *App) ListProfiles() ([]config.Profile, error) {
-	const op = "ListProfiles"
-	a.logStart(op)
-	s, err := a.svc()
-	if err != nil {
-		a.logEnd(op, err)
-		return nil, err
-	}
-	profiles, err := s.ListProfiles()
-	if err != nil {
-		a.logEnd(op, err)
-		return nil, err
-	}
-	a.logEnd(op, nil, slog.Int("count", len(profiles)))
-	return profiles, nil
-}
-
-// GetActiveProfile は保存済みの接続先プロファイル ID を返す(未選択なら空文字)。
-// 起動時に ListProfiles と併せて呼び、セレクタの初期選択に使う。
-func (a *App) GetActiveProfile() (string, error) {
-	const op = "GetActiveProfile"
-	a.logStart(op)
-	s, err := a.svc()
-	if err != nil {
-		a.logEnd(op, err)
-		return "", err
-	}
-	id, err := s.GetActiveProfile()
-	if err != nil {
-		a.logEnd(op, err)
-		return "", err
-	}
-	a.logEnd(op, nil, slog.String("profileId", id))
-	return id, nil
-}
-
-// SetActiveProfile は接続先プロファイル ID を保存する(空文字 = 選択解除)。
-// フロントの接続先セレクタ変更時に呼ばれる。
-//
-// ここで行うのは設定の永続化(次回起動時の初期選択)のみでよい。
-// ローカル DB(store.Open)と API クライアントは、各操作が引数で受け取った
-// profileID から service 側で解決・キャッシュする(ProfileService.storeForProfile /
-// clientForProfile)ため、接続先の切り替えはこの値に依存しない。
-func (a *App) SetActiveProfile(id string) error {
-	const op = "SetActiveProfile"
-	a.logStart(op, slog.String("profileId", id))
-	s, err := a.svc()
-	if err != nil {
-		a.logEnd(op, err, slog.String("profileId", id))
-		return err
-	}
-	err = s.SetActiveProfile(id)
-	a.logEnd(op, err, slog.String("profileId", id))
+// fail は失敗を記録し、受け取ったエラーをそのまま返す(return o.fail(err) の形で使う)。
+func (o *opLog) fail(err error) error {
+	o.a.logEnd(o.op, err, o.attrs...)
 	return err
 }
 
-// ProfileInput はフロントエンドの保存フォーム入力(frontend/src/lib/backend.ts と対)。
-type ProfileInput struct {
-	ID       string `json:"id"` // 空なら新規作成
-	Name     string `json:"name"`
-	SpaceURL string `json:"spaceUrl"`
-	APIKey   string `json:"apiKey"` // 空 + 既存プロファイル = キー維持
-}
-
-// SaveProfile はプロファイルを保存する(保存前に接続テストを実施し、
-// 成功時のみ config.json と OS キーチェーンへ保存する)。
-func (a *App) SaveProfile(input ProfileInput) (*config.Profile, error) {
-	const op = "SaveProfile"
-	// API キーは値を一切記録せず、入力されたか(bool)だけを記録する。
-	// 表示名・スペース URL も利用者を特定しうるため記録しない。
-	base := []slog.Attr{
-		slog.String("profileId", input.ID),
-		slog.Bool("new", input.ID == ""),
-		slog.Bool("apiKeyProvided", input.APIKey != ""),
-	}
-	a.logStart(op, base...)
-	s, err := a.svc()
-	if err != nil {
-		a.logEnd(op, err, base...)
-		return nil, err
-	}
-	res, err := s.SaveProfile(a.ctx, input.ID, input.Name, input.SpaceURL, input.APIKey)
-	if err != nil {
-		a.logEnd(op, err, base...)
-		return nil, err
-	}
-	a.logEnd(op, nil, append(base, slog.String("savedProfileId", res.Profile.ID))...)
-	return &res.Profile, nil
-}
-
-// DeleteProfile はプロファイルを削除する。キーチェーンの API キーは必ず削除し、
-// deleteDB が真ならローカル DB も削除する。
-func (a *App) DeleteProfile(id string, deleteDB bool) error {
-	const op = "DeleteProfile"
-	attrs := []slog.Attr{slog.String("profileId", id), slog.Bool("deleteLocalData", deleteDB)}
-	a.logStart(op, attrs...)
-	s, err := a.svc()
-	if err != nil {
-		a.logEnd(op, err, attrs...)
-		return err
-	}
-	err = s.DeleteProfile(id, deleteDB)
-	a.logEnd(op, err, attrs...)
+// failMasked は失敗を記録し、受け取ったエラーをそのまま返す。
+// ログにはファイルパスを伏せたエラーを記録する(高 2 / 2 回目 低 1)。
+// 画面へは、ユーザ自身が選んだパスを含む元のエラーをそのまま返す。
+func (o *opLog) failMasked(err error, path string) error {
+	o.a.logEnd(o.op, maskPathInError(err, path), o.attrs...)
 	return err
 }
 
-// ConnectionTestResult はフロントエンド向けの接続テスト結果
-// (frontend/src/lib/backend.ts の ConnectionTestResult と対)。
-type ConnectionTestResult struct {
-	Ok             bool   `json:"ok"`
-	UserID         int    `json:"userId"`
-	UserName       string `json:"userName"`
-	RoleType       int    `json:"roleType"`
-	AdminAvailable bool   `json:"adminAvailable"` // roleType による暫定判定(確定は GetPermissionStatus)
-	Message        string `json:"message"`
+// done は完了を記録する(extra は件数など、成功時にだけ載せる属性)。
+func (o *opLog) done(extra ...slog.Attr) {
+	o.a.logEnd(o.op, nil, append(o.attrs, extra...)...)
 }
 
-// TestConnection は接続テスト(GET /users/myself)を行う(保存はしない)。
-// apiKey が空で profileID が指定されている場合はキーチェーンの既存キーでテストする
-// (変更フォームでキーを再入力せずに再テストするための規約)。
-func (a *App) TestConnection(profileID, spaceURL, apiKey string) (*ConnectionTestResult, error) {
-	const op = "TestConnection"
-	// API キー・スペース URL・ユーザ名は記録しない(キー入力の有無のみ)
-	attrs := []slog.Attr{
-		slog.String("profileId", profileID),
-		slog.Bool("apiKeyProvided", apiKey != ""),
-	}
-	a.logStart(op, attrs...)
-	s, err := a.svc()
-	if err != nil {
-		a.logEnd(op, err, attrs...)
-		return nil, err
-	}
-	info, err := s.TestConnectionForProfile(a.ctx, profileID, spaceURL, apiKey)
-	if err != nil {
-		a.logEnd(op, err, attrs...)
-		return nil, err
-	}
-	admin := backlogclient.RoleType(info.RoleType) == backlogclient.RoleAdmin
-	msg := "接続に成功しました(ロール: " + info.RoleName + ")"
-	if !admin {
-		msg += "。管理者権限が無いため、ユーザ・チーム抽出は縮退する可能性があります"
-	}
-	a.logEnd(op, nil, append(attrs,
-		slog.Int("roleType", info.RoleType),
-		slog.Bool("adminAvailable", admin))...)
-	return &ConnectionTestResult{
-		Ok:             true,
-		UserID:         info.UserID,
-		UserName:       info.Name,
-		RoleType:       info.RoleType,
-		AdminAvailable: admin,
-		Message:        msg,
-	}, nil
-}
-
-// GetPermissionStatus は GET /users と GET /teams を各 1 回呼び、
-// 実権限を確認する(いずれかが 403 なら縮退状態を返す)。
-func (a *App) GetPermissionStatus(profileID string) (*service.PermissionStatus, error) {
-	const op = "GetPermissionStatus"
-	attrs := []slog.Attr{slog.String("profileId", profileID)}
-	a.logStart(op, attrs...)
-	s, err := a.svc()
-	if err != nil {
-		a.logEnd(op, err, attrs...)
-		return nil, err
-	}
-	st, err := s.GetPermissionStatus(a.ctx, profileID)
-	if err != nil {
-		a.logEnd(op, err, attrs...)
-		return nil, err
-	}
-	a.logEnd(op, nil, append(attrs,
-		slog.Bool("adminAvailable", st.AdminAvailable),
-		slog.Bool("degraded", st.Degraded))...)
-	return st, nil
-}
-
-// GetRateLimitStatus は区分別(read / update / search / icon)のレート制限残量を返す。
-// 追加の API 呼び出しは行わず、これまでの通信で観測した値と経過時間だけで算出する
-// (observed が false の区分は実値を取得できていない = UI では「不明」扱い)。
-func (a *App) GetRateLimitStatus(profileID string) (*service.RateLimitStatus, error) {
-	const op = "GetRateLimitStatus"
-	attrs := []slog.Attr{slog.String("profileId", profileID)}
-	a.logStart(op, attrs...)
-	s, err := a.svc()
-	if err != nil {
-		a.logEnd(op, err, attrs...)
-		return nil, err
-	}
-	st, err := s.GetRateLimitStatus(a.ctx, profileID)
-	if err != nil {
-		a.logEnd(op, err, attrs...)
-		return nil, err
-	}
-	// 記録するのは区分数と実値を取得できた区分数のみ(残量値は記録しない)
-	observed := 0
-	for _, c := range st.Categories {
-		if c.Observed {
-			observed++
-		}
-	}
-	a.logEnd(op, nil, append(attrs,
-		slog.Int("count", len(st.Categories)),
-		slog.Int("observedCount", observed))...)
-	return st, nil
-}
-
-// ---- 同期・課題抽出・Excel 出力(frontend/src/lib/backend.ts の契約と対) ----
-
-// ProjectRow はプロジェクト一覧の 1 行(課題同期の最終時刻付き)。
-type ProjectRow struct {
-	ID           int64  `json:"id"`
-	ProjectKey   string `json:"projectKey"`
-	Name         string `json:"name"`
-	LastSyncedAt string `json:"lastSyncedAt"`
-	// SyncStateUnknown は同期状態の取得に失敗したことを示す(中 1)。
-	// 真のときの LastSyncedAt は「未同期」ではなく「不明」であり、
-	// UI は未同期の警告を出してはならない。
-	SyncStateUnknown bool `json:"syncStateUnknown"`
-}
-
-// ListProjects はローカル DB のプロジェクト一覧を返す。
-func (a *App) ListProjects(profileID string) ([]ProjectRow, error) {
-	const op = "ListProjects"
-	attrs := []slog.Attr{slog.String("profileId", profileID)}
-	a.logStart(op, attrs...)
-	s, err := a.svc()
-	if err != nil {
-		a.logEnd(op, err, attrs...)
-		return nil, err
-	}
-	projects, err := s.ListProjects(a.ctx, profileID)
-	if err != nil {
-		a.logEnd(op, err, attrs...)
-		return nil, err
-	}
-	rows := make([]ProjectRow, 0, len(projects))
-	for _, p := range projects {
-		last := ""
-		unknown := false
-		st, serr := s.GetSyncState(a.ctx, profileID, "", p.ID)
-		switch {
-		case serr != nil:
-			// 鮮度が取れないと同期済みでも「未同期」と表示されてしまうため、
-			// 「不明」であることを UI へ伝えつつ原因をログに残す(黙って握り潰さない)
-			unknown = true
-			a.log.OpError("ListProjects 同期状態の取得", serr,
-				slog.String("profileId", profileID), slog.Int64("projectId", p.ID))
-		case st != nil:
-			last = st.LastSyncedAt
-		}
-		rows = append(rows, ProjectRow{
-			ID:               p.ID,
-			ProjectKey:       p.ProjectKey,
-			Name:             p.Name,
-			LastSyncedAt:     last,
-			SyncStateUnknown: unknown,
-		})
-	}
-	a.logEnd(op, nil, append(attrs, slog.Int("count", len(rows)))...)
-	return rows, nil
-}
-
-// SyncProjects は参加プロジェクト一覧を API から取得してローカル DB へ反映する。
-func (a *App) SyncProjects(profileID string) error {
-	const op = "SyncProjects"
-	attrs := []slog.Attr{slog.String("profileId", profileID)}
-	a.logStart(op, attrs...)
-	s, err := a.svc()
-	if err != nil {
-		a.logEnd(op, err, attrs...)
-		return err
-	}
-	res, err := s.SyncProjects(a.ctx, profileID)
-	if err != nil {
-		a.logEnd(op, err, attrs...)
-		return err
-	}
-	a.logEnd(op, nil, append(attrs,
-		slog.Int("fetched", res.Fetched),
-		slog.Int("upserted", res.Upserted),
-		slog.Int("deleted", res.Deleted),
-		slog.Int("warnings", len(res.Warnings)),
-		slog.Int64("durationMs", res.DurationMs))...)
-	return nil
-}
-
-// SyncResultDTO は同期結果(フロント契約: warnings は null 不可)。
-type SyncResultDTO struct {
-	Mode       string   `json:"mode"`
-	Fetched    int      `json:"fetched"`
-	Upserted   int      `json:"upserted"`
-	Deleted    int      `json:"deleted"`
-	Warnings   []string `json:"warnings"`
-	DurationMs int64    `json:"durationMs"`
-}
-
-// SyncIssues は指定プロジェクトの課題を同期する(mode: full / incremental / auto)。
+// appOp はバインディング共通の定型を 1 か所にまとめたヘルパー(R13)。
 //
-// runID は進捗イベント(sync:progress)に載せる実行識別子で、画面が
-// 「自分が開始した実行の進捗か」を判定するために使う(中 4)。
-// 呼び出し側(画面)が採番するのは、進捗イベントが本メソッドの戻り値より
-// 先に届くため、戻り値で識別子を渡す方式では取りこぼすからである。
-// 進捗表示が不要な呼び出しは空文字でよい。
-func (a *App) SyncIssues(profileID string, projectID int64, mode, runID string) (*SyncResultDTO, error) {
-	const op = "SyncIssues"
-	attrs := []slog.Attr{
-		slog.String("profileId", profileID),
-		slog.Int64("projectId", projectID),
-		slog.String("mode", mode),
-	}
-	a.logStart(op, attrs...)
-	s, err := a.svc()
-	if err != nil {
-		a.logEnd(op, err, attrs...)
-		return nil, err
-	}
-	res, err := s.SyncIssues(a.ctx, profileID, projectID, mode, runID)
-	if err != nil {
-		a.logEnd(op, err, attrs...)
-		return nil, err
-	}
-	warnings := res.Warnings
-	if warnings == nil {
-		warnings = []string{}
-	}
-	// 警告本文は課題名等を含みうるため件数のみ記録する
-	a.logEnd(op, nil, append(attrs,
-		slog.String("executedMode", string(res.Mode)),
-		slog.Int("fetched", res.Fetched),
-		slog.Int("upserted", res.Upserted),
-		slog.Int("deleted", res.Deleted),
-		slog.Int("warnings", len(warnings)),
-		slog.Int64("durationMs", res.DurationMs))...)
-	return &SyncResultDTO{
-		Mode:       string(res.Mode),
-		Fetched:    res.Fetched,
-		Upserted:   res.Upserted,
-		Deleted:    res.Deleted,
-		Warnings:   warnings,
-		DurationMs: res.DurationMs,
-	}, nil
-}
-
-// IssueRowDTO は検索結果の 1 行(プレビュー・Excel 出力の共通形)。
-type IssueRowDTO struct {
-	IssueKey      string `json:"issueKey"`
-	Summary       string `json:"summary"`
-	StatusName    string `json:"statusName"`
-	AssigneeName  string `json:"assigneeName"`
-	IssueTypeName string `json:"issueTypeName"`
-	PriorityName  string `json:"priorityName"`
-	Created       string `json:"created"`
-	Updated       string `json:"updated"`
-	DueDate       string `json:"dueDate"`
-	// CustomFields は画面で要求されたカスタム属性の表示文字列
-	// (キー = Excel 出力と同じ列キー cf_{定義ID})。
-	// 要求されていない属性は含めない(全属性を詰めると解析コストと
-	// 転送量が課題数 × 属性数で膨らむため)。
-	CustomFields map[string]string `json:"customFields"`
-}
-
-// issueRowDTOOf は課題 1 件を検索結果の DTO へ詰め替える。
+// 「開始ログ → サービス取得 → 処理 → 完了 / 失敗ログ」の流れを引き受け、
+// 各バインディングは attrs(基本属性)と fn(処理本体)だけを書けばよくなる。
+// fn は結果と「完了ログに追加する属性」を返す。失敗時は基本属性だけで
+// エラーを記録し、結果は T のゼロ値(ポインタなら nil)を返す。
 //
-// customFieldIDs で要求されたカスタム属性だけを、Excel 出力と同じ規約で
-// 表示文字列にして載せる(整形は Go 側に寄せ、画面は文字列を並べるだけにする)。
-// 値を持たない定義も空文字で埋め、行ごとにキーの有無が変わらないようにする。
-func issueRowDTOOf(is *store.Issue, customFieldIDs []int64) IssueRowDTO {
-	row := IssueRowDTO{
-		IssueKey:      is.IssueKey,
-		Summary:       is.Summary,
-		StatusName:    is.StatusName,
-		AssigneeName:  is.AssigneeName,
-		IssueTypeName: is.IssueTypeName,
-		PriorityName:  is.PriorityName,
-		Created:       is.Created,
-		Updated:       is.Updated,
-		DueDate:       is.DueDate,
-		// フロント契約では null を返さない(常にオブジェクト)
-		CustomFields: make(map[string]string, len(customFieldIDs)),
-	}
-	if len(customFieldIDs) == 0 {
-		return row
-	}
-	// 生 JSON の解析は 1 行 1 回。解釈できない課題は空欄へ縮退させ、
-	// 1 件のデータ不備で検索結果全体を失わせない(Excel 出力と同じ流儀)。
-	values := bulkCustomFieldValues(is.RawJSON)
-	for _, id := range customFieldIDs {
-		row.CustomFields[export.CustomColumnKey(id)] = values[id]
-	}
-	return row
-}
-
-// IssueSearchDTO は検索結果(表示上限で切っても total は総件数)。
-type IssueSearchDTO struct {
-	Rows  []IssueRowDTO `json:"rows"`
-	Total int           `json:"total"`
-	// Unverifiable はカスタム属性条件を判定できなかった課題の件数
-	// (ローカルの生 JSON が古い・壊れている行)。0 でなければ、結果は
-	// 「条件に合う全件」ではないため、画面はその旨を警告すること。
-	Unverifiable int `json:"unverifiable"`
-}
-
-// SearchIssues はローカル DB から課題を抽出する(store.IssueFilter の json 名は
-// フロント契約 IssueQuery と一致)。
-//
-// columns は画面の一覧に表示する列キー(Excel 出力の列選択と同じ形式)。
-// このうち cf_{定義ID} のものだけを見て、カスタム属性の値を行に載せる。
-// 固定列は常に返すため、固定列キーの有無は結果に影響しない。
-func (a *App) SearchIssues(profileID string, query store.IssueFilter, columns []string) (*IssueSearchDTO, error) {
-	const op = "SearchIssues"
-	attrs := a.searchAttrs(profileID, query)
-	a.logStart(op, attrs...)
+// ファイルダイアログを挟む操作(Excel 出力・取り込み)は途中に分岐と
+// キャンセル経路があるため、appOp ではなく opLog を直接使う。
+func appOp[T any](a *App, op string, attrs []slog.Attr, fn func(*service.ProfileService) (T, []slog.Attr, error)) (T, error) {
+	var zero T
+	lg := a.begin(op, attrs...)
 	s, err := a.svc()
 	if err != nil {
-		a.logEnd(op, err, attrs...)
-		return nil, err
+		return zero, lg.fail(err)
 	}
-	res, err := s.SearchIssues(a.ctx, profileID, query)
+	res, done, err := fn(s)
 	if err != nil {
-		a.logEnd(op, err, attrs...)
-		return nil, err
+		return zero, lg.fail(err)
 	}
-	customFieldIDs := export.CustomColumnIDs(columns)
-	rows := make([]IssueRowDTO, 0, len(res.Issues))
-	for i := range res.Issues {
-		rows = append(rows, issueRowDTOOf(&res.Issues[i], customFieldIDs))
-	}
-	a.logEnd(op, nil, append(attrs,
-		slog.Int("rows", len(rows)),
-		slog.Int("total", res.Total),
-		slog.Bool("truncated", res.Truncated),
-		slog.Int("unverifiable", res.Unverifiable),
-		slog.Int("customFieldColumns", len(customFieldIDs)))...)
-	return &IssueSearchDTO{Rows: rows, Total: res.Total, Unverifiable: res.Unverifiable}, nil
+	lg.done(done...)
+	return res, nil
 }
 
-// searchAttrs は検索条件のうち非機密なものだけをログ属性にする。
-// キーワード・状態名・担当者名は課題内容や個人名を含みうるため、
-// 値は記録せず「指定の有無」だけを記録する。
-//
-// カスタム属性の条件も同様に、入力値(顧客名等を含みうる)は記録せず
-// 条件の件数だけを残す(2 段階検索が動いたかを追えるようにするため)。
-func (a *App) searchAttrs(profileID string, query store.IssueFilter) []slog.Attr {
-	return []slog.Attr{
-		slog.String("profileId", profileID),
-		slog.Int64("projectId", query.ProjectID),
-		slog.Bool("hasKeyword", query.Keyword != ""),
-		slog.Bool("hasStatus", query.StatusName != ""),
-		slog.Bool("hasAssignee", query.AssigneeName != ""),
-		slog.Bool("hasDateRange", query.UpdatedFrom != "" || query.UpdatedTo != "" ||
-			query.CreatedFrom != "" || query.CreatedTo != ""),
-		slog.Int("customFieldFilters", len(customfield.ActiveFilters(query.CustomFieldFilters))),
-		slog.Int("limit", query.Limit),
-	}
+// appOpErr は戻り値がエラーだけのバインディング向けの appOp(結果を持たない)。
+func appOpErr(a *App, op string, attrs []slog.Attr, fn func(*service.ProfileService) ([]slog.Attr, error)) error {
+	_, err := appOp(a, op, attrs, func(s *service.ProfileService) (struct{}, []slog.Attr, error) {
+		done, err := fn(s)
+		return struct{}{}, done, err
+	})
+	return err
 }
 
-// FilterOptionsDTO は抽出条件の候補(フロント契約: statuses / assignees)。
-type FilterOptionsDTO struct {
-	Statuses  []string `json:"statuses"`
-	Assignees []string `json:"assignees"`
-}
-
-// ListFilterOptions は状態・担当者の候補値をローカル DB から返す。
-func (a *App) ListFilterOptions(profileID string, projectID int64) (*FilterOptionsDTO, error) {
-	const op = "ListFilterOptions"
-	attrs := []slog.Attr{slog.String("profileId", profileID), slog.Int64("projectId", projectID)}
-	a.logStart(op, attrs...)
-	s, err := a.svc()
-	if err != nil {
-		a.logEnd(op, err, attrs...)
-		return nil, err
-	}
-	opts, err := s.ListFilterOptions(a.ctx, profileID, projectID)
-	if err != nil {
-		a.logEnd(op, err, attrs...)
-		return nil, err
-	}
-	statuses := opts.StatusNames
-	if statuses == nil {
-		statuses = []string{}
-	}
-	assignees := opts.AssigneeNames
-	if assignees == nil {
-		assignees = []string{}
-	}
-	// 候補値そのもの(状態名・担当者名)は記録せず件数のみ記録する
-	a.logEnd(op, nil, append(attrs,
-		slog.Int("statuses", len(statuses)),
-		slog.Int("assignees", len(assignees)))...)
-	return &FilterOptionsDTO{Statuses: statuses, Assignees: assignees}, nil
-}
-
-// SyncStateRow は同期状態画面の 1 行。
-type SyncStateRow struct {
-	DataKind     string `json:"dataKind"`
-	ProjectID    int64  `json:"projectId"`
-	LastSyncedAt string `json:"lastSyncedAt"`
-}
-
-// GetSyncState は全同期状態の一覧を返す(フロント契約に合わせ配列を返す)。
-func (a *App) GetSyncState(profileID string) ([]SyncStateRow, error) {
-	const op = "GetSyncState"
-	attrs := []slog.Attr{slog.String("profileId", profileID)}
-	a.logStart(op, attrs...)
-	s, err := a.svc()
-	if err != nil {
-		a.logEnd(op, err, attrs...)
-		return nil, err
-	}
-	states, err := s.ListSyncStates(a.ctx, profileID)
-	if err != nil {
-		a.logEnd(op, err, attrs...)
-		return nil, err
-	}
-	rows := make([]SyncStateRow, 0, len(states))
-	for _, st := range states {
-		rows = append(rows, SyncStateRow{DataKind: st.DataKind, ProjectID: st.ProjectID, LastSyncedAt: st.LastSyncedAt})
-	}
-	a.logEnd(op, nil, append(attrs, slog.Int("count", len(rows)))...)
-	return rows, nil
-}
+// ---- ファイル入出力の共通ヘルパー --------------------------------------------
 
 // maskedPathPlaceholder はエラーメッセージ中のファイルパスの置換先。
 const maskedPathPlaceholder = "<file>"
@@ -749,829 +246,26 @@ func fileExtAttr(path string) slog.Attr {
 	return slog.String("ext", strings.ToLower(filepath.Ext(path)))
 }
 
-// ExportResultDTO は Excel 出力結果(キャンセル時は path 空・rows 0)。
-type ExportResultDTO struct {
-	Path string `json:"path"`
-	Rows int    `json:"rows"`
-	// Unverifiable はカスタム属性条件を判定できず、出力対象から外れた課題の件数
-	// (課題抽出の Excel 出力のみ。他の出力では常に 0)。
-	// 出力ファイルは「条件に合う全件」ではないため、0 でなければ画面で警告する。
-	Unverifiable int `json:"unverifiable"`
-}
-
-// exportSearchLimit は Excel 出力の件数上限。フロント契約では「条件一致全件」
-// を出力するため、実質無制限の大きな値を使う。
-const exportSearchLimit = 1_000_000
-
-// errExportRowLimit は出力対象が exportSearchLimit を超えたことを表す番兵エラー。
-//
-// 課題は全件をメモリへ載せず 1 件ずつ書き出すため(R4)、総件数が判明するのは
-// 走査を終えた時点になる。上限判定は走査の途中で行い、超えた行に達した時点で
-// このエラーで打ち切る(残りを読み切ってから判定するより速く終わる)。
-// 打ち切った出力は一時ファイルごと破棄されるため、出力先の既存ファイルは
-// 変更されない(export.writeFileAtomic。R5)。
-var errExportRowLimit = errors.New("対象件数が上限(100 万件)を超えています。条件で絞り込んでください")
-
-// limitedIssueVisitor は「limit 件までは yield へ渡し、超えたら errExportRowLimit で
-// 打ち切る」課題ビジターを返す(上限を超えた行は書き出さない)。
-func limitedIssueVisitor(limit int, yield func(*store.Issue) error) store.IssueVisitor {
-	n := 0
-	return func(is *store.Issue) error {
-		n++
-		if n > limit {
-			return errExportRowLimit
-		}
-		return yield(is)
+// xlsxFilters は Excel ブックだけを選ばせるダイアログのフィルタ。
+func xlsxFilters() []wailsruntime.FileFilter {
+	return []wailsruntime.FileFilter{
+		{DisplayName: "Excel ブック (*.xlsx)", Pattern: "*.xlsx"},
 	}
 }
 
-// ExportIssuesExcel は検索条件に一致する課題全件を Excel に出力する。
-// 保存先は OS の保存ダイアログでユーザが選択する(キャンセル時は path 空)。
-//
-// 課題はローカル DB のカーソルから 1 件ずつ受け取り、そのまま StreamWriter へ
-// 流す(R4)。以前は最大 100 万件を []store.Issue へ載せてから書き出しており、
-// 生 JSON・詳細を含む大規模プロジェクトでメモリ枯渇の恐れがあった。
-func (a *App) ExportIssuesExcel(profileID string, query store.IssueFilter, columns []string) (*ExportResultDTO, error) {
-	const op = "ExportIssuesExcel"
-	attrs := append(a.searchAttrs(profileID, query), slog.Int("columns", len(columns)))
-	a.logStart(op, attrs...)
-	s, err := a.svc()
-	if err != nil {
-		a.logEnd(op, err, attrs...)
-		return nil, err
-	}
-	// 抽出条件の不備は走査を始める前に弾く。逐次出力では条件エラーが
-	// 保存ダイアログの後まで表面化しないため(R4)。
-	if err := store.ValidateIssueFilter(query); err != nil {
-		a.logEnd(op, err, attrs...)
-		return nil, err
-	}
-	// カスタム属性列が選ばれている場合のみ、ヘッダ(定義名)と値の解決に必要な
-	// 定義を取得する(選ばれていなければ API 呼び出しを増やさない)。
-	// 保存先を尋ねる前に取得し、失敗した場合はダイアログを出さずにエラーを返す
-	// (利用者が明示的に選んだ列を黙って空欄・欠落にしない)。
-	opts := export.Options{Columns: columns}
-	if export.HasCustomColumns(columns) {
-		master, err := s.GetMasterData(a.ctx, profileID, query.ProjectID)
-		if err != nil {
-			a.logEnd(op, err, attrs...)
-			return nil, err
-		}
-		opts.CustomFields = master.CustomFields
-	}
-	// 親課題キー列が選ばれている場合のみ、親課題 ID → 課題キーの対応表を作る
-	// (ローカル DB の走査を増やさない。引き当てられない親は ID:<数値> になる)
-	if hasColumn(columns, export.ParentIssueKeyColumn) {
-		keys, err := s.ListIssueKeysByID(a.ctx, profileID, query.ProjectID)
-		if err != nil {
-			a.logEnd(op, err, attrs...)
-			return nil, err
-		}
-		opts.ParentIssueKeys = keys
-	}
-	path, err := wailsruntime.SaveFileDialog(a.ctx, wailsruntime.SaveDialogOptions{
-		Title:           "Excel 出力先を選択",
-		DefaultFilename: "backlog-issues.xlsx",
-		Filters: []wailsruntime.FileFilter{
-			{DisplayName: "Excel ブック (*.xlsx)", Pattern: "*.xlsx"},
-		},
+// saveExcelDialog は Excel の保存先を尋ねる(ユーザがキャンセルすると空文字)。
+func (a *App) saveExcelDialog(title, defaultFilename string) (string, error) {
+	return wailsruntime.SaveFileDialog(a.ctx, wailsruntime.SaveDialogOptions{
+		Title:           title,
+		DefaultFilename: defaultFilename,
+		Filters:         xlsxFilters(),
 	})
-	if err != nil {
-		a.logEnd(op, err, attrs...)
-		return nil, err
-	}
-	if path == "" { // ユーザがキャンセル
-		a.logEnd(op, nil, append(attrs, slog.Bool("canceled", true))...)
-		return &ExportResultDTO{Path: "", Rows: 0}, nil
-	}
-	// 保存先・ファイル名はユーザが決めるため、ローカルユーザ名や顧客名を
-	// 含みうる。パスもファイル名も記録せず、拡張子だけを残す(低 1)。
-	fileAttr := fileExtAttr(path)
-	// ローカル DB のカーソル走査を Excel 出力のイテレータへ直結する。
-	// 課題はこのクロージャを通り抜けるだけで、どこにも溜まらない。
-	var res store.IssueIterateResult
-	seq := func(yield func(*store.Issue) error) error {
-		var err error
-		res, err = s.IterateIssues(a.ctx, profileID, query,
-			limitedIssueVisitor(exportSearchLimit, yield))
-		return err
-	}
-	// 上限超過(errExportRowLimit)はそのまま画面へ返る。黙って部分出力しないのは
-	// 従来どおりで、判定の時点だけが「取得後」から「書き出し中」に変わっている。
-	if err := export.ExportIssuesToFile(path, seq, opts); err != nil {
-		// 失敗時のエラーメッセージにも保存先のフルパスが含まれるため、
-		// ログへ渡す前にプレースホルダへ置換する(高 2 / 2 回目 低 1)。
-		// 画面へ返すエラーは、ユーザ自身が選んだパスなのでそのままにする。
-		a.logEnd(op, maskPathInError(err, path), append(attrs, fileAttr)...)
-		return nil, err
-	}
-	a.logEnd(op, nil, append(attrs,
-		fileAttr,
-		slog.Int("rows", res.Total),
-		slog.Int("unverifiable", res.Unverifiable))...)
-	// 判定できず出力から外れた件数も返す(黙って欠落させない)
-	return &ExportResultDTO{Path: path, Rows: res.Total, Unverifiable: res.Unverifiable}, nil
 }
 
-// ---- M3: ユーザ抽出(frontend/src/lib/backend.ts の契約と対) ----
-
-// userAttrs はユーザ検索条件の動作ログ属性(キーワード本文は個人名を含みうるため有無のみ)。
-func userAttrs(profileID string, filter store.UserFilter) []slog.Attr {
-	return []slog.Attr{
-		slog.String("profileId", profileID),
-		slog.Bool("hasKeyword", filter.Keyword != ""),
-		slog.Int("roleType", filter.RoleType),
-	}
-}
-
-// SyncUsers はユーザ・チーム・プロジェクト参加情報を同期する
-// (権限が無い場合はプロジェクト単位の取得へ自動縮退する)。
-func (a *App) SyncUsers(profileID string) (*SyncResultDTO, error) {
-	const op = "SyncUsers"
-	attrs := []slog.Attr{slog.String("profileId", profileID)}
-	a.logStart(op, attrs...)
-	s, err := a.svc()
-	if err != nil {
-		a.logEnd(op, err, attrs...)
-		return nil, err
-	}
-	res, err := s.SyncUsers(a.ctx, profileID)
-	if err != nil {
-		a.logEnd(op, err, attrs...)
-		return nil, err
-	}
-	warnings := res.Warnings
-	if warnings == nil {
-		warnings = []string{}
-	}
-	// 警告本文はプロジェクト名等を含みうるため件数のみ記録する
-	a.logEnd(op, nil, append(attrs,
-		slog.String("executedMode", string(res.Mode)),
-		slog.Int("fetched", res.Fetched),
-		slog.Int("upserted", res.Upserted),
-		slog.Int("warnings", len(warnings)),
-		slog.Int64("durationMs", res.DurationMs))...)
-	return &SyncResultDTO{
-		Mode:       string(res.Mode),
-		Fetched:    res.Fetched,
-		Upserted:   res.Upserted,
-		Deleted:    res.Deleted,
-		Warnings:   warnings,
-		DurationMs: res.DurationMs,
-	}, nil
-}
-
-// UserListDTO はユーザ一覧の検索結果(フロント契約: rows / total)。
-type UserListDTO struct {
-	Rows  []store.UserRow `json:"rows"`
-	Total int             `json:"total"`
-}
-
-// ListUsers はローカル DB からユーザ一覧を返す(所属チーム・参加プロジェクト付き)。
-func (a *App) ListUsers(profileID string, query store.UserFilter) (*UserListDTO, error) {
-	const op = "ListUsers"
-	attrs := userAttrs(profileID, query)
-	a.logStart(op, attrs...)
-	s, err := a.svc()
-	if err != nil {
-		a.logEnd(op, err, attrs...)
-		return nil, err
-	}
-	res, err := s.ListUsers(a.ctx, profileID, query)
-	if err != nil {
-		a.logEnd(op, err, attrs...)
-		return nil, err
-	}
-	rows := res.Users
-	if rows == nil {
-		rows = []store.UserRow{}
-	}
-	a.logEnd(op, nil, append(attrs, slog.Int("rows", len(rows)), slog.Int("total", res.Total))...)
-	return &UserListDTO{Rows: rows, Total: res.Total}, nil
-}
-
-// ExportUsersExcel は条件に一致するユーザ全件を Excel に出力する。
-//
-// 課題出力(R4)と違い、こちらは全件を一度にメモリへ載せたままにしている。
-// ユーザはスペース全体でも数百〜数千件で、1 行あたりの情報量も小さく
-// (生 JSON・詳細本文のような大きな列を持たない)、逐次化しても得られる
-// メモリ削減より、所属チーム・参加プロジェクトを行へ畳み込む既存処理を
-// 崩す方の危険が大きいため。件数が問題になる規模になったら
-// store.IterateIssues と同じ形で逐次化する。
-func (a *App) ExportUsersExcel(profileID string, query store.UserFilter, columns []string) (*ExportResultDTO, error) {
-	const op = "ExportUsersExcel"
-	attrs := append(userAttrs(profileID, query), slog.Int("columns", len(columns)))
-	a.logStart(op, attrs...)
-	s, err := a.svc()
-	if err != nil {
-		a.logEnd(op, err, attrs...)
-		return nil, err
-	}
-	query.Limit = exportSearchLimit
-	res, err := s.ListUsers(a.ctx, profileID, query)
-	if err != nil {
-		a.logEnd(op, err, attrs...)
-		return nil, err
-	}
-	if res.Truncated {
-		err := errors.New("対象件数が上限(100 万件)を超えています。条件で絞り込んでください")
-		a.logEnd(op, err, attrs...)
-		return nil, err
-	}
-	path, err := wailsruntime.SaveFileDialog(a.ctx, wailsruntime.SaveDialogOptions{
-		Title:           "Excel 出力先を選択",
-		DefaultFilename: "backlog-users.xlsx",
-		Filters: []wailsruntime.FileFilter{
-			{DisplayName: "Excel ブック (*.xlsx)", Pattern: "*.xlsx"},
-		},
+// openExcelDialog は取り込む Excel を尋ねる(ユーザがキャンセルすると空文字)。
+func (a *App) openExcelDialog(title string) (string, error) {
+	return wailsruntime.OpenFileDialog(a.ctx, wailsruntime.OpenDialogOptions{
+		Title:   title,
+		Filters: xlsxFilters(),
 	})
-	if err != nil {
-		a.logEnd(op, err, attrs...)
-		return nil, err
-	}
-	if path == "" { // ユーザがキャンセル
-		a.logEnd(op, nil, append(attrs, slog.Bool("canceled", true))...)
-		return &ExportResultDTO{Path: "", Rows: 0}, nil
-	}
-	exportRows := make([]export.UserExportRow, 0, len(res.Users))
-	for _, u := range res.Users {
-		exportRows = append(exportRows, export.UserExportRow{
-			ID:               u.ID,
-			UserCode:         u.UserCode,
-			Name:             u.Name,
-			MailAddress:      u.MailAddress,
-			RoleType:         u.RoleType,
-			RoleName:         u.RoleName,
-			TeamNames:        u.TeamNames,
-			ProjectKeys:      u.ProjectKeys,
-			AdminProjectKeys: u.AdminProjectKeys,
-		})
-	}
-	fileAttr := fileExtAttr(path)
-	if err := export.ExportUsersToFile(path, exportRows, export.UserOptions{Columns: columns}); err != nil {
-		a.logEnd(op, maskPathInError(err, path), append(attrs, fileAttr)...)
-		return nil, err
-	}
-	a.logEnd(op, nil, append(attrs, fileAttr, slog.Int("rows", len(exportRows)))...)
-	return &ExportResultDTO{Path: path, Rows: len(exportRows)}, nil
-}
-
-// ---- M4: 一括更新・追加(frontend/src/lib/backend.ts の契約と対) ----
-
-// rawIssueIDs は課題の raw_json から種別 ID・優先度 ID を取り出す
-// (store.Issue は名前のみ保持しているため、テンプレートの ID 列はここで補完する)。
-func rawIssueIDs(rawJSON string) (issueTypeID, priorityID int64) {
-	var v struct {
-		IssueType struct {
-			ID int64 `json:"id"`
-		} `json:"issueType"`
-		Priority struct {
-			ID int64 `json:"id"`
-		} `json:"priority"`
-	}
-	if err := json.Unmarshal([]byte(rawJSON), &v); err != nil {
-		return 0, 0
-	}
-	return v.IssueType.ID, v.Priority.ID
-}
-
-// hasColumn は列キー列に指定のキーが含まれるかを返す。
-func hasColumn(columns []string, key string) bool {
-	for _, c := range columns {
-		if c == key {
-			return true
-		}
-	}
-	return false
-}
-
-// parentIssueKeyOf は課題の raw_json から親課題の表記(CF5)を作る。
-//
-// 同一プロジェクトの親は課題キー、ローカルに無い親(未同期・別プロジェクト)は
-// ID:<数値>、親なし・生 JSON が読めない課題は空文字になる。
-// 課題抽出・テンプレート出力の両方で同じ表記を使い、往復できるようにする。
-func parentIssueKeyOf(rawJSON string, keys map[int64]string) string {
-	return export.FormatParentIssueRef(store.ParentIssueID(rawJSON), keys)
-}
-
-// bulkCustomFieldValues は課題の raw_json からカスタム属性の現在値を
-// 「定義 ID → 表示文字列」で取り出す(テンプレートのプリフィル用。CF3)。
-//
-// 解釈できない生 JSON は空として扱い、テンプレート出力全体を止めない
-// (課題出力と同じ流儀。異常の検知は同期・customfield 側の責務)。
-func bulkCustomFieldValues(rawJSON string) map[int64]string {
-	if rawJSON == "" {
-		return nil
-	}
-	values, err := customfield.ParseValues(rawJSON)
-	if err != nil {
-		return nil
-	}
-	out := make(map[int64]string, len(values))
-	for _, v := range values {
-		out[v.ID] = customfield.FormatValue(v)
-	}
-	return out
-}
-
-// bulkTemplateMasters はテンプレートの「マスタ」シートに載せる選択候補を集める。
-//
-// 種別・状態・優先度は API のマスタ(取り込み時の検証と同じ内容)、
-// 担当者はローカルのプロジェクト参加者(未同期ならスペース全体)を使う。
-// export へ渡す型に詰め替えることで、export が bulk・store に依存しないようにする。
-func (a *App) bulkTemplateMasters(profileID string, projectID int64) (export.BulkTemplateMasters, error) {
-	var out export.BulkTemplateMasters
-	s, err := a.svc()
-	if err != nil {
-		return out, err
-	}
-	master, err := s.GetMasterData(a.ctx, profileID, projectID)
-	if err != nil {
-		return out, err
-	}
-	out.IssueTypes = namedRefsOf(master.IssueTypes)
-	out.Statuses = namedRefsOf(master.Statuses)
-	out.Priorities = namedRefsOf(master.Priorities)
-	// カスタム属性は列の生成・選択肢のドロップダウンに使う(CF3)
-	out.CustomFields = master.CustomFields
-
-	users, err := s.ListAssigneeCandidates(a.ctx, profileID, projectID)
-	if err != nil {
-		return out, err
-	}
-	out.Assignees = make([]export.NamedRef, 0, len(users))
-	for _, u := range users {
-		out.Assignees = append(out.Assignees, export.NamedRef{ID: u.ID, Name: u.Name})
-	}
-	return out, nil
-}
-
-// namedRefsOf はマスタ(bulk.NamedID)を export の候補型へ詰め替える。
-func namedRefsOf(items []bulk.NamedID) []export.NamedRef {
-	out := make([]export.NamedRef, 0, len(items))
-	for _, it := range items {
-		out = append(out, export.NamedRef{ID: it.ID, Name: it.Name})
-	}
-	return out
-}
-
-// bulkTemplateRowOf は課題 1 件をテンプレート行へ詰め替える。
-//
-// 逐次書き出し(R4)では課題を保持しないため、変換は 1 件のみで完結させる
-// (種別 ID・優先度 ID・親課題・カスタム属性はいずれも当該課題の生 JSON と、
-// 事前に用意した課題キーの対応表だけで決まる)。
-func bulkTemplateRowOf(is *store.Issue, parentKeys map[int64]string) export.BulkTemplateRow {
-	typeID, priorityID := rawIssueIDs(is.RawJSON)
-	return export.BulkTemplateRow{
-		IssueKey:       is.IssueKey,
-		Summary:        is.Summary,
-		IssueTypeID:    typeID,
-		IssueTypeName:  is.IssueTypeName,
-		StatusID:       is.StatusID,
-		StatusName:     is.StatusName,
-		PriorityID:     priorityID,
-		PriorityName:   is.PriorityName,
-		AssigneeID:     is.AssigneeID,
-		AssigneeName:   is.AssigneeName,
-		DueDate:        is.DueDate,
-		Description:    is.Description,
-		ParentIssueKey: parentIssueKeyOf(is.RawJSON, parentKeys),
-		BaseUpdated:    is.Updated,
-		CustomFields:   bulkCustomFieldValues(is.RawJSON),
-	}
-}
-
-// ExportBulkTemplate は一括更新テンプレート(既存課題 + base_updated)を Excel 出力する。
-//
-// 課題抽出の Excel 出力と同じく、ローカル DB のカーソルから 1 件ずつ受け取って
-// StreamWriter へ流す(R4)。
-func (a *App) ExportBulkTemplate(profileID string, projectID int64, query store.IssueFilter) (*ExportResultDTO, error) {
-	const op = "ExportBulkTemplate"
-	attrs := []slog.Attr{slog.String("profileId", profileID), slog.Int64("projectId", projectID)}
-	a.logStart(op, attrs...)
-	s, err := a.svc()
-	if err != nil {
-		a.logEnd(op, err, attrs...)
-		return nil, err
-	}
-	query.ProjectID = projectID
-	// 抽出条件の不備は保存ダイアログを出す前に弾く(課題抽出の出力と同じ理由)。
-	if err := store.ValidateIssueFilter(query); err != nil {
-		a.logEnd(op, err, attrs...)
-		return nil, err
-	}
-	// 名前で編集できるようにするため、テンプレートへ選択候補(種別・状態・優先度・担当者)を載せる。
-	// 保存先を尋ねる前に取得し、失敗した場合はダイアログを出さずに終わる。
-	masters, err := a.bulkTemplateMasters(profileID, projectID)
-	if err != nil {
-		a.logEnd(op, err, attrs...)
-		return nil, err
-	}
-	// 親課題キーのプリフィル(CF5)に使う「課題 ID → 課題キー」。
-	// テンプレートには常に親課題キー列が付くため、こちらは常に取得する。
-	parentKeys, err := s.ListIssueKeysByID(a.ctx, profileID, projectID)
-	if err != nil {
-		a.logEnd(op, err, attrs...)
-		return nil, err
-	}
-	path, err := wailsruntime.SaveFileDialog(a.ctx, wailsruntime.SaveDialogOptions{
-		Title:           "テンプレートの出力先を選択",
-		DefaultFilename: "backlog-bulk-template.xlsx",
-		Filters: []wailsruntime.FileFilter{
-			{DisplayName: "Excel ブック (*.xlsx)", Pattern: "*.xlsx"},
-		},
-	})
-	if err != nil {
-		a.logEnd(op, err, attrs...)
-		return nil, err
-	}
-	if path == "" { // ユーザがキャンセル
-		a.logEnd(op, nil, append(attrs, slog.Bool("canceled", true))...)
-		return &ExportResultDTO{Path: "", Rows: 0}, nil
-	}
-	fileAttr := fileExtAttr(path)
-	// 課題 → テンプレート行の変換をカーソル走査の中で行い、行は書き出したら捨てる。
-	var res store.IssueIterateResult
-	seq := func(yield func(*export.BulkTemplateRow) error) error {
-		var err error
-		res, err = s.IterateIssues(a.ctx, profileID, query,
-			limitedIssueVisitor(exportSearchLimit, func(is *store.Issue) error {
-				row := bulkTemplateRowOf(is, parentKeys)
-				return yield(&row)
-			}))
-		return err
-	}
-	// 上限超過(errExportRowLimit)は課題抽出と同じ扱い(部分出力せずエラー)。
-	if err := export.ExportBulkTemplateToFile(path, projectID, seq, masters); err != nil {
-		a.logEnd(op, maskPathInError(err, path), append(attrs, fileAttr)...)
-		return nil, err
-	}
-	a.logEnd(op, nil, append(attrs, fileAttr, slog.Int("rows", res.Total))...)
-	return &ExportResultDTO{Path: path, Rows: res.Total}, nil
-}
-
-// ImportBulkFile は記入済み Excel を選択して取り込み、検証 + dry-run プレビューを返す。
-// ファイル選択キャンセル時は jobId=0 かつ totalRows=0 を返す(フロント契約)。
-func (a *App) ImportBulkFile(profileID string, projectID int64, defaultPriorityID int64) (*bulk.ImportResult, error) {
-	const op = "ImportBulkFile"
-	attrs := []slog.Attr{
-		slog.String("profileId", profileID),
-		slog.Int64("projectId", projectID),
-		slog.Int64("defaultPriorityId", defaultPriorityID),
-	}
-	a.logStart(op, attrs...)
-	s, err := a.svc()
-	if err != nil {
-		a.logEnd(op, err, attrs...)
-		return nil, err
-	}
-	path, err := wailsruntime.OpenFileDialog(a.ctx, wailsruntime.OpenDialogOptions{
-		Title: "記入済みの Excel ファイルを選択",
-		Filters: []wailsruntime.FileFilter{
-			{DisplayName: "Excel ブック (*.xlsx)", Pattern: "*.xlsx"},
-		},
-	})
-	if err != nil {
-		a.logEnd(op, err, attrs...)
-		return nil, err
-	}
-	if path == "" { // ユーザがキャンセル
-		a.logEnd(op, nil, append(attrs, slog.Bool("canceled", true))...)
-		return &bulk.ImportResult{
-			ProjectID: projectID,
-			Errors:    []bulk.RowError{},
-			Previews:  []bulk.RowPreview{},
-			Warnings:  []string{},
-		}, nil
-	}
-	fileAttr := fileExtAttr(path)
-	res, err := s.ImportBulkFile(a.ctx, profileID, projectID, path, defaultPriorityID)
-	if err != nil {
-		a.logEnd(op, maskPathInError(err, path), append(attrs, fileAttr)...)
-		return nil, err
-	}
-	if res.Errors == nil {
-		res.Errors = []bulk.RowError{}
-	}
-	if res.Previews == nil {
-		res.Previews = []bulk.RowPreview{}
-	}
-	if res.Warnings == nil {
-		res.Warnings = []string{}
-	}
-	// 警告本文はプロジェクト情報等を含みうるため件数のみ記録する
-	a.logEnd(op, nil, append(attrs,
-		fileAttr,
-		slog.Int64("jobId", res.JobID),
-		slog.Int("totalRows", res.TotalRows),
-		slog.Int("creates", res.Creates),
-		slog.Int("updates", res.Updates),
-		slog.Int("errors", len(res.Errors)),
-		slog.Int("warnings", len(res.Warnings)),
-		slog.Bool("valid", res.Valid))...)
-	return res, nil
-}
-
-// RunBulkJob は取り込み済みジョブを実行する(1 件ずつ POST/PATCH。進捗は
-// Wails イベント 'bulk:progress' {jobId, processed, total} で通知)。
-func (a *App) RunBulkJob(profileID string, jobID int64, force, resendSending bool) (*bulk.RunResult, error) {
-	const op = "RunBulkJob"
-	attrs := []slog.Attr{
-		slog.String("profileId", profileID),
-		slog.Int64("jobId", jobID),
-		slog.Bool("force", force),
-		slog.Bool("resendSending", resendSending),
-	}
-	a.logStart(op, attrs...)
-	s, err := a.svc()
-	if err != nil {
-		a.logEnd(op, err, attrs...)
-		return nil, err
-	}
-	onProgress := func(p bulk.Progress) {
-		wailsruntime.EventsEmit(a.ctx, "bulk:progress", map[string]any{
-			"jobId":     jobID,
-			"processed": p.Processed,
-			"total":     p.Total,
-		})
-	}
-	res, err := s.RunBulkJob(a.ctx, profileID, jobID, bulk.RunOptions{Force: force, ResendSending: resendSending}, onProgress)
-	if err != nil {
-		a.logEnd(op, err, attrs...)
-		return nil, err
-	}
-	if res.Warnings == nil {
-		res.Warnings = []string{}
-	}
-	// 警告本文は課題キー等を含みうるため件数のみ記録する
-	a.logEnd(op, nil, append(attrs,
-		slog.Int("done", res.Done),
-		slog.Int("failed", res.Failed),
-		slog.Int("conflict", res.Conflict),
-		slog.Int("skipped", res.Skipped),
-		slog.Int("warnings", len(res.Warnings)),
-		slog.Int64("durationMs", res.DurationMs))...)
-	return res, nil
-}
-
-// CancelBulkRun は実行中の一括ジョブへキャンセルを要求する(行間で反映される)。
-// ジョブ ID はプロファイルごとの採番のため、プロファイル ID と併せて指定する(中 2)。
-func (a *App) CancelBulkRun(profileID string, jobID int64) error {
-	const op = "CancelBulkRun"
-	attrs := []slog.Attr{slog.String("profileId", profileID), slog.Int64("jobId", jobID)}
-	a.logStart(op, attrs...)
-	s, err := a.svc()
-	if err != nil {
-		a.logEnd(op, err, attrs...)
-		return err
-	}
-	s.CancelBulkRun(profileID, jobID)
-	a.logEnd(op, nil, attrs...)
-	return nil
-}
-
-// ListBulkJobs は一括ジョブの履歴(行数集計付き)を返す。
-func (a *App) ListBulkJobs(profileID string) ([]store.JobSummary, error) {
-	const op = "ListBulkJobs"
-	attrs := []slog.Attr{slog.String("profileId", profileID)}
-	a.logStart(op, attrs...)
-	s, err := a.svc()
-	if err != nil {
-		a.logEnd(op, err, attrs...)
-		return nil, err
-	}
-	jobs, err := s.ListBulkJobs(a.ctx, profileID)
-	if err != nil {
-		a.logEnd(op, err, attrs...)
-		return nil, err
-	}
-	if jobs == nil {
-		jobs = []store.JobSummary{}
-	}
-	a.logEnd(op, nil, append(attrs, slog.Int("jobs", len(jobs)))...)
-	return jobs, nil
-}
-
-// BulkJobRowDTO は一括ジョブの行明細 1 行(フロント契約)。
-//
-// payload(送信内容)・baseUpdated は返さない。課題本文・件名を含みうるうえ、
-// 画面での結果確認には不要なため(設計書 7 節)。
-type BulkJobRowDTO struct {
-	RowNo         int    `json:"rowNo"`
-	IssueKey      string `json:"issueKey"`
-	Status        string `json:"status"`
-	ResultIssueID int64  `json:"resultIssueId"`
-	Error         string `json:"error"`
-}
-
-// GetBulkJobRows はジョブの行明細を行番号順で返す(実行結果の確認用)。
-func (a *App) GetBulkJobRows(profileID string, jobID int64) ([]BulkJobRowDTO, error) {
-	const op = "GetBulkJobRows"
-	attrs := []slog.Attr{slog.String("profileId", profileID), slog.Int64("jobId", jobID)}
-	a.logStart(op, attrs...)
-	rows, err := a.bulkJobRows(profileID, jobID)
-	if err != nil {
-		a.logEnd(op, err, attrs...)
-		return nil, err
-	}
-	out := make([]BulkJobRowDTO, 0, len(rows))
-	for _, r := range rows {
-		out = append(out, BulkJobRowDTO{
-			RowNo:         r.RowNo,
-			IssueKey:      r.IssueKey,
-			Status:        r.Status,
-			ResultIssueID: r.ResultIssueID,
-			Error:         r.Error,
-		})
-	}
-	a.logEnd(op, nil, append(attrs, slog.Int("rows", len(out)))...)
-	return out, nil
-}
-
-// bulkJobRows はジョブの行明細を取得する(バインディング共通の前処理)。
-func (a *App) bulkJobRows(profileID string, jobID int64) ([]store.JobRow, error) {
-	s, err := a.svc()
-	if err != nil {
-		return nil, err
-	}
-	return s.GetBulkJobRows(a.ctx, profileID, jobID)
-}
-
-// bulkRowAction は行の処理区分の表示名を返す。
-// payload を解析せず、行状態と課題キーの有無だけで判断する
-// (送信内容を画面・Excel へ持ち出さないため)。
-func bulkRowAction(row store.JobRow) string {
-	switch {
-	case row.Status == store.RowStatusSkip:
-		return "変更なし"
-	case row.IssueKey == "":
-		return "追加"
-	default:
-		return "更新"
-	}
-}
-
-// bulkRowStatusLabels は行状態の表示名(Excel 用)。
-var bulkRowStatusLabels = map[string]string{
-	store.RowStatusPending:  "未実行",
-	store.RowStatusSending:  "送信中(結果未確認)",
-	store.RowStatusDone:     "完了",
-	store.RowStatusError:    "失敗",
-	store.RowStatusConflict: "競合",
-	store.RowStatusSkip:     "変更なし",
-}
-
-// bulkRowStatusLabel は行状態の表示名を返す(未知の値はそのまま返す)。
-func bulkRowStatusLabel(status string) string {
-	if label, ok := bulkRowStatusLabels[status]; ok {
-		return label
-	}
-	return status
-}
-
-// ExportBulkResultExcel はジョブの実行結果を Excel に出力する(高 5)。
-// 保存先は OS の保存ダイアログでユーザが選択する(キャンセル時は path 空)。
-func (a *App) ExportBulkResultExcel(profileID string, jobID int64) (*ExportResultDTO, error) {
-	const op = "ExportBulkResultExcel"
-	attrs := []slog.Attr{slog.String("profileId", profileID), slog.Int64("jobId", jobID)}
-	a.logStart(op, attrs...)
-	rows, err := a.bulkJobRows(profileID, jobID)
-	if err != nil {
-		a.logEnd(op, err, attrs...)
-		return nil, err
-	}
-	path, err := wailsruntime.SaveFileDialog(a.ctx, wailsruntime.SaveDialogOptions{
-		Title:           "実行結果の出力先を選択",
-		DefaultFilename: "backlog-bulk-result.xlsx",
-		Filters: []wailsruntime.FileFilter{
-			{DisplayName: "Excel ブック (*.xlsx)", Pattern: "*.xlsx"},
-		},
-	})
-	if err != nil {
-		a.logEnd(op, err, attrs...)
-		return nil, err
-	}
-	if path == "" { // ユーザがキャンセル
-		a.logEnd(op, nil, append(attrs, slog.Bool("canceled", true))...)
-		return &ExportResultDTO{Path: "", Rows: 0}, nil
-	}
-	exportRows := make([]export.BulkResultRow, 0, len(rows))
-	for _, r := range rows {
-		exportRows = append(exportRows, export.BulkResultRow{
-			RowNo:         r.RowNo,
-			Action:        bulkRowAction(r),
-			IssueKey:      r.IssueKey,
-			ResultIssueID: r.ResultIssueID,
-			Status:        bulkRowStatusLabel(r.Status),
-			ErrorMessage:  r.Error,
-		})
-	}
-	fileAttr := fileExtAttr(path)
-	if err := export.ExportBulkResultToFile(path, exportRows); err != nil {
-		a.logEnd(op, maskPathInError(err, path), append(attrs, fileAttr)...)
-		return nil, err
-	}
-	a.logEnd(op, nil, append(attrs, fileAttr, slog.Int("rows", len(exportRows)))...)
-	return &ExportResultDTO{Path: path, Rows: len(exportRows)}, nil
-}
-
-// CustomFieldItemDTO はリスト系カスタム属性の選択肢
-// (frontend/src/lib/backend.ts の CustomFieldItem と対)。
-type CustomFieldItemDTO struct {
-	ID   int64  `json:"id"`
-	Name string `json:"name"`
-}
-
-// CustomFieldDefDTO はカスタム属性の定義
-// (frontend/src/lib/backend.ts の CustomFieldDef と対)。
-//
-// typeName は画面での型判定・表示に使うため Go 側で解決して渡す
-// (型 ID の対応表をフロントへ二重に持たせない)。
-type CustomFieldDefDTO struct {
-	ID          int64  `json:"id"`
-	TypeID      int    `json:"typeId"`
-	TypeName    string `json:"typeName"`
-	Name        string `json:"name"`
-	Description string `json:"description"`
-	Required    bool   `json:"required"`
-	// ApplicableIssueTypes は適用対象の課題種別 ID(空 = 全課題種別)。
-	ApplicableIssueTypes []int64              `json:"applicableIssueTypes"`
-	AllowInput           bool                 `json:"allowInput"`
-	AllowAddItem         bool                 `json:"allowAddItem"`
-	Items                []CustomFieldItemDTO `json:"items"`
-}
-
-// MasterDataDTO は種別・優先度・状態・カスタム属性のマスタ
-// (frontend/src/lib/backend.ts の MasterData と対。各配列は null を返さない)。
-type MasterDataDTO struct {
-	IssueTypes   []bulk.NamedID      `json:"issueTypes"`
-	Priorities   []bulk.NamedID      `json:"priorities"`
-	Statuses     []bulk.NamedID      `json:"statuses"`
-	CustomFields []CustomFieldDefDTO `json:"customFields"`
-}
-
-// newMasterDataDTO はマスタを DTO へ写す(nil スライスは空スライスへ正規化)。
-func newMasterDataDTO(md *bulk.MasterData) *MasterDataDTO {
-	dto := &MasterDataDTO{
-		IssueTypes:   md.IssueTypes,
-		Priorities:   md.Priorities,
-		Statuses:     md.Statuses,
-		CustomFields: make([]CustomFieldDefDTO, 0, len(md.CustomFields)),
-	}
-	if dto.IssueTypes == nil {
-		dto.IssueTypes = []bulk.NamedID{}
-	}
-	if dto.Priorities == nil {
-		dto.Priorities = []bulk.NamedID{}
-	}
-	if dto.Statuses == nil {
-		dto.Statuses = []bulk.NamedID{}
-	}
-	for _, def := range md.CustomFields {
-		d := CustomFieldDefDTO{
-			ID:                   def.ID,
-			TypeID:               def.TypeID,
-			TypeName:             customfield.TypeName(def.TypeID),
-			Name:                 def.Name,
-			Description:          def.Description,
-			Required:             def.Required,
-			ApplicableIssueTypes: def.ApplicableIssueTypes,
-			AllowInput:           def.AllowInput,
-			AllowAddItem:         def.AllowAddItem,
-			Items:                make([]CustomFieldItemDTO, 0, len(def.Items)),
-		}
-		if d.ApplicableIssueTypes == nil {
-			d.ApplicableIssueTypes = []int64{}
-		}
-		for _, it := range def.Items {
-			d.Items = append(d.Items, CustomFieldItemDTO{ID: it.ID, Name: it.Name})
-		}
-		dto.CustomFields = append(dto.CustomFields, d)
-	}
-	return dto
-}
-
-// GetMasterData は種別・優先度・状態・カスタム属性のマスタを返す
-// (取り込みの既定優先度選択などに使用)。
-func (a *App) GetMasterData(profileID string, projectID int64) (*MasterDataDTO, error) {
-	const op = "GetMasterData"
-	attrs := []slog.Attr{slog.String("profileId", profileID), slog.Int64("projectId", projectID)}
-	a.logStart(op, attrs...)
-	s, err := a.svc()
-	if err != nil {
-		a.logEnd(op, err, attrs...)
-		return nil, err
-	}
-	md, err := s.GetMasterData(a.ctx, profileID, projectID)
-	if err != nil {
-		a.logEnd(op, err, attrs...)
-		return nil, err
-	}
-	dto := newMasterDataDTO(md)
-	a.logEnd(op, nil, append(attrs,
-		slog.Int("issueTypes", len(dto.IssueTypes)),
-		slog.Int("priorities", len(dto.Priorities)),
-		slog.Int("statuses", len(dto.Statuses)),
-		slog.Int("customFields", len(dto.CustomFields)))...)
-	return dto, nil
 }

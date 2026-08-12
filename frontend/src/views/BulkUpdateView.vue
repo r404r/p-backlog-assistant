@@ -10,6 +10,7 @@
 // 「中断した sending 行は自動再送しない」を UI 上でも徹底する。
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import {
+  actionLabel,
   getBackend,
   isMockBackend,
   onBulkProgress,
@@ -38,6 +39,20 @@ const mock = isMockBackend()
  */
 const selectionGuard = useProjectSelectionGuard()
 
+/**
+ * 取り込み集計の見出しラベル(「新規追加 / 更新 / 変更なし」)。
+ *
+ * 行ごとの表示は Go が解決した actionLabel をそのまま使うが、集計には行が無い
+ * (0 件でも見出しは出す)ため、行データからは取れない。ラベルのためだけに
+ * 契約(BulkImportResult)を増やすのは過剰なので、backend.ts が持つ写しの
+ * 対応表(Go 側 bulk.ActionLabel の写し)から引く。
+ */
+const SUMMARY_LABELS = {
+  create: actionLabel('create'),
+  update: actionLabel('update'),
+  skip: actionLabel('skip'),
+}
+
 /** 実行時間の目安(設計書 5 節: 1,000 件で 8〜10 分) */
 const MINUTES_PER_1000 = 9
 
@@ -47,22 +62,6 @@ function estimateDuration(count: number): string {
   const minutes = (count / 1000) * MINUTES_PER_1000
   if (minutes < 1) return '1 分未満'
   return `約 ${Math.ceil(minutes)} 分`
-}
-
-const ACTION_LABEL: Record<string, string> = {
-  create: '新規追加',
-  update: '更新',
-  skip: '対象外',
-}
-
-/** ジョブ行明細の状態表示(Go 側 job_rows.status と対) */
-const ROW_STATUS_LABEL: Record<string, string> = {
-  pending: '未処理',
-  sending: '送信中',
-  done: '完了',
-  error: '失敗',
-  conflict: '競合',
-  skip: '対象外',
 }
 
 // ---------------------------------------------------------------------------
@@ -652,8 +651,10 @@ onUnmounted(() => {
       <section v-if="importResult" class="panel">
         <h2>③ 検証結果・変更プレビュー(dry-run)</h2>
         <p class="summary">
-          取り込み {{ importResult.totalRows }} 行 / 新規追加 {{ importResult.creates }} 件 /
-          更新 {{ importResult.updates }} 件 / 対象外 {{ importResult.skips }} 件
+          取り込み {{ importResult.totalRows }} 行 /
+          {{ SUMMARY_LABELS.create }} {{ importResult.creates }} 件 /
+          {{ SUMMARY_LABELS.update }} {{ importResult.updates }} 件 /
+          {{ SUMMARY_LABELS.skip }} {{ importResult.skips }} 件
         </p>
 
         <div v-if="importResult.warnings.length > 0" class="notice warn">
@@ -691,7 +692,8 @@ onUnmounted(() => {
               <tr v-for="p in importResult.previews" :key="p.rowNo" :class="{ skip: p.action === 'skip' }">
                 <td class="nowrap">{{ p.rowNo }}</td>
                 <td class="nowrap">
-                  <span class="badge" :class="p.action">{{ ACTION_LABEL[p.action] ?? p.action }}</span>
+                  <!-- 表示名は Go 側で解決済み(画面と結果 Excel で同じ文言。R14) -->
+                  <span class="badge" :class="p.action">{{ p.actionLabel }}</span>
                 </td>
                 <td class="nowrap">{{ p.issueKey || '(新規)' }}</td>
                 <td>{{ p.summary }}</td>
@@ -943,8 +945,9 @@ onUnmounted(() => {
                             <template v-else>(新規)</template>
                           </td>
                           <td class="nowrap">
+                            <!-- 表示名は Go 側で解決済み(画面と結果 Excel で同じ文言。R14) -->
                             <span class="badge" :class="r.status">
-                              {{ ROW_STATUS_LABEL[r.status] ?? r.status }}
+                              {{ r.statusLabel }}
                             </span>
                           </td>
                           <td>{{ r.error || '-' }}</td>

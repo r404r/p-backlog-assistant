@@ -44,6 +44,10 @@ func TestImport_ClassifiesCreateUpdateAndSkip(t *testing.T) {
 	if p := previewOf(res, 4); p == nil || p.Action != ActionSkip || len(p.Changes) != 0 {
 		t.Errorf("preview(4) = %+v", p)
 	}
+	// 表示名は Go 側で解決して渡す(画面が独自の対応表を持たないため。R14)
+	if p := previewOf(res, 4); p == nil || p.ActionLabel != "変更なし" {
+		t.Errorf("preview(4).ActionLabel = %+v", p)
+	}
 
 	// ジョブ行が永続化され、skip 行も記録されていること
 	rows, err := st.ListJobRows(context.Background(), res.JobID)
@@ -872,4 +876,20 @@ func TestImport_NamePriorityBeatsClearInIDColumn(t *testing.T) {
 			t.Errorf("警告 = %v", res.Warnings)
 		}
 	})
+}
+
+// TestActionLabel は処理区分の表示名が画面・結果 Excel で共通の 1 か所から
+// 得られることを確認する(R14)。未知の値は情報を落とさずそのまま返す。
+func TestActionLabel(t *testing.T) {
+	cases := map[string]string{
+		ActionCreate: "新規追加",
+		ActionUpdate: "更新",
+		ActionSkip:   "変更なし",
+		"unknown":    "unknown",
+	}
+	for action, want := range cases {
+		if got := ActionLabel(action); got != want {
+			t.Errorf("ActionLabel(%q) = %q, want %q", action, got, want)
+		}
+	}
 }

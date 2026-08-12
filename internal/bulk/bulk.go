@@ -34,6 +34,25 @@ const (
 	ActionSkip   = "skip" // 変更が 1 つも無い行(送信しない)
 )
 
+// actionLabels は処理区分の表示名(画面のプレビューと結果 Excel で共通。R14)。
+//
+// 以前は画面が「対象外」、Excel が「変更なし」と別々に持っており、
+// 同じ行が場所によって違う名前で表示されていた。skip は「変更が 1 つも無い行」
+// (検証エラーで除外された行ではない)なので、正確な「変更なし」に統一する。
+var actionLabels = map[string]string{
+	ActionCreate: "新規追加",
+	ActionUpdate: "更新",
+	ActionSkip:   "変更なし",
+}
+
+// ActionLabel は処理区分の表示名を返す(未知の値はそのまま返す)。
+func ActionLabel(action string) string {
+	if label, ok := actionLabels[action]; ok {
+		return label
+	}
+	return action
+}
+
 // API は bulk が必要とする Backlog API 操作。
 // 実体は *backlogclient.Client(テストではフェイクに差し替える)。
 type API interface {

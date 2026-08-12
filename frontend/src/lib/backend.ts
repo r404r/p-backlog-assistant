@@ -183,6 +183,43 @@ export function customColumnKey(defId: number): string {
 }
 
 /**
+ * 一括更新の処理区分・行状態の表示名(Go 側 bulk.ActionLabel /
+ * main.bulkRowStatusLabels の写し。R14)。
+ *
+ * **正は Go 側**で、通常の経路では Go が解決した actionLabel / statusLabel を
+ * そのまま表示する。この写しを置いているのは次の 3 用途に限る:
+ *   1. 旧バージョンのバインディング(表示名を返さない)に当たったときの
+ *      フォールバック。内部値(create / pending)を素で見せないため。
+ *   2. Wails 外で動くモックバックエンド。
+ *   3. 行データを伴わない集計見出し(取り込み結果の「新規追加 / 更新 / 変更なし」)。
+ * Go 側でラベルを変えたらここも合わせること(検査は R14 の残課題)。
+ */
+const ACTION_LABELS: Record<string, string> = {
+  create: '新規追加',
+  update: '更新',
+  skip: '変更なし',
+}
+
+const ROW_STATUS_LABELS: Record<string, string> = {
+  pending: '未処理',
+  sending: '送信中(結果未確認)',
+  done: '完了',
+  error: '失敗',
+  conflict: '競合',
+  skip: '変更なし',
+}
+
+/** 処理区分の表示名(未知の値はそのまま返す)。ACTION_LABELS の注記を参照 */
+export function actionLabel(action: string): string {
+  return ACTION_LABELS[action] ?? action
+}
+
+/** 行状態の表示名(未知の値はそのまま返す)。ACTION_LABELS の注記を参照 */
+export function rowStatusLabel(status: string): string {
+  return ROW_STATUS_LABELS[status] ?? status
+}
+
+/**
  * カスタム属性 1 定義に対する絞り込み条件(Go 側 customfield.Filter と対)。
  *
  * 定義ごとに 1 条件で、型ごとに使うフィールドが決まっている:
@@ -353,6 +390,22 @@ export interface ExportResult {
   unverifiable: number
 }
 
+/**
+ * Excel 出力の列(Go 側 export.ColumnMeta と対。R14)。
+ *
+ * 列キー・ラベル・既定選択はすべて Go 側の列定義から供給される。
+ * 画面は受け取った内容を並べるだけにして、ラベルが Excel のヘッダと
+ * ずれないようにする(以前は画面「作成日」/ Excel「作成日時」のずれがあった)。
+ */
+export interface ExportColumn {
+  /** 出力時に指定する列キー */
+  key: string
+  /** 画面に表示するラベル(Excel のヘッダと同じ文字列) */
+  label: string
+  /** 既定で選択する列かどうか */
+  byDefault: boolean
+}
+
 // --- 一括更新・追加(画面 3) ---------------------------------------------
 
 /** 取り込み時の検証エラー(1 行 1 件) */
@@ -367,8 +420,13 @@ export interface BulkValidationError {
 export interface BulkPreviewRow {
   /** Excel の行番号 */
   rowNo: number
-  /** この行の処理区分。skip は検証エラー等で実行対象外になる行 */
+  /** この行の処理区分。skip は「変更が 1 つも無い行」(送信しない) */
   action: 'create' | 'update' | 'skip'
+  /**
+   * 処理区分の表示名(Go 側 bulk.ActionLabel で解決済み。結果 Excel と同じ文言)。
+   * 表示名の対応表を画面に持たないための項目(R14)。
+   */
+  actionLabel: string
   /** 課題キー(新規追加行は空文字) */
   issueKey: string
   /** 件名 */
@@ -394,7 +452,7 @@ export interface BulkImportResult {
   creates: number
   /** 更新になる行数 */
   updates: number
-  /** 実行対象外(変更なし・エラー)の行数 */
+  /** 変更が 1 つも無く、送信しない行数(skip 行) */
   skips: number
   /** すべての検証を通過し、実行可能かどうか */
   valid: boolean
@@ -471,6 +529,11 @@ export interface BulkJobRowDetail {
   issueKey: string
   /** 行の状態(pending / sending / done / error / conflict / skip) */
   status: string
+  /**
+   * 行の状態の表示名(Go 側 bulkRowStatusLabel で解決済み。結果 Excel と同じ文言)。
+   * 表示名の対応表を画面に持たないための項目(R14)。
+   */
+  statusLabel: string
   /** 新規追加で作成済みの場合の課題 ID(未作成なら 0) */
   resultIssueId: number
   /** エラー内容(日本語。エラーが無ければ空文字) */
@@ -658,6 +721,11 @@ export interface Backend {
   /** データ種別ごとの同期状態一覧を返す */
   getSyncState(profileId: string): Promise<SyncStateRow[]>
   /**
+   * 課題抽出の列選択に出す固定列(列キー・ラベル・既定選択)を返す。
+   * カスタム属性列は含まない(getMasterData で取得した定義から画面が組み立てる)。
+   */
+  getIssueExportColumns(): Promise<ExportColumn[]>
+  /**
    * 検索条件に一致する課題を Excel 出力する(表示上限に関わらず全件)。
    * 保存先は Go 側の保存ダイアログで選択する。キャンセル時は path が空文字。
    * @param columns 出力する列キー(IssueRow のキー)を表示順で指定する
@@ -673,6 +741,8 @@ export interface Backend {
   syncUsers(profileId: string): Promise<SyncResult>
   /** ローカル DB からユーザを検索する(API は呼ばない) */
   listUsers(profileId: string, query: UserQuery): Promise<UserSearchResult>
+  /** ユーザ抽出の列選択に出す列(列キー・ラベル・既定選択)を返す */
+  getUserExportColumns(): Promise<ExportColumn[]>
   /**
    * 検索条件に一致するユーザを Excel 出力する(表示上限に関わらず全件)。
    * 保存先は Go 側の保存ダイアログで選択する。キャンセル時は path が空文字。
@@ -780,9 +850,11 @@ interface WailsApp {
   ): Promise<IssueSearchResult>
   ListFilterOptions(profileId: string, projectId: number): Promise<FilterOptions>
   GetSyncState(profileId: string): Promise<SyncStateRow[]>
+  GetIssueExportColumns(): Promise<ExportColumn[]>
   ExportIssuesExcel(profileId: string, query: IssueQuery, columns: string[]): Promise<ExportResult>
   SyncUsers(profileId: string): Promise<SyncResult>
   ListUsers(profileId: string, query: UserQuery): Promise<UserSearchResult>
+  GetUserExportColumns(): Promise<ExportColumn[]>
   ExportUsersExcel(profileId: string, query: UserQuery, columns: string[]): Promise<ExportResult>
   ExportBulkTemplate(profileId: string, projectId: number, query: IssueQuery): Promise<ExportResult>
   ImportBulkFile(
@@ -843,6 +915,23 @@ function findWailsApp(): WailsApp | null {
   return null
 }
 
+/**
+ * Go から届いた列メタデータを正規化する(R14)。
+ * 列が 1 つも無いと出力できなくなるため、空で握り潰さずエラーにする
+ * (旧バージョンのバインディングでメソッドが無い場合も同様)。
+ */
+function normalizeExportColumns(cols: ExportColumn[] | null | undefined): ExportColumn[] {
+  const out = (cols ?? []).map((c) => ({
+    key: c?.key ?? '',
+    label: c?.label ?? '',
+    byDefault: c?.byDefault ?? false,
+  }))
+  if (out.length === 0) {
+    throw new Error('出力できる列の情報を取得できませんでした(アプリを更新してください)')
+  }
+  return out
+}
+
 function createWailsBackend(app: WailsApp): Backend {
   // Go の nil スライス / nil マップは JSON null として届くため、配列・オブジェクトは
   // ここで必ず正規化する(初回起動時の ListProfiles null で画面が真っ白になった実績あり)
@@ -884,6 +973,12 @@ function createWailsBackend(app: WailsApp): Backend {
       return { statuses: r?.statuses ?? [], assignees: r?.assignees ?? [] }
     },
     getSyncState: async (profileId) => (await app.GetSyncState(profileId)) ?? [],
+    // 旧バージョンのバインディング(メソッド未実装)では normalizeExportColumns が
+    // 「アプリを更新してください」のエラーにする(列が無いまま出力させない)
+    getIssueExportColumns: async () =>
+      normalizeExportColumns(
+        typeof app.GetIssueExportColumns === 'function' ? await app.GetIssueExportColumns() : [],
+      ),
     exportIssuesExcel: async (profileId, query, columns) => {
       const r = await app.ExportIssuesExcel(profileId, query, columns)
       return { path: r?.path ?? '', rows: r?.rows ?? 0, unverifiable: r?.unverifiable ?? 0 }
@@ -910,6 +1005,10 @@ function createWailsBackend(app: WailsApp): Backend {
       }))
       return { rows, total: r?.total ?? 0 }
     },
+    getUserExportColumns: async () =>
+      normalizeExportColumns(
+        typeof app.GetUserExportColumns === 'function' ? await app.GetUserExportColumns() : [],
+      ),
     exportUsersExcel: async (profileId, query, columns) => {
       const r = await app.ExportUsersExcel(profileId, query, columns)
       // ユーザ抽出にカスタム属性条件は無いため判定不能は常に 0
@@ -936,6 +1035,9 @@ function createWailsBackend(app: WailsApp): Backend {
           ...p,
           changes: p.changes ?? [],
           conflictWarning: p.conflictWarning ?? false,
+          // 旧バージョンのバインディング(表示名未実装)では写しの対応表で補う
+          // (内部値 create / update / skip を素で見せない)
+          actionLabel: p.actionLabel || actionLabel(p.action),
         })),
       }
     },
@@ -964,6 +1066,9 @@ function createWailsBackend(app: WailsApp): Backend {
         rowNo: r?.rowNo ?? 0,
         issueKey: r?.issueKey ?? '',
         status: r?.status ?? '',
+        // 旧バージョンのバインディング(表示名未実装)では写しの対応表で補う
+        // (内部値 pending / sending 等を素で見せない)
+        statusLabel: r?.statusLabel || rowStatusLabel(r?.status ?? ''),
         resultIssueId: r?.resultIssueId ?? 0,
         error: r?.error ?? '',
       })),
@@ -1044,6 +1149,36 @@ const MOCK_SUMMARY_WORDS = ['ログイン', '一覧表示', 'CSV 取り込み', 
 // カスタム属性(文字列)のサンプル値。実在の取引先は含まない。
 // 全角・半角の混在を含め、正規化つき部分一致の動作を手元で確認できるようにする
 const MOCK_CUSTOMERS = ['モック商事', 'ＡＢＣ工業', 'ABC商会', 'サンプル製作所']
+
+/**
+ * モック用の課題抽出の列定義(Go 側 internal/export/issue.go の列定義に合わせる)。
+ * Wails 実行時は Go から供給されるため使われない(モックは Wails 外の
+ * 画面確認専用で、契約と同様に手書きになる)。
+ */
+const MOCK_ISSUE_EXPORT_COLUMNS: ExportColumn[] = [
+  { key: 'issueKey', label: 'キー', byDefault: true },
+  { key: 'summary', label: '件名', byDefault: true },
+  { key: 'statusName', label: '状態', byDefault: true },
+  { key: 'assigneeName', label: '担当者', byDefault: true },
+  { key: 'issueTypeName', label: '種別', byDefault: true },
+  { key: 'priorityName', label: '優先度', byDefault: true },
+  { key: 'created', label: '作成日時', byDefault: true },
+  { key: 'updated', label: '更新日時', byDefault: true },
+  { key: 'dueDate', label: '期限', byDefault: true },
+  { key: 'parentIssueKey', label: '親課題キー', byDefault: false },
+]
+
+/** モック用のユーザ抽出の列定義(Go 側 internal/export/user.go の列定義に合わせる) */
+const MOCK_USER_EXPORT_COLUMNS: ExportColumn[] = [
+  { key: 'userCode', label: 'ユーザID', byDefault: true },
+  { key: 'name', label: '名前', byDefault: true },
+  { key: 'mailAddress', label: 'メールアドレス', byDefault: true },
+  { key: 'roleName', label: 'ロール', byDefault: true },
+  { key: 'roleType', label: 'ロール値', byDefault: false },
+  { key: 'teamNames', label: '所属チーム', byDefault: true },
+  { key: 'projectKeys', label: '参加プロジェクト', byDefault: true },
+  { key: 'adminProjectKeys', label: '管理者プロジェクト', byDefault: true },
+]
 
 const MOCK_PROJECTS: Project[] = [
   { id: 101, projectKey: 'SAMPLE', name: 'サンプル開発プロジェクト', lastSyncedAt: '', syncStateUnknown: false },
@@ -1429,8 +1564,11 @@ function createMockBackend(): Backend {
 
   // 一括更新のモック状態。ジョブは新しい順に保持する。
   const jobs: BulkJobRow[] = []
-  /** ジョブ ID -> 行明細(履歴の展開表示・結果レポートの確認用) */
-  const jobRows = new Map<number, BulkJobRowDetail[]>()
+  /**
+   * ジョブ ID -> 行明細(履歴の展開表示・結果レポートの確認用)。
+   * 表示名(statusLabel)は状態が実行中に変わるため保持せず、取得時に解決する。
+   */
+  const jobRows = new Map<number, Omit<BulkJobRowDetail, 'statusLabel'>[]>()
   const canceledJobs = new Set<number>()
   let jobSeq = 0
   // 1 回目の取り込みは検証エラーあり、2 回目以降はエラー無しにして、
@@ -1631,6 +1769,11 @@ function createMockBackend(): Backend {
       return syncState.map((s) => ({ ...s }))
     },
 
+    async getIssueExportColumns() {
+      await delay(50)
+      return MOCK_ISSUE_EXPORT_COLUMNS.map((c) => ({ ...c }))
+    },
+
     async exportIssuesExcel(_profileId, query, columns) {
       await delay(800)
       if (columns.length === 0) throw new Error('出力する列を 1 つ以上選択してください')
@@ -1673,6 +1816,11 @@ function createMockBackend(): Backend {
       }
     },
 
+    async getUserExportColumns() {
+      await delay(50)
+      return MOCK_USER_EXPORT_COLUMNS.map((c) => ({ ...c }))
+    },
+
     async exportUsersExcel(_profileId, query, columns) {
       await delay(700)
       if (columns.length === 0) throw new Error('出力する列を 1 つ以上選択してください')
@@ -1699,11 +1847,14 @@ function createMockBackend(): Backend {
     async importBulkFile(_profileId, projectId, defaultPriorityId) {
       await delay(900)
       const all = issuesByProject.get(projectId) ?? []
-      // 既存課題の先頭数件を「更新」、末尾に「新規追加」と「エラー行」を足した固定シナリオ
+      // 既存課題の先頭数件を「更新」、末尾に「新規追加」と「変更なし」を足した固定シナリオ。
+      // 検証エラー行はプレビューに載せない(実バックエンドはエラー行を除いた行だけを
+      // 集計・プレビューへ載せる。internal/bulk/import.go)
       const targets = all.slice(0, 4)
       const previews: BulkPreviewRow[] = targets.map((r, i) => ({
         rowNo: i + 2,
         action: 'update',
+        actionLabel: ACTION_LABELS.update,
         issueKey: r.issueKey,
         summary: r.summary,
         changes:
@@ -1716,6 +1867,7 @@ function createMockBackend(): Backend {
       previews.push({
         rowNo: targets.length + 2,
         action: 'create',
+        actionLabel: ACTION_LABELS.create,
         issueKey: '',
         summary: '(モック)新規追加する課題',
         changes: [
@@ -1726,34 +1878,53 @@ function createMockBackend(): Backend {
         ],
         conflictWarning: false,
       })
+      // 変更が 1 つも無い行(skip)。集計とバッジの「変更なし」を確認できるようにする
+      previews.push({
+        rowNo: targets.length + 3,
+        action: 'skip',
+        actionLabel: ACTION_LABELS.skip,
+        issueKey: all[4]?.issueKey ?? '',
+        summary: all[4]?.summary ?? '(モック)変更なしの課題',
+        changes: [],
+        conflictWarning: false,
+      })
       importSeq += 1
-      const withErrors = importSeq === 1
-      const errors: BulkValidationError[] = withErrors
-        ? [{ rowNo: targets.length + 3, message: '(モック)種別ID が未入力です(新規追加行の必須項目)' }]
+      // 1 回目だけ検証エラーを出す(実行できない状態の確認用)。
+      // エラー行はプレビューにも集計にも含まれない
+      const errors: BulkValidationError[] = importSeq === 1
+        ? [{ rowNo: targets.length + 4, message: '(モック)種別ID が未入力です(新規追加行の必須項目)' }]
         : []
-      if (withErrors) {
-        previews.push({
-          rowNo: targets.length + 3,
-          action: 'skip',
-          issueKey: '',
-          summary: '(モック)検証エラーの行',
-          changes: [],
-          conflictWarning: false,
-        })
-      }
 
-      jobSeq += 1
-      const totalRows = previews.length
+      // 取り込んだデータ行数は検証エラー行も含む(Go 側 import.go の TotalRows と同じ)
+      const totalRows = previews.length + errors.length
       const creates = previews.filter((p) => p.action === 'create').length
       const updates = previews.filter((p) => p.action === 'update').length
       const skips = previews.filter((p) => p.action === 'skip').length
+      // 検証エラーがある場合はジョブを作らない(Go 側 import.go と同じ。
+      // 作ってしまうと不正な取り込みが履歴に残り「再開」から実行できてしまう)
+      if (errors.length > 0) {
+        return {
+          jobId: 0,
+          projectId,
+          totalRows,
+          creates,
+          updates,
+          skips,
+          valid: false,
+          warnings: [],
+          errors,
+          previews,
+        }
+      }
+      jobSeq += 1
       const job: BulkJobRow = {
         jobId: jobSeq,
         projectId,
         kind: 'bulk_update',
         createdAt: new Date().toISOString(),
         status: 'pending',
-        total: totalRows,
+        // ジョブに記録されるのは検証エラー行を除いた行(jobRows と同数)
+        total: previews.length,
         done: 0,
         failed: 0,
         pending: creates + updates,
@@ -1769,10 +1940,7 @@ function createMockBackend(): Backend {
           issueKey: p.issueKey,
           status: p.action === 'skip' ? 'skip' : 'pending',
           resultIssueId: 0,
-          error:
-            p.action === 'skip'
-              ? errors.find((e) => e.rowNo === p.rowNo)?.message ?? ''
-              : '',
+          error: '',
         })),
       )
       return {
@@ -1782,8 +1950,7 @@ function createMockBackend(): Backend {
         creates,
         updates,
         skips,
-        // エラー行があるうちは実行できない(画面の「実行」ボタン無効の確認用)
-        valid: errors.length === 0,
+        valid: true,
         warnings: [],
         errors,
         previews,
@@ -1886,7 +2053,10 @@ function createMockBackend(): Backend {
     async getBulkJobRows(_profileId, jobId) {
       await delay(200)
       const rows = jobRows.get(jobId) ?? []
-      return rows.map((r) => ({ ...r })).sort((a, b) => a.rowNo - b.rowNo)
+      // 表示名は Wails 実行時と同じく取得時に解決する(状態は実行中に変わるため)
+      return rows
+        .map((r) => ({ ...r, statusLabel: rowStatusLabel(r.status) }))
+        .sort((a, b) => a.rowNo - b.rowNo)
     },
 
     async exportBulkResultExcel(_profileId, jobId) {

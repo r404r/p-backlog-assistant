@@ -4,6 +4,7 @@ import { computed, onMounted, reactive, ref } from 'vue'
 import {
   getBackend,
   isMockBackend,
+  type ExportColumn,
   type PermissionStatus,
   type SyncResult,
   type UserQuery,
@@ -28,22 +29,6 @@ const ROLE_OPTIONS: { value: number; label: string }[] = [
   { value: 4, label: '閲覧者' },
   { value: 5, label: 'ゲストレポーター' },
   { value: 6, label: 'ゲスト閲覧者' },
-]
-
-/**
- * Excel 出力の列定義(キーは Go 側 export パッケージの列キーと対応)。
- * byDefault が false の列は選択可能だが既定では選択しない。
- */
-const EXPORT_COLUMNS: { key: string; label: string; byDefault: boolean }[] = [
-  { key: 'userCode', label: 'ユーザID', byDefault: true },
-  { key: 'name', label: '名前', byDefault: true },
-  { key: 'mailAddress', label: 'メールアドレス', byDefault: true },
-  { key: 'roleName', label: 'ロール', byDefault: true },
-  // ロールの数値(roleType)。未知のロールを識別するための列(既定では出力しない)
-  { key: 'roleType', label: 'ロール値', byDefault: false },
-  { key: 'teamNames', label: '所属チーム', byDefault: true },
-  { key: 'projectKeys', label: '参加プロジェクト', byDefault: true },
-  { key: 'adminProjectKeys', label: '管理者プロジェクト', byDefault: true },
 ]
 
 /** 複数値を 1 セル相当の表示にまとめる(Excel 出力と同じ区切り) */
@@ -100,6 +85,8 @@ async function loadSyncState() {
 }
 
 onMounted(async () => {
+  // 列の一覧はプロファイルに依存しないため、先に取りに行く
+  void loadExportColumns()
   try {
     profileId.value = await backend.getActiveProfile()
   } catch (e) {
@@ -214,9 +201,39 @@ async function search() {
 // Excel 出力
 // ---------------------------------------------------------------------------
 
-const selectedColumns = ref<string[]>(
-  EXPORT_COLUMNS.filter((c) => c.byDefault).map((c) => c.key),
-)
+/**
+ * Excel 出力の列(列キー・ラベル・既定選択は Go 側 export の列定義から取得する。R14)。
+ * 画面が独自の一覧を持つと Excel のヘッダとラベルがずれるため、定義は Go 側だけに置く。
+ */
+const exportColumns = ref<ExportColumn[]>([])
+
+/** 列の取得に失敗した場合の説明(空 = 正常) */
+const exportColumnsError = ref('')
+
+// 初期値は空。列の取得(loadExportColumns)で既定列が入る
+const selectedColumns = ref<string[]>([])
+
+/**
+ * 列選択を既定値で初期化済みか。
+ * 再試行のたびに既定値へ戻して、利用者が変更した選択を捨てないようにする。
+ */
+let exportColumnsInitialized = false
+
+/** 出力できる列を取得し、初回だけ既定の列選択を入れる(プロファイルに依存しない) */
+async function loadExportColumns() {
+  try {
+    const cols = await backend.getUserExportColumns()
+    exportColumns.value = cols
+    exportColumnsError.value = ''
+    if (!exportColumnsInitialized) {
+      selectedColumns.value = cols.filter((c) => c.byDefault).map((c) => c.key)
+      exportColumnsInitialized = true
+    }
+  } catch (e) {
+    exportColumnsError.value = `出力する列の情報を取得できませんでした: ${errorMessage(e)}`
+  }
+}
+
 const exporting = ref(false)
 const exportPath = ref('')
 const exportRows = ref(0)
@@ -235,9 +252,9 @@ async function exportExcel() {
   exportCanceled.value = false
   try {
     // 表示上限は付けない(条件に一致する全件を出力する)
-    const columns = EXPORT_COLUMNS.filter((c) => selectedColumns.value.includes(c.key)).map(
-      (c) => c.key,
-    )
+    const columns = exportColumns.value
+      .filter((c) => selectedColumns.value.includes(c.key))
+      .map((c) => c.key)
     const res = await backend.exportUsersExcel(profileId.value, buildQuery(false), columns)
     if (!res.path) {
       exportCanceled.value = true
@@ -411,11 +428,15 @@ async function exportExcel() {
         <h2>Excel 出力</h2>
         <p class="hint">出力する列を選択してください(現在の抽出条件に一致する全件が出力されます)。</p>
         <div class="columns">
-          <label v-for="c in EXPORT_COLUMNS" :key="c.key" class="checkbox">
+          <label v-for="c in exportColumns" :key="c.key" class="checkbox">
             <input v-model="selectedColumns" type="checkbox" :value="c.key" />
             {{ c.label }}
           </label>
         </div>
+        <p v-if="exportColumnsError" class="hint warn">
+          {{ exportColumnsError }}
+          <button type="button" class="link" @click="loadExportColumns">再試行</button>
+        </p>
         <div class="row buttons">
           <button class="primary" :disabled="!canExport" @click="exportExcel">
             {{ exporting ? '出力中...' : 'Excel 出力' }}
@@ -530,6 +551,17 @@ select:disabled {
 
 .hint.warn {
   color: #9a6700;
+}
+
+/* 文中に置く軽量なアクション(列情報の取得の再試行) */
+button.link {
+  border: none;
+  background: none;
+  padding: 0;
+  font-size: inherit;
+  color: #0b5cad;
+  cursor: pointer;
+  text-decoration: underline;
 }
 
 .freshness {

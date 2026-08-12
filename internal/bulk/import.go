@@ -32,10 +32,13 @@ type RowError struct {
 
 // RowPreview は dry-run プレビューの 1 行。
 type RowPreview struct {
-	RowNo    int    `json:"rowNo"`
-	Action   string `json:"action"` // create / update / skip
-	IssueKey string `json:"issueKey"`
-	Summary  string `json:"summary"`
+	RowNo  int    `json:"rowNo"`
+	Action string `json:"action"` // create / update / skip
+	// ActionLabel は Action の表示名(R14)。画面が独自の対応表を持たずに済むよう、
+	// 結果 Excel と同じ ActionLabel の値をそのまま渡す。
+	ActionLabel string `json:"actionLabel"`
+	IssueKey    string `json:"issueKey"`
+	Summary     string `json:"summary"`
 	// Changes は「項目: 変更前 → 変更後」の表示文字列。
 	Changes []string `json:"changes"`
 	// ConflictWarning は base_updated とローカルの updated が食い違う場合に真
@@ -196,6 +199,7 @@ func (im *Importer) Import(ctx context.Context, opts ImportOptions) (*ImportResu
 		res.Previews = append(res.Previews, RowPreview{
 			RowNo:           plan.rowNo,
 			Action:          plan.action,
+			ActionLabel:     ActionLabel(plan.action),
 			IssueKey:        plan.issueKey,
 			Summary:         plan.summary,
 			Changes:         plan.changes,

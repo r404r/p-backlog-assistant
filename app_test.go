@@ -36,12 +36,13 @@ func TestFileExtAttrRecordsOnlyExtension(t *testing.T) {
 
 // TestBulkRowActionAndStatusLabel は結果レポートの表示名解決を確認する(高 5)。
 // 処理区分は payload を解析せず、行状態と課題キーの有無だけで決める。
+// 表示名は画面のプレビュー(bulk.ActionLabel)と同じ値を使う(R14)。
 func TestBulkRowActionAndStatusLabel(t *testing.T) {
 	cases := []struct {
 		row  store.JobRow
 		want string
 	}{
-		{store.JobRow{IssueKey: "", Status: store.RowStatusDone}, "追加"},
+		{store.JobRow{IssueKey: "", Status: store.RowStatusDone}, "新規追加"},
 		{store.JobRow{IssueKey: "EXA-1", Status: store.RowStatusDone}, "更新"},
 		{store.JobRow{IssueKey: "EXA-1", Status: store.RowStatusSkip}, "変更なし"},
 	}
@@ -50,8 +51,19 @@ func TestBulkRowActionAndStatusLabel(t *testing.T) {
 			t.Errorf("bulkRowAction(%+v) = %q, want %q", c.row, got, c.want)
 		}
 	}
-	if got := bulkRowStatusLabel(store.RowStatusSending); got != "送信中(結果未確認)" {
-		t.Errorf("sending の表示名 = %q", got)
+	// 行状態の表示名も画面・Excel で共通の 1 か所(bulkRowStatusLabels)から引く
+	statusWant := map[string]string{
+		store.RowStatusPending:  "未処理",
+		store.RowStatusSending:  "送信中(結果未確認)",
+		store.RowStatusDone:     "完了",
+		store.RowStatusError:    "失敗",
+		store.RowStatusConflict: "競合",
+		store.RowStatusSkip:     "変更なし",
+	}
+	for status, want := range statusWant {
+		if got := bulkRowStatusLabel(status); got != want {
+			t.Errorf("bulkRowStatusLabel(%q) = %q, want %q", status, got, want)
+		}
 	}
 	// 未知の状態はそのまま返す(表示から値が消えないようにする)
 	if got := bulkRowStatusLabel("unknown"); got != "unknown" {

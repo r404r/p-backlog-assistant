@@ -72,6 +72,9 @@ type column struct {
 	// 値の解決には課題自身の生 JSON に加えて Options.ParentIssueKeys が要り、
 	// value(課題 1 件だけを見る関数)では組み立てられないため区別する。
 	parentIssue bool
+	// pickerHidden が真の列は、出力では指定できるが画面の列選択には出さない
+	// (IssuePickerColumns が除外する。R14)。
+	pickerHidden bool
 }
 
 // columns は出力可能な列の定義(表示順の既定でもある)。
@@ -85,7 +88,10 @@ var columns = []column{
 	{key: "created", header: "作成日時", value: func(i *store.Issue) string { return formatDateTime(i.Created) }, width: 18},
 	{key: "updated", header: "更新日時", value: func(i *store.Issue) string { return formatDateTime(i.Updated) }, width: 18},
 	{key: "dueDate", header: "期限", value: func(i *store.Issue) string { return formatDate(i.DueDate) }, width: 12},
-	{key: "description", header: "詳細", value: func(i *store.Issue) string { return i.Description }, width: 60},
+	// 詳細は本文が長く、既定でも列選択でも出していない(画面の列選択には出さない)。
+	// 出力の仕組み自体は従来どおり残してあるため、列選択に出したくなったら
+	// pickerHidden を外すだけでよい(R14 では画面の見た目を変えないため据え置き)。
+	{key: "description", header: "詳細", value: func(i *store.Issue) string { return i.Description }, width: 60, pickerHidden: true},
 	// 親課題キー(CF5)。値は生 JSON の parentIssueId を Options.ParentIssueKeys で
 	// 課題キーへ引き当てる(引き当てられない親は ID:<数値>)。
 	{key: ParentIssueKeyColumn, header: ParentIssueKeyHeader, width: 14, parentIssue: true},
