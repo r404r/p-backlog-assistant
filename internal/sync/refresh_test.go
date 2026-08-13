@@ -58,7 +58,7 @@ func TestRefreshIssue_WritesSameRowAsFullSync(t *testing.T) {
 	refreshAPI := newFakeAPI()
 	refreshAPI.issues = []backlogclient.Issue{issue}
 	refreshStore := openTempStore(t)
-	if err := newTestEngine(t, refreshAPI, refreshStore).RefreshIssue(ctx, 1, "EXA-1"); err != nil {
+	if _, err := newTestEngine(t, refreshAPI, refreshStore).RefreshIssue(ctx, 1, "EXA-1"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -91,7 +91,7 @@ func TestRefreshIssue_UpdatesExistingRow(t *testing.T) {
 	updated.Updated = "2026-08-13T00:00:00Z"
 	api.issues = []backlogclient.Issue{updated}
 
-	if err := e.RefreshIssue(ctx, 1, "EXA-1"); err != nil {
+	if _, err := e.RefreshIssue(ctx, 1, "EXA-1"); err != nil {
 		t.Fatal(err)
 	}
 	got := storedIssue(t, s, 1, "EXA-1")
@@ -108,7 +108,7 @@ func TestRefreshIssue_RejectsIssueOfAnotherProject(t *testing.T) {
 	api.issues = []backlogclient.Issue{richIssue(2, "OTH-1", 2, "別プロジェクトの課題")}
 	s := openTempStore(t)
 
-	err := newTestEngine(t, api, s).RefreshIssue(ctx, 1, "OTH-1")
+	_, err := newTestEngine(t, api, s).RefreshIssue(ctx, 1, "OTH-1")
 	if err == nil {
 		t.Fatal("別プロジェクトの課題でエラーにならなかった")
 	}
@@ -136,7 +136,7 @@ func TestRefreshIssue_NotFoundKeepsLocalRow(t *testing.T) {
 	// Backlog 側では削除された(GET が 404)
 	api.deletedKeys["EXA-1"] = true
 
-	err := e.RefreshIssue(ctx, 1, "EXA-1")
+	_, err := e.RefreshIssue(ctx, 1, "EXA-1")
 	if err == nil {
 		t.Fatal("404 でエラーにならなかった")
 	}
@@ -206,7 +206,7 @@ func TestRefreshIssue_MasksIssueReferenceInAPIErrors(t *testing.T) {
 			api.getIssueErr = c.injected
 			s := openTempStore(t)
 
-			err := newTestEngine(t, api, s).RefreshIssue(context.Background(), 1, key)
+			_, err := newTestEngine(t, api, s).RefreshIssue(context.Background(), 1, key)
 			if err == nil {
 				t.Fatal("エラーにならなかった")
 			}
@@ -244,7 +244,7 @@ func TestRefreshIssue_DoesNotTouchSyncState(t *testing.T) {
 	}
 	before := syncState(t, s, 1)
 
-	if err := e.RefreshIssue(ctx, 1, "EXA-1"); err != nil {
+	if _, err := e.RefreshIssue(ctx, 1, "EXA-1"); err != nil {
 		t.Fatal(err)
 	}
 	after := syncState(t, s, 1)
@@ -260,13 +260,338 @@ func TestRefreshIssue_RejectsEmptyArguments(t *testing.T) {
 	api.issues = []backlogclient.Issue{richIssue(1, "EXA-1", 1, "課題")}
 	e := newTestEngine(t, api, openTempStore(t))
 
-	if err := e.RefreshIssue(ctx, 0, "EXA-1"); err == nil {
+	if _, err := e.RefreshIssue(ctx, 0, "EXA-1"); err == nil {
 		t.Error("プロジェクト未指定でエラーにならなかった")
 	}
-	if err := e.RefreshIssue(ctx, 1, ""); err == nil {
+	if _, err := e.RefreshIssue(ctx, 1, ""); err == nil {
 		t.Error("課題キー未指定でエラーにならなかった")
 	}
 	if len(api.getIssueCalls) != 0 {
 		t.Errorf("前提条件が揃わないのに API を呼んだ: %v", api.getIssueCalls)
+	}
+}
+
+// --- コメントのオンデマンド取得 ---------------------------------------------
+
+// addComment はフェイクへコメントを追加する(本文が空なら変更履歴のみの項目)。
+func addComment(api *fakeAPI, issueKey string, id int64, author, content, created string) {
+	api.comments[issueKey] = append(api.comments[issueKey], backlogclient.Comment{
+		ID: id, Content: content, AuthorName: author, Created: created, Updated: created,
+	})
+}
+
+// TestRefreshIssue_StoresComments は課題本体に続けてコメントを取得・保存し、
+// 本文の無い項目は保存せず件数だけを記録することを確認する。
+func TestRefreshIssue_StoresComments(t *testing.T) {
+	ctx := context.Background()
+	api := newFakeAPI()
+	api.issues = []backlogclient.Issue{richIssue(1, "EXA-1", 1, "コメントのある課題")}
+	addComment(api, "EXA-1", 11, "山田 太郎", "一次調査の結果です", "2026-08-01T10:00:00Z")
+	addComment(api, "EXA-1", 12, "佐藤 花子", "対応しました", "2026-08-02T10:00:00Z")
+	// 本文が無い項目(状態変更等の変更履歴のみ)
+	addComment(api, "EXA-1", 13, "鈴木 一郎", "", "2026-08-03T10:00:00Z")
+	s := openTempStore(t)
+
+	res, err := newTestEngine(t, api, s).RefreshIssue(ctx, 1, "EXA-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Comments != 2 || res.HistoryOnly != 1 || res.Truncated {
+		t.Errorf("結果 = %+v, want {Comments:2 HistoryOnly:1 Truncated:false}", res)
+	}
+	if len(res.Warnings) != 0 {
+		t.Errorf("警告 = %v, want 空", res.Warnings)
+	}
+
+	// 本文のある 2 件だけが新しい順で保存されていること
+	got, err := s.ListIssueComments(ctx, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("保存件数 = %d, want 2(本文の無い項目は保存しない)", len(got))
+	}
+	if got[0].ID != 12 || got[1].ID != 11 {
+		t.Errorf("並び = %d, %d, want 12, 11(新しい順)", got[0].ID, got[1].ID)
+	}
+	if got[0].AuthorName != "佐藤 花子" || got[0].Content != "対応しました" {
+		t.Errorf("コメント = %+v", got[0])
+	}
+	if got[0].ProjectID != 1 || got[0].IssueID != 1 {
+		t.Errorf("課題・プロジェクトの対応が誤っている: %+v", got[0])
+	}
+
+	status, err := s.GetIssueCommentStatus(ctx, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.FetchedAt == "" || status.HistoryOnly != 1 || status.Truncated {
+		t.Errorf("取得結果 = %+v", status)
+	}
+}
+
+// TestRefreshIssue_ReplacesComments は再取得でコメントが全入れ替えになること
+// (Backlog 側で削除・編集されたコメントが残らないこと)を確認する。
+func TestRefreshIssue_ReplacesComments(t *testing.T) {
+	ctx := context.Background()
+	api := newFakeAPI()
+	api.issues = []backlogclient.Issue{richIssue(1, "EXA-1", 1, "課題")}
+	addComment(api, "EXA-1", 11, "山田 太郎", "古いコメント", "2026-08-01T10:00:00Z")
+	s := openTempStore(t)
+	e := newTestEngine(t, api, s)
+	if _, err := e.RefreshIssue(ctx, 1, "EXA-1"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Backlog 側で 11 が削除され、12 が追加されたことにする
+	api.comments["EXA-1"] = nil
+	addComment(api, "EXA-1", 12, "佐藤 花子", "新しいコメント", "2026-08-05T10:00:00Z")
+
+	if _, err := e.RefreshIssue(ctx, 1, "EXA-1"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.ListIssueComments(ctx, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].ID != 12 {
+		t.Errorf("再取得後のコメント = %+v, want 12 の 1 件のみ", got)
+	}
+}
+
+// TestRefreshIssue_PagesCommentsUpToLimit はコメントを 100 件ずつページングし、
+// 上限(500 件)で打ち切って上限到達を伝えることを確認する。
+func TestRefreshIssue_PagesCommentsUpToLimit(t *testing.T) {
+	ctx := context.Background()
+	api := newFakeAPI()
+	api.issues = []backlogclient.Issue{richIssue(1, "EXA-1", 1, "コメントが多い課題")}
+	// 上限を超える 620 件(すべて本文あり)
+	for i := 1; i <= 620; i++ {
+		addComment(api, "EXA-1", int64(i), "山田 太郎",
+			fmt.Sprintf("コメント %d", i), fmt.Sprintf("2026-08-01T00:%02d:%02d Z", i/60, i%60))
+	}
+	s := openTempStore(t)
+
+	res, err := newTestEngine(t, api, s).RefreshIssue(ctx, 1, "EXA-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Comments != commentFetchLimit {
+		t.Errorf("取得件数 = %d, want %d(上限で打ち切る)", res.Comments, commentFetchLimit)
+	}
+	if !res.Truncated {
+		t.Error("Truncated = false, want true(上限に達した)")
+	}
+	// 1 ページ 100 件で 5 ページ + 打ち切り確認の 1 回(上限を超えて取りに行かない)
+	pages := commentFetchLimit / commentPageSize
+	if len(api.commentQueries) != pages+1 {
+		t.Errorf("API 呼び出し = %d 回, want %d(%d ページ + 打ち切り確認 1 回)",
+			len(api.commentQueries), pages+1, pages)
+	}
+	for _, q := range api.commentQueries[:pages] {
+		if q.Count != commentPageSize || q.Order != "desc" {
+			t.Errorf("ページングパラメータ = %+v", q)
+		}
+	}
+	// 打ち切り確認は 1 件だけ問い合わせる(余分な転送をしない)
+	if last := api.commentQueries[pages]; last.Count != 1 {
+		t.Errorf("打ち切り確認のパラメータ = %+v, want count=1", last)
+	}
+	// 2 ページ目以降は maxId を進めて同じページを取り直さないこと
+	if api.commentQueries[0].MaxID != 0 || api.commentQueries[1].MaxID == 0 {
+		t.Errorf("maxId の進み方が誤っている: %+v", api.commentQueries)
+	}
+	// 保存されるのは新しい方から 500 件(最古の 120 件は入らない)
+	got, err := s.ListIssueComments(ctx, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != commentFetchLimit || got[0].ID != 620 {
+		t.Errorf("保存件数 = %d / 先頭 = %d, want %d / 620", len(got), got[0].ID, commentFetchLimit)
+	}
+}
+
+// TestRefreshIssue_CommentFailureKeepsIssueUpdate はコメント取得だけが失敗した
+// 場合に、課題本体の反映は維持したまま警告として返すことを確認する(部分失敗)。
+//
+// コメントは付随情報なので、その取得失敗で課題本体の最新化まで巻き戻すのは
+// 利用者にとって損失が大きい。
+func TestRefreshIssue_CommentFailureKeepsIssueUpdate(t *testing.T) {
+	ctx := context.Background()
+	api := newFakeAPI()
+	api.issues = []backlogclient.Issue{richIssue(1, "EXA-1", 1, "同期時点の件名")}
+	s := openTempStore(t)
+	e := newTestEngine(t, api, s)
+	if _, err := e.SyncIssues(ctx, 1, ModeFull, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	updated := richIssue(1, "EXA-1", 1, "更新後の件名")
+	api.issues = []backlogclient.Issue{updated}
+	api.commentsErr = fmt.Errorf("%w: GET /api/v2/issues/EXA-1/comments",
+		backlogclient.ErrPermissionDenied)
+
+	res, err := e.RefreshIssue(ctx, 1, "EXA-1")
+	if err != nil {
+		t.Fatalf("コメント取得の失敗が全体の失敗になった: %v", err)
+	}
+	if len(res.Warnings) != 1 {
+		t.Fatalf("警告 = %v, want 1 件", res.Warnings)
+	}
+	// 警告文にも課題キー・URL を載せない(動作ログへ記録されるため)
+	for _, ng := range []string{"EXA-1", "/api/v2"} {
+		if strings.Contains(res.Warnings[0], ng) {
+			t.Errorf("警告に %s が含まれている: %s", ng, res.Warnings[0])
+		}
+	}
+	// 課題本体は最新化されていること
+	got := storedIssue(t, s, 1, "EXA-1")
+	if got == nil || got.Summary != "更新後の件名" {
+		t.Errorf("課題 = %+v, want 更新後の件名", got)
+	}
+	// コメントの取得時刻は更新しない(取得できていないため)
+	status, err := s.GetIssueCommentStatus(ctx, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.FetchedAt != "" {
+		t.Errorf("コメント取得時刻 = %q, want 空(取得できていない)", status.FetchedAt)
+	}
+}
+
+// TestRefreshIssue_NotFoundSkipsComments は課題本体が取得できない場合に
+// コメントへ触れないことを確認する(存在しない課題のコメントを消さない)。
+func TestRefreshIssue_NotFoundSkipsComments(t *testing.T) {
+	ctx := context.Background()
+	api := newFakeAPI()
+	api.issues = []backlogclient.Issue{richIssue(1, "EXA-1", 1, "課題")}
+	addComment(api, "EXA-1", 11, "山田 太郎", "取得済みのコメント", "2026-08-01T10:00:00Z")
+	s := openTempStore(t)
+	e := newTestEngine(t, api, s)
+	if _, err := e.RefreshIssue(ctx, 1, "EXA-1"); err != nil {
+		t.Fatal(err)
+	}
+	before, err := s.ListIssueComments(ctx, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	api.deletedKeys["EXA-1"] = true
+	if _, err := e.RefreshIssue(ctx, 1, "EXA-1"); !errors.Is(err, backlogclient.ErrNotFound) {
+		t.Fatalf("err = %v, want ErrNotFound", err)
+	}
+	after, err := s.ListIssueComments(ctx, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(before, after) {
+		t.Errorf("404 でコメントが変わった: before %+v / after %+v", before, after)
+	}
+	// コメント API 自体を呼んでいないこと
+	if len(api.commentQueries) != 1 {
+		t.Errorf("コメント取得の呼び出し = %d 回, want 1(1 回目の成功時のみ)", len(api.commentQueries))
+	}
+}
+
+// commentIDBase はテストで使うコメント ID の起点。
+// 実際の Backlog のコメント ID はスペース全体の連番で 1 から始まらないため、
+// 「ID が 1 まで下がった」という特殊経路に頼らないようにする。
+const commentIDBase = 100000
+
+// TestRefreshIssue_TruncatedOnlyWhenOlderCommentsExist は上限ちょうどの課題を
+// 「打ち切り」と誤って伝えないことを確認する。
+//
+// 上限に達した時点でもう 1 件だけ問い合わせ、さらに古いコメントが実在する場合に
+// だけ Truncated にする(追加リクエストは上限到達時の 1 回だけ)。
+func TestRefreshIssue_TruncatedOnlyWhenOlderCommentsExist(t *testing.T) {
+	cases := []struct {
+		name  string
+		total int
+		want  bool
+	}{
+		{"上限より少ない", commentFetchLimit - 1, false},
+		{"上限ちょうど", commentFetchLimit, false},
+		{"上限より 1 件多い", commentFetchLimit + 1, true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			ctx := context.Background()
+			api := newFakeAPI()
+			api.issues = []backlogclient.Issue{richIssue(1, "EXA-1", 1, "課題")}
+			// ID は 1 から始めない。最古の ID が 1 だと「これ以上古い ID は
+			// 存在しない」と ID だけで判定できてしまい、追加確認の経路を通らない
+			for i := 1; i <= c.total; i++ {
+				addComment(api, "EXA-1", commentIDBase+int64(i), "山田 太郎",
+					fmt.Sprintf("コメント %d", i), "2026-08-01T00:00:00Z")
+			}
+			s := openTempStore(t)
+
+			res, err := newTestEngine(t, api, s).RefreshIssue(ctx, 1, "EXA-1")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if res.Truncated != c.want {
+				t.Errorf("Truncated = %v, want %v(コメント %d 件)", res.Truncated, c.want, c.total)
+			}
+			wantSaved := c.total
+			if wantSaved > commentFetchLimit {
+				wantSaved = commentFetchLimit
+			}
+			if res.Comments != wantSaved {
+				t.Errorf("保存件数 = %d, want %d", res.Comments, wantSaved)
+			}
+		})
+	}
+}
+
+// TestRefreshIssue_TruncationProbeFailureWarnsTruncated は打ち切り確認の
+// 問い合わせが失敗した場合に、取得済みのコメントは保存しつつ
+// 「打ち切ったかもしれない」側へ倒すことを確認する。
+//
+// 過小警告(実際は続きがあるのに案内しない)より、過剰警告(Backlog で
+// 確認するよう促す)のほうが害が小さいため。
+func TestRefreshIssue_TruncationProbeFailureWarnsTruncated(t *testing.T) {
+	ctx := context.Background()
+	api := newFakeAPI()
+	api.issues = []backlogclient.Issue{richIssue(1, "EXA-1", 1, "課題")}
+	for i := 1; i <= commentFetchLimit; i++ {
+		addComment(api, "EXA-1", commentIDBase+int64(i), "山田 太郎",
+			fmt.Sprintf("コメント %d", i), "2026-08-01T00:00:00Z")
+	}
+	// 上限到達後の 1 件確認だけを失敗させる
+	api.commentsErrAfterCalls = commentFetchLimit / commentPageSize
+
+	res, err := newTestEngine(t, api, openTempStore(t)).RefreshIssue(ctx, 1, "EXA-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Comments != commentFetchLimit {
+		t.Errorf("保存件数 = %d, want %d(取得済みは保存する)", res.Comments, commentFetchLimit)
+	}
+	if !res.Truncated {
+		t.Error("Truncated = false, want true(確認できない場合は打ち切り扱い)")
+	}
+}
+
+// TestRefreshIssue_PartialPageIsFinalPage は「戻り件数 < count」でページ終端と
+// 判定してよいこと(backlogclient が要素を握り潰さない契約)を前提に、
+// 端数ページで追加のリクエストを行わないことを確認する。
+func TestRefreshIssue_PartialPageIsFinalPage(t *testing.T) {
+	ctx := context.Background()
+	api := newFakeAPI()
+	api.issues = []backlogclient.Issue{richIssue(1, "EXA-1", 1, "課題")}
+	for i := 1; i <= 150; i++ {
+		addComment(api, "EXA-1", int64(i), "山田 太郎", fmt.Sprintf("コメント %d", i), "2026-08-01T00:00:00Z")
+	}
+
+	res, err := newTestEngine(t, api, openTempStore(t)).RefreshIssue(ctx, 1, "EXA-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Comments != 150 || res.Truncated {
+		t.Errorf("結果 = %+v, want 150 件・打ち切りなし", res)
+	}
+	if len(api.commentQueries) != 2 {
+		t.Errorf("API 呼び出し = %d 回, want 2(100 件 + 50 件で終端)", len(api.commentQueries))
 	}
 }

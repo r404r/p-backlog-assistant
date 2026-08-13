@@ -34,6 +34,7 @@ func TestMigrate_FreshDatabase(t *testing.T) {
 	for _, table := range []string{
 		"meta", "projects", "issues", "users", "teams",
 		"team_members", "project_users", "sync_state", "jobs", "job_rows",
+		"issue_comments",
 	} {
 		var name string
 		err := s.DB().QueryRow(

@@ -237,6 +237,15 @@ type IssueDetail struct {
 	// ローカルに無い(未同期・別プロジェクト)場合は空になる。
 	// 呼び出し側は引き当てられない親を ID:<数値> 表記へ縮退させること。
 	ParentKeys map[int64]string
+	// Comments は保存済みのコメント(新しい順。本文のあるものだけ)。
+	// コメントは同期では取得されないため、RefreshIssue を実行していない課題では
+	// 空になる。空とコメント 0 件は CommentStatus.FetchedAt で区別すること。
+	Comments []store.IssueComment
+	// CommentStatus はコメントの取得結果(取得時刻・上限到達・変更履歴のみの件数)。
+	CommentStatus store.CommentFetchStatus
+	// Warnings は RefreshIssue の部分的な失敗(コメントだけ取得できなかった等)。
+	// GetIssueDetail(ローカル参照のみ)では常に空。
+	Warnings []string
 }
 
 // GetIssueDetail は課題キーで課題 1 件の詳細をローカル DB から返す(API は呼ばない)。
@@ -284,7 +293,21 @@ func (s *ProfileService) issueDetailLocked(ctx context.Context, profileID string
 				keys[parentID] = parentKey
 			}
 		}
-		detail = IssueDetail{Issue: issue, ParentKeys: keys}
+		// コメントも同じ読み取りトランザクションで読む(課題本体・親課題と
+		// 同じ時点のスナップショットにするため)
+		comments, err := store.ListIssueComments(ctx, tx, issue.ID)
+		if err != nil {
+			return err
+		}
+		status, err := store.GetIssueCommentStatus(ctx, tx, issue.ID)
+		if err != nil {
+			return err
+		}
+		detail = IssueDetail{
+			Issue: issue, ParentKeys: keys,
+			Comments: comments, CommentStatus: status,
+			Warnings: []string{},
+		}
 		return nil
 	})
 	if err != nil {
@@ -303,6 +326,10 @@ func (s *ProfileService) issueDetailLocked(ctx context.Context, profileID string
 // 直列化(profileMu → syncMu)を行う。反映後の読み直しも syncMu を保持したまま
 // 行い、書いた内容と表示内容が食い違わないようにする。
 //
+// コメントも同時に取得する(同期はコメントに触れないため、この経路だけが
+// コメントを更新する)。コメントだけ取得できなかった場合は、課題本体の反映を
+// 維持したまま IssueDetail.Warnings で伝える(エラーにはしない)。
+//
 // 同期状態(sync_state)は更新しない(理由は syncpkg.Engine.RefreshIssue を参照)。
 func (s *ProfileService) RefreshIssue(ctx context.Context, profileID string, projectID int64, issueKey string) (*IssueDetail, error) {
 	// プロファイルの削除・保存と排他する(高 2。ロック順序 profileMu → syncMu)
@@ -316,10 +343,19 @@ func (s *ProfileService) RefreshIssue(ctx context.Context, profileID string, pro
 	if err != nil {
 		return nil, err
 	}
-	if err := engine.RefreshIssue(ctx, projectID, issueKey); err != nil {
+	res, err := engine.RefreshIssue(ctx, projectID, issueKey)
+	if err != nil {
 		return nil, err
 	}
-	return s.issueDetailLocked(ctx, profileID, projectID, issueKey)
+	detail, err := s.issueDetailLocked(ctx, profileID, projectID, issueKey)
+	if err != nil {
+		return nil, err
+	}
+	// 部分失敗(コメントだけ取得できなかった等)を画面へ伝える
+	if len(res.Warnings) > 0 {
+		detail.Warnings = res.Warnings
+	}
+	return detail, nil
 }
 
 // IterateIssues はローカル DB の課題を条件に一致した順(ID 昇順)で

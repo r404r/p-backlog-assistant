@@ -62,8 +62,8 @@ func (s *Store) ListProjects(ctx context.Context) ([]Project, error) {
 }
 
 // DeleteProjectsNotIn は keepIDs に含まれないプロジェクト行と、
-// その課題・プロジェクトユーザ・プロジェクト別同期状態・一括更新ジョブ
-// (jobs / job_rows)のキャッシュを破棄する
+// その課題・課題コメント・プロジェクトユーザ・プロジェクト別同期状態・
+// 一括更新ジョブ(jobs / job_rows)のキャッシュを破棄する
 // (設計書 2 節: プロジェクトから除外された場合に旧データをローカル検索から
 // 閲覧できる状態を残さない)。
 //
@@ -101,6 +101,15 @@ func DeleteProjectsNotIn(ctx context.Context, q dbtx, keepIDs []int64) (int, err
 	byProject := ""
 	if len(keepIDs) > 0 {
 		byProject = " WHERE project_id NOT IN (" + strings.Join(placeholders, ",") + ")"
+	}
+	// 課題コメント(v5)。課題の詳細と同じく閲覧できなくなったプロジェクトの
+	// ものは残さない。issue_comments.issue_id は ON DELETE CASCADE なので
+	// 課題の削除でも消えるが、FK が無効な接続(PRAGMA foreign_keys = OFF)や
+	// 将来 issues の削除経路が変わった場合に取り残さないよう明示的に消す。
+	// 課題より先に実行するのは、issue_comments.project_id を条件に使うため
+	// 順序自体は問わないが、親(issues)より先に子を消す流儀に揃えている。
+	if _, err := q.ExecContext(ctx, `DELETE FROM issue_comments`+byProject, args...); err != nil {
+		return 0, err
 	}
 	if _, err := q.ExecContext(ctx, `DELETE FROM issues`+byProject, args...); err != nil {
 		return 0, err

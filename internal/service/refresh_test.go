@@ -157,3 +157,119 @@ func TestRefreshIssue_NotFoundKeepsLocalIssue(t *testing.T) {
 		t.Errorf("404 でローカルの課題が変わった: before %+v / after %+v", before.Issue, after.Issue)
 	}
 }
+
+// --- コメントのオンデマンド取得 ---------------------------------------------
+
+// fakeComment は検証用のコメントを組み立てる(本文が空なら変更履歴のみの項目)。
+func fakeComment(id int64, author, content, created string) backlogclient.Comment {
+	return backlogclient.Comment{
+		ID: id, Content: content, AuthorName: author, Created: created, Updated: created,
+	}
+}
+
+// TestRefreshIssue_ReturnsComments は「最新の状態を取得」でコメントが
+// 取得・保存され、詳細と一緒に返ることを確認する。
+func TestRefreshIssue_ReturnsComments(t *testing.T) {
+	fake := &fakeConnector{
+		info: testInfo(),
+		issues: []backlogclient.Issue{
+			fakeIssue(1, "EXA-1", 1, "課題", "2026-01-01T00:00:00Z", "2026-08-01T00:00:00Z"),
+		},
+		comments: map[string][]backlogclient.Comment{
+			"EXA-1": {
+				fakeComment(11, "山田 太郎", "調査しました", "2026-08-01T10:00:00Z"),
+				fakeComment(12, "佐藤 花子", "対応しました", "2026-08-02T10:00:00Z"),
+				fakeComment(13, "鈴木 一郎", "", "2026-08-03T10:00:00Z"), // 変更履歴のみ
+			},
+		},
+	}
+	s, id := newSyncTestService(t, fake)
+	ctx := context.Background()
+
+	detail, err := s.RefreshIssue(ctx, id, 1, "EXA-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(detail.Comments) != 2 {
+		t.Fatalf("コメント件数 = %d, want 2(本文の無い項目は含めない)", len(detail.Comments))
+	}
+	if detail.Comments[0].ID != 12 {
+		t.Errorf("先頭 = %d, want 12(新しい順)", detail.Comments[0].ID)
+	}
+	if detail.CommentStatus.FetchedAt == "" {
+		t.Error("コメント取得時刻が空(画面が「未取得」と誤表示する)")
+	}
+	if detail.CommentStatus.HistoryOnly != 1 || detail.CommentStatus.Truncated {
+		t.Errorf("取得結果 = %+v", detail.CommentStatus)
+	}
+	if len(detail.Warnings) != 0 {
+		t.Errorf("警告 = %v, want 空", detail.Warnings)
+	}
+
+	// 取得後は GetIssueDetail(ローカル参照)でも同じコメントが返る
+	again, err := s.GetIssueDetail(ctx, id, 1, "EXA-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(again.Comments) != 2 || again.CommentStatus.FetchedAt != detail.CommentStatus.FetchedAt {
+		t.Errorf("再取得した詳細 = %+v / %+v", again.Comments, again.CommentStatus)
+	}
+}
+
+// TestGetIssueDetail_CommentsUnfetched は同期しただけの課題が
+// 「コメント未取得」として返ること(空 = コメント 0 件ではないこと)を確認する。
+func TestGetIssueDetail_CommentsUnfetched(t *testing.T) {
+	fake := &fakeConnector{
+		info: testInfo(),
+		issues: []backlogclient.Issue{
+			fakeIssue(1, "EXA-1", 1, "課題", "2026-01-01T00:00:00Z", "2026-08-01T00:00:00Z"),
+		},
+		activities: []backlogclient.Activity{{ID: 900, Type: 4, ProjectID: 1, ProjectKey: "EXA"}},
+	}
+	s, id := newSyncTestService(t, fake)
+	ctx := context.Background()
+	if _, err := s.SyncIssues(ctx, id, 1, "full", ""); err != nil {
+		t.Fatal(err)
+	}
+
+	detail, err := s.GetIssueDetail(ctx, id, 1, "EXA-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(detail.Comments) != 0 || detail.CommentStatus.FetchedAt != "" {
+		t.Errorf("同期しただけの課題 = %+v / %+v, want コメント未取得",
+			detail.Comments, detail.CommentStatus)
+	}
+	// 同期はコメント API を呼ばない(コメントは同期対象外)
+	if fake.commentCalls != 0 {
+		t.Errorf("同期でコメント API を %d 回呼んだ", fake.commentCalls)
+	}
+}
+
+// TestRefreshIssue_CommentFailureIsWarning はコメント取得だけが失敗した場合に、
+// 課題本体の反映を維持したまま警告として返すことを確認する。
+func TestRefreshIssue_CommentFailureIsWarning(t *testing.T) {
+	fake := &fakeConnector{
+		info: testInfo(),
+		issues: []backlogclient.Issue{
+			fakeIssue(1, "EXA-1", 1, "更新後の件名", "2026-01-01T00:00:00Z", "2026-08-02T00:00:00Z"),
+		},
+		commentsErr: backlogclient.ErrPermissionDenied,
+	}
+	s, id := newSyncTestService(t, fake)
+	ctx := context.Background()
+
+	detail, err := s.RefreshIssue(ctx, id, 1, "EXA-1")
+	if err != nil {
+		t.Fatalf("コメント取得の失敗が全体の失敗になった: %v", err)
+	}
+	if detail.Issue.Summary != "更新後の件名" {
+		t.Errorf("課題本体が反映されていない: %+v", detail.Issue)
+	}
+	if len(detail.Warnings) != 1 {
+		t.Errorf("警告 = %v, want 1 件", detail.Warnings)
+	}
+	if detail.CommentStatus.FetchedAt != "" {
+		t.Errorf("取得できていないのに取得時刻が入った: %+v", detail.CommentStatus)
+	}
+}

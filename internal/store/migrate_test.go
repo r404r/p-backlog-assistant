@@ -405,6 +405,153 @@ func TestMigrate_V3ToV4_KeepsJobIDSequenceAfterDelete(t *testing.T) {
 	}
 }
 
+// TestMigrate_V4ToV5_AddsCommentStorageAndKeepsData は、v4 の DB に
+// コメント保存用のテーブル・列が追加され、既存データが失われないことを
+// 確認する。issues は再作成せず ALTER TABLE ADD COLUMN だけで拡張するため、
+// 課題行と FTS 索引はそのまま残る。
+func TestMigrate_V4ToV5_AddsCommentStorageAndKeepsData(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "example.backlog.jp_1.db")
+	db := createLegacyDB(t, path, 4)
+	seedV3Reference(t, db)
+	mustExec(t, db, `INSERT INTO issues (
+			id, issue_key, project_id, summary, description,
+			status_id, status_name, assignee_id, assignee_name,
+			issue_type_name, priority_name, created, updated, due_date,
+			raw_json, search_text, fetched_at, deleted)
+		VALUES (101, 'EXA-1', 1, '既存の件名', '既存の詳細',
+			1, '未対応', 0, '', 'タスク', '中',
+			'2026-08-01T00:00:00Z', '2026-08-02T00:00:00Z', '',
+			'{}', '既存の件名\n既存の詳細', '2026-08-02T00:00:00Z', 0)`)
+	mustExec(t, db, `INSERT INTO jobs (id, kind, project_id, source_file, source_hash, created_at, status)
+		VALUES (5, 'update', 1, 'bulk.xlsx', 'hash-1', '2026-08-01T00:00:00Z', 'pending')`)
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	s, err := Open(path)
+	if err != nil {
+		t.Fatalf("v4 → v5 の移行に失敗: %v", err)
+	}
+	defer s.Close()
+
+	if v, err := s.SchemaVersion(); err != nil || v != LatestSchemaVersion() {
+		t.Fatalf("移行後の schema_version = %d(err %v), want %d", v, err, LatestSchemaVersion())
+	}
+
+	// (a) 既存データが保持されていること
+	ctx := context.Background()
+	issue, err := s.GetIssueByKey(ctx, 1, "EXA-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if issue == nil {
+		t.Fatal("移行で既存課題が失われた")
+	}
+	if issue.Summary != "既存の件名" || issue.Description != "既存の詳細" ||
+		issue.StatusName != "未対応" || issue.Updated != "2026-08-02T00:00:00Z" {
+		t.Errorf("移行後の課題 = %+v", issue)
+	}
+	if job, err := s.GetJob(ctx, 5); err != nil || job == nil || job.SourceFile != "bulk.xlsx" {
+		t.Errorf("移行後のジョブ = %+v(err %v)", job, err)
+	}
+
+	// (b) issue_comments テーブルと索引が存在すること
+	var name string
+	if err := s.DB().QueryRow(
+		`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'issue_comments'`,
+	).Scan(&name); err != nil {
+		t.Errorf("issue_comments が存在しない: %v", err)
+	}
+	if err := s.DB().QueryRow(
+		`SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_issue_comments_issue'`,
+	).Scan(&name); err != nil {
+		t.Errorf("idx_issue_comments_issue が存在しない: %v", err)
+	}
+
+	// (c) issues の新 3 列が存在すること
+	cols := issueColumnSet(t, s)
+	for _, col := range []string{"comments_fetched_at", "comments_truncated", "comments_history_only"} {
+		if !cols[col] {
+			t.Errorf("issues に列 %s が無い", col)
+		}
+	}
+
+	// (d) 既存課題は「未取得」扱いであること
+	st, err := s.GetIssueCommentStatus(ctx, 101)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st != (CommentFetchStatus{}) {
+		t.Errorf("移行直後の取得結果 = %+v, want ゼロ値(未取得)", st)
+	}
+
+	// 移行後の DB でもコメントを保存・参照できること
+	if err := s.ReplaceIssueComments(ctx, 101, 1, []*IssueComment{
+		{ID: 1001, AuthorName: "山田", Content: "移行後のコメント", Created: "2026-08-03T00:00:00Z"},
+	}, CommentFetchStatus{FetchedAt: "2026-08-12T00:00:00Z"}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.ListIssueComments(ctx, 101)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].Content != "移行後のコメント" {
+		t.Errorf("移行後に保存したコメント = %+v", got)
+	}
+}
+
+// TestV5_CascadeDeletesComments は課題行の削除でコメントが消えることを
+// 確認する(issue_comments.issue_id の ON DELETE CASCADE)。
+func TestV5_CascadeDeletesComments(t *testing.T) {
+	s := openTempStore(t)
+	ctx := context.Background()
+	if err := s.UpsertProject(ctx, &Project{ID: 1, ProjectKey: "EXA"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.UpsertIssue(ctx, &Issue{ID: 101, IssueKey: "EXA-1", ProjectID: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ReplaceIssueComments(ctx, 101, 1, []*IssueComment{
+		{ID: 1001, Content: "コメント", Created: "2026-08-01T00:00:00Z"},
+	}, CommentFetchStatus{FetchedAt: "2026-08-10T00:00:00Z"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.DB().Exec(`DELETE FROM issues WHERE id = 101`); err != nil {
+		t.Fatal(err)
+	}
+	if n := countRows(t, s, "issue_comments"); n != 0 {
+		t.Errorf("課題削除後の issue_comments = %d 件, want 0", n)
+	}
+	// 存在しない課題のコメントは作れないこと
+	if _, err := s.DB().Exec(`INSERT INTO issue_comments
+		(id, issue_id, project_id, author_name, content, created, updated)
+		VALUES (1, 999, 1, '', '', '', '')`); err == nil {
+		t.Error("存在しない課題のコメントを挿入できてしまった")
+	}
+}
+
+// issueColumnSet は issues テーブルの列名の集合を返す。
+func issueColumnSet(t *testing.T, s *Store) map[string]bool {
+	t.Helper()
+	rows, err := s.DB().Query(`SELECT name FROM pragma_table_info('issues')`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	cols := map[string]bool{}
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			t.Fatal(err)
+		}
+		cols[name] = true
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	return cols
+}
+
 // TestOpen_RejectsPathWithQuestionMark は '?' を含む DB パスを明確なエラーで
 // 弾くことを確認する。modernc.org/sqlite は "file:" で始まらない DSN の
 // '?' 以降をクエリとして解釈するため、素通しするとパスが切り詰められ

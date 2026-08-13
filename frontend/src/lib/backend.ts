@@ -323,6 +323,21 @@ export interface IssueCustomField {
 }
 
 /**
+ * 課題コメント 1 件(表示用)。
+ *
+ * 本文を持つコメントだけが入る。状態変更等の「変更履歴のみの項目」は
+ * 本文が無いため件数(IssueDetail.commentsHistoryOnly)だけで伝える。
+ */
+export interface IssueComment {
+  /** 投稿者の表示名(不明なら空文字) */
+  authorName: string
+  /** 本文(改行を含む生テキスト) */
+  content: string
+  /** 投稿日時(RFC3339) */
+  created: string
+}
+
+/**
  * 課題 1 件の詳細(ローカル DB へ取り込んだ時点の内容)。
  *
  * 検索結果の課題キーをクリックしたときのポップアップ表示に使う。
@@ -358,6 +373,26 @@ export interface IssueDetail {
   customFields: IssueCustomField[]
   /** この課題をローカルへ取り込んだ時刻(RFC3339。不明なら空文字) */
   fetchedAt: string
+  /**
+   * コメント(新しい順。本文を持つものだけ)。
+   *
+   * コメントは**同期では取得されない**。refreshIssueDetail を実行した課題にだけ
+   * 入るため、未取得の課題では空配列になる(空配列 = 「コメントが無い」ではない。
+   * 未取得かどうかは commentsFetchedAt で判定すること)。
+   */
+  comments: IssueComment[]
+  /** コメントを取得した時刻(RFC3339)。空文字 = 未取得 */
+  commentsFetchedAt: string
+  /** 本文が無い(状態変更等の変更履歴のみの)項目の件数 */
+  commentsHistoryOnly: number
+  /** 取得上限に達し、古いコメントを取得しきれていない */
+  commentsTruncated: boolean
+  /**
+   * 部分的な失敗の警告(コメントだけ取得できなかった等)。
+   * 課題本体の内容は有効なので、画面は詳細を表示したうえでこの警告を添える。
+   * getIssueDetail(ローカル参照のみ)では常に空配列。
+   */
+  warnings: string[]
 }
 
 /** 条件フォームのセレクト候補(ローカル DB の実データから抽出) */
@@ -1022,6 +1057,17 @@ function normalizeIssueDetail(r: IssueDetail | null | undefined, issueKey: strin
       value: c?.value ?? '',
     })),
     fetchedAt: r?.fetchedAt ?? '',
+    // コメント関連は旧バージョンのバインディングでは届かない(undefined)。
+    // 未取得(空文字・空配列)へ寄せ、画面が「取得を促す」表示に縮退できるようにする
+    comments: (r?.comments ?? []).map((c) => ({
+      authorName: c?.authorName ?? '',
+      content: c?.content ?? '',
+      created: c?.created ?? '',
+    })),
+    commentsFetchedAt: r?.commentsFetchedAt ?? '',
+    commentsHistoryOnly: r?.commentsHistoryOnly ?? 0,
+    commentsTruncated: r?.commentsTruncated ?? false,
+    warnings: r?.warnings ?? [],
   }
 }
 
@@ -1440,6 +1486,43 @@ function buildMockIssues(project: Project, count: number): IssueRow[] {
  */
 const MOCK_REFRESHED_SUFFIX = '(更新済み)'
 
+/** モック用: 1 課題ぶんのコメント取得結果(Go 側の DTO と同じ形) */
+interface MockCommentState {
+  comments: IssueComment[]
+  fetchedAt: string
+  historyOnly: number
+  truncated: boolean
+}
+
+/**
+ * モック用: 課題キーからコメントを組み立てる。
+ *
+ * 画面の確認に必要な状態を課題番号で作り分ける:
+ *   - 10 の倍数: 取得上限に達した課題(「以前のコメントは Backlog で確認」の表示)
+ *   - それ以外 : 本文ありのコメント数件 + 変更履歴のみの項目数件
+ */
+function buildMockComments(issueKey: string, at: string): MockCommentState {
+  const n = Number(issueKey.slice(issueKey.lastIndexOf('-') + 1))
+  const truncated = Number.isInteger(n) && n > 0 && n % 10 === 0
+  const count = truncated ? 5 : 3
+  const base = Date.parse(at)
+  const authors = ['山田 太郎', '佐藤 花子', '鈴木 一郎']
+  const comments: IssueComment[] = []
+  for (let i = 0; i < count; i += 1) {
+    comments.push({
+      authorName: authors[i % authors.length],
+      content:
+        i === 0
+          ? `${issueKey} のコメント(モックデータ)。\n複数行の本文も折り返して表示されます。`
+          : `${issueKey} への返信 ${count - i}(モックデータ)。`,
+      // 新しい順に並べる(1 件ごとに 1 時間ずつ古くする)
+      created: new Date(base - i * 3600 * 1000).toISOString(),
+    })
+  }
+  // 状態変更等、本文を持たない項目は件数だけを伝える
+  return { comments, fetchedAt: at, historyOnly: truncated ? 12 : 2, truncated }
+}
+
 /**
  * モック用: 課題詳細に出す本文(改行を含む複数行)。
  * 詳細ポップアップの折り返し・スクロールを Wails 外でも確認できるようにする。
@@ -1721,6 +1804,12 @@ function createMockBackend(): Backend {
    * 最終同期時刻より新しくなるため(Go 側の fetched_at 相当)。
    */
   const issueFetchedAt = new Map<string, string>()
+  /**
+   * 課題単位のコメント取得結果(`{プロジェクトID}:{課題キー}` -> 状態)。
+   * コメントは同期では取得されないため、「最新の状態を取得」を実行した
+   * 課題にだけ入る(未実行の課題はキーが無い = 未取得)。
+   */
+  const issueComments = new Map<string, MockCommentState>()
 
   // 一括更新のモック状態。ジョブは新しい順に保持する。
   const jobs: BulkJobRow[] = []
@@ -1750,6 +1839,13 @@ function createMockBackend(): Backend {
     if (!row) {
       throw new Error('課題がローカルに見つかりません(同期後に削除されたか、まだ同期されていません)')
     }
+    // 未取得の課題は空の状態(fetchedAt が空文字)を返す
+    const cm: MockCommentState = issueComments.get(issueFetchedAtKey(projectId, issueKey)) ?? {
+      comments: [],
+      fetchedAt: '',
+      historyOnly: 0,
+      truncated: false,
+    }
     return {
       ...row,
       description: mockDescription(row),
@@ -1764,6 +1860,12 @@ function createMockBackend(): Backend {
         issueFetchedAt.get(issueFetchedAtKey(projectId, issueKey)) ??
         syncState.find((s) => s.dataKind === 'issues' && s.projectId === projectId)?.lastSyncedAt ??
         '',
+      comments: cm.comments.map((c) => ({ ...c })),
+      commentsFetchedAt: cm.fetchedAt,
+      commentsHistoryOnly: cm.historyOnly,
+      commentsTruncated: cm.truncated,
+      // モックは部分失敗を再現しない(Go 側はコメント取得だけ失敗した場合に警告を載せる)
+      warnings: [],
     }
   }
 
@@ -1974,6 +2076,8 @@ function createMockBackend(): Backend {
       }
       row.updated = at
       issueFetchedAt.set(issueFetchedAtKey(projectId, issueKey), at)
+      // コメントもこのタイミングでだけ取得する(同期では取得されない)
+      issueComments.set(issueFetchedAtKey(projectId, issueKey), buildMockComments(issueKey, at))
       return buildIssueDetail(projectId, issueKey)
     },
 

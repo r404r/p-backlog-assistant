@@ -816,6 +816,23 @@ const detailNote = computed(() => {
 })
 
 /**
+ * コメントの取得状況を伝える注意書き(ポップアップ最上部)。
+ *
+ * コメントは同期の対象外で、「最新の状態を取得」を押した課題にだけ入る。
+ * 空のコメント欄を見て「コメントが無い課題」と誤解されないよう、
+ * 未取得と取得済み(いつ時点か)をここで必ず区別して伝える。
+ */
+const commentNote = computed(() => {
+  const at = detail.value?.commentsFetchedAt ? formatDateTime(detail.value.commentsFetchedAt) : ''
+  return at
+    ? `コメントは同期では取得されません。「最新の状態を取得」を押した時点の内容です(取得: ${at})。`
+    : 'コメントは未取得です。「最新の状態を取得」で取得できます。'
+})
+
+/** コメントを取得済みか(取得済みで 0 件 = 「コメントなし」と未取得を区別する) */
+const commentsFetched = computed(() => (detail.value?.commentsFetchedAt ?? '') !== '')
+
+/**
  * 詳細ポップアップを閉じる(実行中の取得は失効させる)。
  * 閉じた後のフォーカス復帰は useModalFocus が行う(detailOpener は
  * その戻り先として参照されるため、ここでは消さない)。
@@ -1503,6 +1520,17 @@ async function exportExcel() {
         aria-modal="true"
         aria-labelledby="issue-detail-title"
       >
+        <!-- コメントの取得状況は最上部に出す(コメント欄まで読まないと
+             「同期では取得されない」ことに気づけないため)。詳細を取得できて
+             いないときは注意書きの対象が無いので出さない -->
+        <p v-if="detail" class="notice comment-note">{{ commentNote }}</p>
+
+        <!-- 部分失敗(課題本体は取得できたがコメントだけ失敗した等)。
+             詳細は有効なので、表示は消さず警告だけを添える -->
+        <p v-for="(w, i) in detail?.warnings ?? []" :key="i" class="notice warn comment-note">
+          {{ w }}
+        </p>
+
         <h2 id="issue-detail-title" class="detail-title">
           <span class="detail-key">{{ detailIssueKey }}</span>
           <span v-if="detail" class="detail-summary">{{ detail.summary }}</span>
@@ -1545,6 +1573,32 @@ async function exportExcel() {
           <h3 class="detail-section">詳細</h3>
           <pre v-if="detail.description" class="detail-description">{{ detail.description }}</pre>
           <p v-else class="hint">(詳細は入力されていません)</p>
+
+          <!-- コメント(オンデマンド取得)。同期では取得されないため、
+               未取得・取得済み 0 件・取得済みありの 3 状態を出し分ける -->
+          <h3 class="detail-section">コメント</h3>
+          <p v-if="!commentsFetched" class="hint">
+            まだ取得していません(「最新の状態を取得」で取得できます)。
+          </p>
+          <p v-else-if="detail.comments.length === 0" class="hint">
+            (コメントはありません)
+          </p>
+          <ol v-else class="comment-list">
+            <li v-for="(c, i) in detail.comments" :key="i" class="comment">
+              <p class="comment-meta">
+                <span class="comment-author">{{ c.authorName || '(不明)' }}</span>
+                <span class="comment-date">{{ formatDateTime(c.created) }}</span>
+              </p>
+              <pre class="comment-body">{{ c.content }}</pre>
+            </li>
+          </ol>
+          <!-- 本文を持たない項目(状態変更等)は件数だけを伝える -->
+          <p v-if="commentsFetched && detail.commentsHistoryOnly > 0" class="hint">
+            ほか変更履歴 {{ detail.commentsHistoryOnly }} 件(Backlog で確認)
+          </p>
+          <p v-if="detail.commentsTruncated" class="hint warn">
+            コメントが多いため最新分のみ取得しました。以前のコメントは Backlog で確認してください。
+          </p>
 
           <p class="hint detail-note">{{ detailNote }}</p>
         </template>
@@ -2003,6 +2057,53 @@ button.copy-icon:hover:not(:disabled) {
 
 .detail-note {
   margin: 0.75rem 0 0;
+}
+
+/* コメントの注意書き(最上部)。タイトルの前に置くため下側にだけ余白を取る */
+.comment-note {
+  margin: 0 0 0.75rem;
+}
+
+/* コメント一覧。件数が多い課題でもポップアップが伸び続けないよう、
+   この領域だけを高さ上限付きでスクロールさせる */
+.comment-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 16rem;
+  overflow-y: auto;
+  border: 1px solid #d0d7de;
+  border-radius: 4px;
+}
+
+.comment {
+  padding: 0.5rem 0.75rem;
+}
+
+.comment + .comment {
+  border-top: 1px solid #d0d7de;
+}
+
+.comment-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin: 0 0 0.25rem;
+  font-size: 0.8rem;
+  color: #57606a;
+}
+
+.comment-author {
+  font-weight: 600;
+}
+
+/* 本文は改行・空白を保ったまま折り返す(詳細本文と同じ扱い) */
+.comment-body {
+  margin: 0;
+  font-family: inherit;
+  font-size: 0.85rem;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .detail-error {

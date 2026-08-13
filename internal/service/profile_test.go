@@ -39,6 +39,11 @@ type fakeConnector struct {
 	issues     []backlogclient.Issue
 	activities []backlogclient.Activity
 
+	// 課題コメント(オンデマンド取得)。課題キー → コメント。
+	comments     map[string][]backlogclient.Comment
+	commentsErr  error
+	commentCalls int
+
 	// ユーザ・チーム同期(SyncUsers)の応答。
 	// rawUsers / pagedTeams は自前 HTTP 実装(backlogclient.GetUsersRaw 等)側で、
 	// GetUsers / GetTeams(ライブラリ経由・権限判定用)とは別物。
@@ -113,6 +118,16 @@ func (f *fakeConnector) GetIssue(ctx context.Context, issueIDOrKey string) (*bac
 		}
 	}
 	return nil, backlogclient.ErrNotFound
+}
+
+// GetIssueComments は課題詳細の「最新の状態を取得」でのみ使う(コメントは同期対象外)。
+// comments は課題キー → コメント。commentsErr で部分失敗を再現する。
+func (f *fakeConnector) GetIssueComments(ctx context.Context, issueIDOrKey string, q backlogclient.CommentQuery) ([]backlogclient.Comment, error) {
+	f.commentCalls++
+	if f.commentsErr != nil {
+		return nil, f.commentsErr
+	}
+	return f.comments[issueIDOrKey], nil
 }
 
 func (f *fakeConnector) GetSpaceActivities(ctx context.Context, q backlogclient.ActivityQuery) ([]backlogclient.Activity, error) {

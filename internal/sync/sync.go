@@ -54,6 +54,9 @@ type API interface {
 	GetIssues(ctx context.Context, q backlogclient.IssueQuery) ([]backlogclient.Issue, error)
 	GetIssuesCount(ctx context.Context, q backlogclient.IssueQuery) (int, error)
 	GetIssue(ctx context.Context, issueIDOrKey string) (*backlogclient.Issue, error)
+	// GetIssueComments は課題詳細の「最新の状態を取得」でのみ使う
+	// (通常の同期はコメントを取得しない。refresh.go を参照)。
+	GetIssueComments(ctx context.Context, issueIDOrKey string, q backlogclient.CommentQuery) ([]backlogclient.Comment, error)
 	GetSpaceActivities(ctx context.Context, q backlogclient.ActivityQuery) ([]backlogclient.Activity, error)
 
 	// ユーザ・チーム同期(SyncUsers)。GetUsersRaw / GetTeamsPaged は

@@ -233,6 +233,47 @@ var migrations = [][]string{
 		`DROP TABLE project_users`,
 		`ALTER TABLE project_users_v4 RENAME TO project_users`,
 	},
+	// v5: 課題コメントのローカル保存。
+	//
+	// コメントは課題詳細ポップアップの「最新の状態を取得」で 1 課題ぶんだけ
+	// 取得し、以後はローカルから表示する(通常の同期はコメントに触れない)。
+	//
+	// issues の拡張に ALTER TABLE ADD COLUMN を使う理由:
+	//   取得結果(取得時刻・打ち切り・変更履歴のみの件数)は課題 1 行の属性なので
+	//   issues に持たせるのが素直だが、v4 の判断どおり issues の再作成は
+	//   FTS5(external content)のトリガー 3 本の張り直しと索引の全件 rebuild を
+	//   伴い、10 万件規模では移行時間が跳ね上がる。ADD COLUMN であれば
+	//   既存行・索引に影響せず、既定値だけが埋まる。
+	//
+	// 取得時刻を課題単位で持つ理由:
+	//   コメントは「その課題を開いたとき」にだけ取得するため、プロジェクト単位の
+	//   sync_state では「どの課題を、いつ取得したか」を表せない。
+	//   未取得(NULL / 空)と取得済みを課題ごとに区別する必要がある。
+	//
+	// FK に ON DELETE CASCADE を付ける理由:
+	//   課題行が消えたらコメントも必ず消す(閲覧できなくなった課題の本文を
+	//   ローカルに残さない。設計書 2 節)。issues 自体は v4 で FK の対象から
+	//   外したが、issues を親として参照する側から FK を張ることは可能で、
+	//   issues の再作成も不要。なお DeleteProjectsNotIn は FK が無効な環境に
+	//   備えて明示的にも削除する(project.go)。
+	{
+		`CREATE TABLE issue_comments (
+			id INTEGER PRIMARY KEY,
+			issue_id INTEGER NOT NULL REFERENCES issues(id) ON DELETE CASCADE,
+			project_id INTEGER NOT NULL,
+			author_name TEXT NOT NULL DEFAULT '',
+			content TEXT NOT NULL DEFAULT '',
+			created TEXT NOT NULL DEFAULT '',
+			updated TEXT NOT NULL DEFAULT '')`,
+		// 課題ごとの一覧(created 順)を索引で賄う
+		`CREATE INDEX idx_issue_comments_issue ON issue_comments(issue_id, created)`,
+		// 取得時刻。NULL(既存行)/ 空文字 = 未取得
+		`ALTER TABLE issues ADD COLUMN comments_fetched_at TEXT`,
+		// 取得上限に達し、古いコメントを取得しきれていない
+		`ALTER TABLE issues ADD COLUMN comments_truncated INTEGER NOT NULL DEFAULT 0`,
+		// 本文が無い(変更履歴のみの)項目の件数
+		`ALTER TABLE issues ADD COLUMN comments_history_only INTEGER NOT NULL DEFAULT 0`,
+	},
 }
 
 // LatestSchemaVersion は最新スキーマバージョン。

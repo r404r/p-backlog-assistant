@@ -280,6 +280,61 @@ describe('モックバックエンドの refreshIssueDetail', () => {
 })
 
 /**
+ * モックバックエンドのコメント(オンデマンド取得)。
+ *
+ * コメントは同期では取得されず、「最新の状態を取得」を押したときだけ入る。
+ * 画面はこの契約(未取得 / 取得済み / 変更履歴のみの件数 / 上限到達)で
+ * 注意書きとコメントセクションを出し分けるため、ここで固定する。
+ */
+describe('モックバックエンドのコメント', () => {
+  /** モックの初期データはプロジェクト 101(SAMPLE)に投入されている */
+  const projectId = 101
+
+  it('取得前はコメント未取得の状態を返す', async () => {
+    const detail = await getBackend().getIssueDetail('p1', projectId, 'SAMPLE-3')
+
+    // 空文字 = 未取得(画面は「『最新の状態を取得』で取得できます」と案内する)
+    expect(detail.commentsFetchedAt).toBe('')
+    expect(detail.comments).toEqual([])
+    expect(detail.commentsHistoryOnly).toBe(0)
+    expect(detail.commentsTruncated).toBe(false)
+    // 部分失敗の警告は常に配列(null を返さない)
+    expect(detail.warnings).toEqual([])
+  })
+
+  it('「最新の状態を取得」でコメントと取得時刻が入る', async () => {
+    const detail = await getBackend().refreshIssueDetail('p1', projectId, 'SAMPLE-4')
+
+    expect(detail.commentsFetchedAt).not.toBe('')
+    expect(detail.comments.length).toBeGreaterThan(0)
+    for (const c of detail.comments) {
+      expect(typeof c.authorName).toBe('string')
+      expect(c.content).not.toBe('')
+      expect(c.created).not.toBe('')
+    }
+    // 本文が無い項目(状態変更等の変更履歴)は本文を持たず、件数だけで伝える
+    expect(detail.commentsHistoryOnly).toBeGreaterThan(0)
+
+    // 取得後は通常の詳細取得(ローカル参照)でも同じコメントが返る
+    const again = await getBackend().getIssueDetail('p1', projectId, 'SAMPLE-4')
+    expect(again.commentsFetchedAt).toBe(detail.commentsFetchedAt)
+    expect(again.comments.length).toBe(detail.comments.length)
+  })
+
+  it('コメントは新しい順に並ぶ', async () => {
+    const detail = await getBackend().refreshIssueDetail('p1', projectId, 'SAMPLE-6')
+    const created = detail.comments.map((c) => c.created)
+    expect(created).toEqual([...created].sort().reverse())
+  })
+
+  it('取得上限に達した課題は上限到達を伝える', async () => {
+    // 10 の倍数の課題で「以前のコメントは Backlog で確認」の表示を手元で確認できる
+    const detail = await getBackend().refreshIssueDetail('p1', projectId, 'SAMPLE-10')
+    expect(detail.commentsTruncated).toBe(true)
+  })
+})
+
+/**
  * モックバックエンドのテンプレート出力(一括更新・追加の①)。
  *
  * テンプレートは検索条件で絞り込めるため(条件なし = 全件)、

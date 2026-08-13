@@ -75,6 +75,17 @@ type fakeAPI struct {
 	// getIssueErr は GET /issues/:key の注入エラー(401・403・429・通信エラー等)。
 	// 404 は deletedKeys / deletedIDs で再現する。
 	getIssueErr error
+
+	// comments は課題キー → コメント(古い順に追加する)。
+	// GetIssueComments は実 API と同じく order / count / maxId を解釈する。
+	comments map[string][]backlogclient.Comment
+	// commentsErr はコメント取得の注入エラー(部分失敗の再現)。
+	commentsErr error
+	// commentsErrAfterCalls が正のとき、その回数を超えたコメント取得を失敗させる
+	// (打ち切り確認の問い合わせだけを失敗させる用)。
+	commentsErrAfterCalls int
+	// commentQueries はコメント取得の呼び出し記録(ページングの検証用)。
+	commentQueries []backlogclient.CommentQuery
 }
 
 func newFakeAPI() *fakeAPI {
@@ -88,6 +99,7 @@ func newFakeAPI() *fakeAPI {
 		projectUsersErr:    map[int64]error{},
 		projectAdminsErr:   map[int64]error{},
 		projectTeamsErr:    map[int64]error{},
+		comments:           map[string][]backlogclient.Comment{},
 		failIssuesAtOffset: -1,
 	}
 }
@@ -312,6 +324,41 @@ func (f *fakeAPI) GetIssue(ctx context.Context, issueIDOrKey string) (*backlogcl
 		}
 	}
 	return nil, fmt.Errorf("%w: %s", backlogclient.ErrNotFound, issueIDOrKey)
+}
+
+// GetIssueComments は実 API と同じく order=desc + maxId のページングを再現する
+// (id 昇順で保持し、要求された向き・上限で切り出す)。
+func (f *fakeAPI) GetIssueComments(ctx context.Context, issueIDOrKey string, q backlogclient.CommentQuery) ([]backlogclient.Comment, error) {
+	f.commentQueries = append(f.commentQueries, q)
+	if f.commentsErr != nil {
+		return nil, f.commentsErr
+	}
+	if f.commentsErrAfterCalls > 0 && len(f.commentQueries) > f.commentsErrAfterCalls {
+		return nil, fmt.Errorf("フェイク: %d 回目のコメント取得に失敗", len(f.commentQueries))
+	}
+	if f.deletedKeys[issueIDOrKey] {
+		return nil, fmt.Errorf("%w: %s", backlogclient.ErrNotFound, issueIDOrKey)
+	}
+	all := f.comments[issueIDOrKey]
+	var matched []backlogclient.Comment
+	for _, c := range all {
+		if q.MaxID > 0 && c.ID > q.MaxID {
+			continue
+		}
+		if q.MinID > 0 && c.ID < q.MinID {
+			continue
+		}
+		matched = append(matched, c)
+	}
+	if q.Order == "desc" {
+		sort.Slice(matched, func(i, j int) bool { return matched[i].ID > matched[j].ID })
+	} else {
+		sort.Slice(matched, func(i, j int) bool { return matched[i].ID < matched[j].ID })
+	}
+	if q.Count > 0 && len(matched) > q.Count {
+		matched = matched[:q.Count]
+	}
+	return matched, nil
 }
 
 func (f *fakeAPI) GetSpaceActivities(ctx context.Context, q backlogclient.ActivityQuery) ([]backlogclient.Activity, error) {

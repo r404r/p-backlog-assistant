@@ -248,6 +248,17 @@ type IssueCustomFieldDTO struct {
 	Value string `json:"value"`
 }
 
+// IssueCommentDTO は課題詳細に表示するコメント 1 件
+// (frontend/src/lib/backend.ts の IssueComment と対)。
+//
+// 本文を持つコメントだけを返す(状態変更等の変更履歴のみの項目は保存しておらず、
+// 件数を IssueDetailDTO.CommentsHistoryOnly で伝える)。
+type IssueCommentDTO struct {
+	AuthorName string `json:"authorName"`
+	Content    string `json:"content"`
+	Created    string `json:"created"`
+}
+
 // IssueDetailDTO は課題 1 件の詳細(frontend/src/lib/backend.ts の IssueDetail と対)。
 //
 // 中身はすべてローカル DB へ取り込んだ時点の内容(通常は最終同期時点。
@@ -271,6 +282,20 @@ type IssueDetailDTO struct {
 	CustomFields []IssueCustomFieldDTO `json:"customFields"`
 	// FetchedAt はこの課題をローカルへ取り込んだ時刻(RFC3339)。
 	FetchedAt string `json:"fetchedAt"`
+	// Comments は保存済みのコメント(新しい順。フロント契約: null を返さない)。
+	// コメントは同期では取得されないため、RefreshIssueDetail を実行していない
+	// 課題では空になる(「コメント 0 件」と区別するのは CommentsFetchedAt)。
+	Comments []IssueCommentDTO `json:"comments"`
+	// CommentsFetchedAt はコメントを取得した時刻(RFC3339)。空文字 = 未取得。
+	CommentsFetchedAt string `json:"commentsFetchedAt"`
+	// CommentsHistoryOnly は本文が無い(変更履歴のみの)項目の件数。
+	CommentsHistoryOnly int `json:"commentsHistoryOnly"`
+	// CommentsTruncated は取得上限に達し、古いコメントを取得しきれていないこと。
+	CommentsTruncated bool `json:"commentsTruncated"`
+	// Warnings は部分的な失敗(コメントだけ取得できなかった等)。
+	// 課題本体の内容は有効なため、画面は詳細を表示したうえでこれを添える
+	// (フロント契約: null を返さない)。
+	Warnings []string `json:"warnings"`
 }
 
 // issueDetailDTOOf は課題 1 件を詳細 DTO へ詰め替える。
@@ -298,6 +323,8 @@ func issueDetailDTOOf(is *store.Issue, parentKeys map[int64]string) IssueDetailD
 		// フロント契約では null を返さない(常に配列)
 		CustomFields: []IssueCustomFieldDTO{},
 		FetchedAt:    is.FetchedAt,
+		Comments:     []IssueCommentDTO{},
+		Warnings:     []string{},
 	}
 	values, err := customfield.ParseValues(is.RawJSON)
 	if err != nil {
@@ -316,6 +343,27 @@ func issueDetailDTOOf(is *store.Issue, parentKeys map[int64]string) IssueDetailD
 	return dto
 }
 
+// newIssueDetailDTO は service の詳細(課題本体 + 親課題 + コメント)を
+// 詳細 DTO へ詰め替える。GetIssueDetail / RefreshIssueDetail の共通経路。
+//
+// コメントは service が新しい順で返すため、並べ替えはしない(表示順の決定は
+// SQL 側に寄せ、詰め替えでは順序を変えないという既存の流儀)。
+func newIssueDetailDTO(d *service.IssueDetail) IssueDetailDTO {
+	dto := issueDetailDTOOf(d.Issue, d.ParentKeys)
+	for _, c := range d.Comments {
+		dto.Comments = append(dto.Comments, IssueCommentDTO{
+			AuthorName: c.AuthorName, Content: c.Content, Created: c.Created,
+		})
+	}
+	dto.CommentsFetchedAt = d.CommentStatus.FetchedAt
+	dto.CommentsHistoryOnly = d.CommentStatus.HistoryOnly
+	dto.CommentsTruncated = d.CommentStatus.Truncated
+	if len(d.Warnings) > 0 {
+		dto.Warnings = d.Warnings
+	}
+	return dto
+}
+
 // GetIssueDetail は課題 1 件の詳細をローカル DB から返す(API は呼ばない)。
 //
 // 検索結果の課題キーをクリックしたときのポップアップ表示に使う。
@@ -330,18 +378,22 @@ func (a *App) GetIssueDetail(profileID string, projectID int64, issueKey string)
 			if err != nil {
 				return nil, nil, err
 			}
-			dto := issueDetailDTOOf(detail.Issue, detail.ParentKeys)
+			dto := newIssueDetailDTO(detail)
 			// 記録するのは件数のみ。親の有無は「この課題が子課題である」という
 			// 課題の内容そのものなので残さない(マスク方針)
-			return &dto, []slog.Attr{slog.Int("customFields", len(dto.CustomFields))}, nil
+			return &dto, []slog.Attr{
+				slog.Int("customFields", len(dto.CustomFields)),
+				slog.Int("comments", len(dto.Comments)),
+			}, nil
 		})
 }
 
 // RefreshIssueDetail は課題 1 件を Backlog から取得し直してローカル DB へ反映し、
 // 反映後の詳細を返す(詳細ポップアップの「最新の状態を取得」)。
 //
-// GetIssueDetail と違い API を 1 回呼ぶ。反映は同期と同じ変換・同じ UPSERT を
-// 通すため、検索索引・親課題の引き当ても同時に最新化される。
+// GetIssueDetail と違い API を呼ぶ(課題本体 1 回 + コメント数回)。反映は同期と
+// 同じ変換・同じ UPSERT を通すため、検索索引・親課題の引き当ても同時に最新化される。
+// コメントを更新するのはこの経路だけ(同期はコメントに触れない)。
 // 同期状態(最終同期時刻)は更新しない(1 件の最新化はプロジェクト同期ではない)。
 func (a *App) RefreshIssueDetail(profileID string, projectID int64, issueKey string) (*IssueDetailDTO, error) {
 	// 課題キー・件名は記録しない(既存のマスク方針。profileId / projectId のみ)
@@ -352,8 +404,15 @@ func (a *App) RefreshIssueDetail(profileID string, projectID int64, issueKey str
 			if err != nil {
 				return nil, nil, err
 			}
-			dto := issueDetailDTOOf(detail.Issue, detail.ParentKeys)
-			return &dto, []slog.Attr{slog.Int("customFields", len(dto.CustomFields))}, nil
+			dto := newIssueDetailDTO(detail)
+			// コメント本文・投稿者名は記録しない(件数と取得の顛末だけを残す)
+			return &dto, []slog.Attr{
+				slog.Int("customFields", len(dto.CustomFields)),
+				slog.Int("comments", len(dto.Comments)),
+				slog.Int("commentsHistoryOnly", dto.CommentsHistoryOnly),
+				slog.Bool("commentsTruncated", dto.CommentsTruncated),
+				slog.Int("warnings", len(dto.Warnings)),
+			}, nil
 		})
 }
 

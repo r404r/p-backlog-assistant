@@ -667,3 +667,54 @@ func TestSyncProgressPayload(t *testing.T) {
 		}
 	}
 }
+
+// TestNewIssueDetailDTO_Comments はコメント関連のフィールドが
+// フロント契約どおりに詰められることを確認する。
+//
+// 配列は null を返さない(画面が長さ・繰り返しを条件分岐なしで扱えるように)。
+// 未取得(commentsFetchedAt が空)と「取得したが 0 件」は区別できること。
+func TestNewIssueDetailDTO_Comments(t *testing.T) {
+	issue := &store.Issue{IssueKey: "EXA-1", Summary: "件名", RawJSON: `{"id":1}`}
+
+	t.Run("未取得の課題は空配列と空の取得時刻", func(t *testing.T) {
+		dto := newIssueDetailDTO(&service.IssueDetail{Issue: issue})
+		if dto.Comments == nil || len(dto.Comments) != 0 {
+			t.Errorf("コメント = %+v, want 空配列(null にしない)", dto.Comments)
+		}
+		if dto.Warnings == nil || len(dto.Warnings) != 0 {
+			t.Errorf("警告 = %+v, want 空配列(null にしない)", dto.Warnings)
+		}
+		if dto.CommentsFetchedAt != "" || dto.CommentsHistoryOnly != 0 || dto.CommentsTruncated {
+			t.Errorf("取得結果 = %+v", dto)
+		}
+	})
+
+	t.Run("取得済みのコメントと取得結果を詰める", func(t *testing.T) {
+		dto := newIssueDetailDTO(&service.IssueDetail{
+			Issue: issue,
+			Comments: []store.IssueComment{
+				{ID: 12, AuthorName: "佐藤 花子", Content: "対応しました", Created: "2026-08-02T10:00:00Z"},
+				{ID: 11, AuthorName: "山田 太郎", Content: "調査しました", Created: "2026-08-01T10:00:00Z"},
+			},
+			CommentStatus: store.CommentFetchStatus{
+				FetchedAt: "2026-08-13T00:00:00Z", Truncated: true, HistoryOnly: 3,
+			},
+			Warnings: []string{"コメントを取得できませんでした"},
+		})
+		if len(dto.Comments) != 2 {
+			t.Fatalf("コメント = %+v", dto.Comments)
+		}
+		// service が返した並び(新しい順)をそのまま保つ
+		if dto.Comments[0].AuthorName != "佐藤 花子" || dto.Comments[0].Content != "対応しました" ||
+			dto.Comments[0].Created != "2026-08-02T10:00:00Z" {
+			t.Errorf("先頭のコメント = %+v", dto.Comments[0])
+		}
+		if dto.CommentsFetchedAt != "2026-08-13T00:00:00Z" ||
+			dto.CommentsHistoryOnly != 3 || !dto.CommentsTruncated {
+			t.Errorf("取得結果 = %+v", dto)
+		}
+		if len(dto.Warnings) != 1 {
+			t.Errorf("警告 = %+v", dto.Warnings)
+		}
+	})
+}
