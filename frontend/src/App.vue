@@ -1,8 +1,14 @@
 <script lang="ts" setup>
-// アプリ外枠(サイドバー + コンテンツ)。TDD 例外(GUI): フロントエンドにテスト基盤が
-// 無いため手動確認で担保する。
-import { computed, onErrorCaptured, onMounted, ref, type Component } from 'vue'
+// アプリ外枠(サイドバー + コンテンツ)。TDD 例外(GUI): 描画・ポインタ操作は
+// 手動確認で担保し、切り出せる純ロジック(サイドバー幅など)は lib/ 側でテストする。
+import { computed, onBeforeUnmount, onErrorCaptured, onMounted, ref, type Component } from 'vue'
 import { getBackend } from './lib/backend'
+import {
+  DEFAULT_SIDEBAR_WIDTH,
+  loadSidebarWidth,
+  resolveDragWidth,
+  saveSidebarWidth,
+} from './lib/sidebarWidth'
 import SettingsView from './views/SettingsView.vue'
 import IssuesView from './views/IssuesView.vue'
 import BulkUpdateView from './views/BulkUpdateView.vue'
@@ -44,17 +50,113 @@ function loadCollapsed(): boolean {
 
 const collapsed = ref(loadCollapsed())
 
+/** 折りたたみ状態を保存する(ドラッグ・トグルの両方から使う) */
+function saveCollapsed(): void {
+  try {
+    localStorage.setItem(SIDEBAR_COLLAPSED_KEY, collapsed.value ? '1' : '0')
+  } catch {
+    // 保存できなくても表示の切り替え自体は成立するため無視する
+  }
+}
+
 const toggleTitle = computed(() =>
   collapsed.value ? 'メニューを展開する' : 'メニューを折りたたむ',
 )
 
 function toggleSidebar(): void {
   collapsed.value = !collapsed.value
-  try {
-    localStorage.setItem(SIDEBAR_COLLAPSED_KEY, collapsed.value ? '1' : '0')
-  } catch {
-    // 保存できなくても表示の切り替え自体は成立するため無視する
+  saveCollapsed()
+}
+
+// --- サイドバー幅のドラッグ調整 ---
+// 幅の決定ロジック(クランプ・折りたたみ判定・保存)は lib/sidebarWidth.ts 側でテストする。
+// ここのポインタ操作は TDD 例外(GUI)として手動確認で担保する。
+
+/** 展開時のサイドバー幅(px)。折りたたみ中も次に展開したときの幅として保持する */
+const sidebarWidth = ref(loadSidebarWidth())
+
+/** ドラッグ中か(幅アニメーションの抑止とハイライトに使う) */
+const resizing = ref(false)
+
+/** サイドバー本体(ドラッグ中の幅をサイドバー左端からの距離として求めるために参照する) */
+const sidebarEl = ref<HTMLElement | null>(null)
+
+/** 幅調整ハンドル(ポインタキャプチャの解放に使う) */
+const handleEl = ref<HTMLElement | null>(null)
+
+/**
+ * ドラッグ中のポインタ ID(未ドラッグは null)。
+ * マウス・タッチ・ペンが同時に触れた場合に、開始したポインタ以外の
+ * move / up を取り違えないよう ID で照合する。
+ */
+let activePointerId: number | null = null
+
+// 折りたたみ中は CSS(.sidebar.collapsed)の 48px を使うため、インラインの幅は付けない
+const sidebarStyle = computed(() =>
+  collapsed.value ? {} : { width: `${sidebarWidth.value}px` },
+)
+
+function onHandlePointerDown(e: PointerEvent): void {
+  if (resizing.value) return // 既にドラッグ中なら別ポインタでの開始は受け付けない
+  if (e.button !== 0) return // 左ボタン以外(右クリック等)では開始しない
+  // ポインタキャプチャにより、カーソルがサイドバー外・ウインドウ外へ出ても
+  // pointermove / pointerup をハンドルが受け取り続ける
+  ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
+  activePointerId = e.pointerId
+  resizing.value = true
+  e.preventDefault() // ドラッグ開始時のテキスト選択を抑止する
+}
+
+function onHandlePointerMove(e: PointerEvent): void {
+  if (!resizing.value || e.pointerId !== activePointerId) return
+  const left = sidebarEl.value?.getBoundingClientRect().left ?? 0
+  const result = resolveDragWidth(e.clientX - left)
+  collapsed.value = result.collapsed
+  sidebarWidth.value = result.width
+}
+
+/**
+ * ドラッグ終了。その時点の幅・折りたたみ状態を確定して保存する。
+ *
+ * pointerup / pointercancel を受け取れないまま終わる経路
+ * (ポインタキャプチャの喪失、ウインドウのフォーカス喪失)があるため、
+ * どこから呼ばれても安全なように冪等にしてある。
+ * 呼ばれないと resizing が残り、user-select: none とカーソルが戻らなくなる。
+ */
+function finishResize(): void {
+  if (!resizing.value) return
+  resizing.value = false
+  const handle = handleEl.value
+  if (handle && activePointerId !== null && handle.hasPointerCapture(activePointerId)) {
+    handle.releasePointerCapture(activePointerId)
   }
+  activePointerId = null
+  // 保存はドラッグ中(pointermove ごと)ではなく確定時にまとめて行う
+  saveSidebarWidth(sidebarWidth.value)
+  saveCollapsed()
+}
+
+/** pointerup / pointercancel / lostpointercapture(開始したポインタのみ処理する) */
+function onHandlePointerEnd(e: PointerEvent): void {
+  if (e.pointerId !== activePointerId) return
+  finishResize()
+}
+
+// ウインドウがフォーカスを失うと(別アプリへの切替、OS のダイアログ等)
+// pointerup が届かないことがあるため、その時点の幅で確定させる。
+onMounted(() => {
+  window.addEventListener('blur', finishResize)
+})
+onBeforeUnmount(() => {
+  window.removeEventListener('blur', finishResize)
+})
+
+/** ハンドルのダブルクリックで既定幅へ戻す(折りたたみ中なら展開する) */
+function resetSidebarWidth(): void {
+  sidebarWidth.value = DEFAULT_SIDEBAR_WIDTH
+  collapsed.value = false
+  saveSidebarWidth(sidebarWidth.value)
+  saveCollapsed()
 }
 
 // 初期表示は接続設定。初回起動(プロファイル 0 件)時は SettingsView 側が
@@ -82,8 +184,8 @@ onErrorCaptured((err) => {
 </script>
 
 <template>
-  <div class="layout">
-    <nav class="sidebar" :class="{ collapsed }">
+  <div class="layout" :class="{ resizing }">
+    <nav ref="sidebarEl" class="sidebar" :class="{ collapsed, resizing }" :style="sidebarStyle">
       <button
         class="sidebar-toggle"
         type="button"
@@ -112,6 +214,20 @@ onErrorCaptured((err) => {
       <div v-if="appVersion && !collapsed" class="app-version" :title="'バージョン ' + appVersion">
         {{ appVersion }}
       </div>
+      <!-- 幅調整ハンドル(サイドバー右端に重ねる)。マウス専用のため支援技術からは隠す。
+           キーボード操作では ≡ トグル(折りたたみ/展開)で代替できる。 -->
+      <div
+        ref="handleEl"
+        class="resize-handle"
+        aria-hidden="true"
+        title="ドラッグで幅を調整(ダブルクリックで既定幅に戻す)"
+        @pointerdown="onHandlePointerDown"
+        @pointermove="onHandlePointerMove"
+        @pointerup="onHandlePointerEnd"
+        @pointercancel="onHandlePointerEnd"
+        @lostpointercapture="onHandlePointerEnd"
+        @dblclick="resetSidebarWidth"
+      ></div>
     </nav>
     <main class="content">
       <div v-if="fatalError" class="fatal-error">
@@ -134,7 +250,9 @@ onErrorCaptured((err) => {
 }
 
 .sidebar {
+  /* 既定幅。展開中は :style のインライン幅(lib/sidebarWidth.ts の既定・保存値)で上書きする */
   width: 200px;
+  position: relative; /* 右端の幅調整ハンドルの基準 */
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
@@ -157,6 +275,39 @@ onErrorCaptured((err) => {
 
 .sidebar.collapsed {
   width: 48px;
+}
+
+/* ドラッグ中は幅アニメーションを止める(カーソルに 0.2s 遅れて追従するのを防ぐ) */
+.sidebar.resizing {
+  transition: none;
+}
+
+/* 幅調整ハンドル。サイドバー右端に重ねて置くのでレイアウト(幅)には影響しない */
+.resize-handle {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 5px;
+  cursor: col-resize;
+  background: transparent;
+  /* ドラッグをスクロール等のブラウザ既定ジェスチャに奪われないようにする */
+  touch-action: none;
+}
+
+.resize-handle:hover {
+  background: #bcc7d1;
+}
+
+/* ドラッグ中はカーソルがハンドルから外れてもハイライトを維持する */
+.layout.resizing .resize-handle {
+  background: #0b5cad;
+}
+
+/* ドラッグ中の文字列選択・カーソルのちらつきを抑える */
+.layout.resizing {
+  user-select: none;
+  cursor: col-resize;
 }
 
 /* 折りたたみトグル。折りたたみ時は中央寄せにして 48px 幅に収める */
