@@ -274,6 +274,46 @@ var migrations = [][]string{
 		// 本文が無い(変更履歴のみの)項目の件数
 		`ALTER TABLE issues ADD COLUMN comments_history_only INTEGER NOT NULL DEFAULT 0`,
 	},
+	// v6: キーワード検索の対象に課題キーを加える(search_text の作り直し)。
+	//
+	// v5 までの search_text は「件名 + 詳細」だけだったため、課題キー
+	// (EXA-123)を貼り付けて検索しても 0 件になっていた。以後は
+	// buildSearchText が「課題キー + 件名 + 詳細」で生成する(issue.go)。
+	// 既存行はここで作り直す。
+	//
+	// 先頭に足すだけで作り直せる理由:
+	//   区切りの改行は NFKC でもケースフォールドでも前後の文字と合成・変化
+	//   しないため、normalize(キー + "\n" + 本文) は
+	//   normalize(キー) + "\n" + normalize(本文) と必ず一致する。
+	//   よって既存の search_text(= normalize(本文))を読み直して
+	//   正規化し直す必要はなく、正規化した課題キーを前置すれば足りる。
+	//
+	// SQL の lower() で正規化が足りる理由:
+	//   Backlog の課題キーは「プロジェクトキー(英大文字・数字・アンダースコア)
+	//   + '-' + 連番」であり、NFKC で変化する文字を含まない。ASCII 専用の
+	//   SQLite の lower() でも Go の NormalizeSearchText と同じ結果になる。
+	//   食い違いは TestMigrate_V5ToV6_AddsIssueKeyToSearchText が検出する。
+	//   issue_key が NULL の行(v1 のスキーマでは許されていた)は COALESCE で
+	//   空文字にする。しないと連結結果が NULL になり本文まで検索できなくなる。
+	//
+	// UPDATE の前に FTS の UPDATE トリガーを外す理由:
+	//   トリガーを付けたままだと 1 行ごとに索引の delete + insert が走るが、
+	//   その結果は直後の rebuild(索引を捨てて全件作り直す)で丸ごと
+	//   上書きされる。10 万件規模では二重の書き込みが移行時間に直接効くため、
+	//   一時的に外して全行更新し、張り直してから rebuild する。
+	//   トリガー定義は v3 と同一(過去のマイグレーションは変更しない規約のため、
+	//   ここに同じ内容を書き下す)。移行はトランザクション内で行われるので、
+	//   途中で失敗してもトリガーが外れたままになることはない。
+	{
+		`DROP TRIGGER IF EXISTS issues_fts_au`,
+		`UPDATE issues
+			SET search_text = lower(COALESCE(issue_key, '')) || char(10) || COALESCE(search_text, '')`,
+		`CREATE TRIGGER IF NOT EXISTS issues_fts_au AFTER UPDATE ON issues BEGIN
+			INSERT INTO issues_fts(issues_fts, rowid, search_text) VALUES ('delete', old.id, old.search_text);
+			INSERT INTO issues_fts(rowid, search_text) VALUES (new.id, new.search_text);
+		END`,
+		`INSERT INTO issues_fts(issues_fts) VALUES ('rebuild')`,
+	},
 }
 
 // LatestSchemaVersion は最新スキーマバージョン。

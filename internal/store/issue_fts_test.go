@@ -351,6 +351,8 @@ func TestSearchIssues_FTSMatchesLike(t *testing.T) {
 		"あ", "ab", "日本語", "ひらがな・漢字", "straße", "STRASSE", "strasse",
 		"🙂", "emoji 🙂", "空白", "タブ", "存在しない語", "ログイン 改善",
 		"ログイン timeout", "ab ログイン", "ログイン レイアウト", "  ",
+		// 課題キー(search_text に含まれる)。完全・部分・小文字・複数語
+		"EXA-1", "exa-1", "exa", "a-1", "EXA-1 ログイン", "exa-3 ログアウト",
 	}
 	modes := []string{"", "and", "or"}
 	for _, kw := range keywords {
@@ -448,7 +450,7 @@ func TestIterateIssues_FTSMatchesLike(t *testing.T) {
 	if err := s.UpsertIssues(ctx, ftsCompatIssues()); err != nil {
 		t.Fatal(err)
 	}
-	for _, kw := range []string{"ログイン", "ログ", "あ", "100%", "ログイン 改善"} {
+	for _, kw := range []string{"ログイン", "ログ", "あ", "100%", "ログイン 改善", "EXA-2", "exa"} {
 		for _, mode := range []string{"", "or"} {
 			got := []int64{}
 			if _, err := s.IterateIssues(ctx,
@@ -472,7 +474,7 @@ func TestSearchIssueIDs_FTSMatchesLike(t *testing.T) {
 	if err := s.UpsertIssues(ctx, ftsCompatIssues()); err != nil {
 		t.Fatal(err)
 	}
-	for _, kw := range []string{"ログイン", "ログ", "あ", "100%", `a"b"c`, "存在しない語", ""} {
+	for _, kw := range []string{"ログイン", "ログ", "あ", "100%", `a"b"c`, "存在しない語", "", "EXA-4", "exa"} {
 		got, err := s.SearchIssueIDs(ctx, kw)
 		if err != nil {
 			t.Fatalf("キーワード %q: %v", kw, err)

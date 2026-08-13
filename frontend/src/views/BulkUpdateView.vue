@@ -742,7 +742,7 @@ onUnmounted(() => {
             v-model="cond.keyword"
             type="text"
             class="wide"
-            placeholder="件名 + 詳細の部分一致(スペース区切りで複数指定)"
+            placeholder="課題キー + 件名 + 詳細の部分一致(スペース区切りで複数指定)"
             :disabled="conditionsLocked"
           />
         </div>

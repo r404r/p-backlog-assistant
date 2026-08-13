@@ -45,8 +45,91 @@ func TestUpsertIssues_BulkGeneratesSearchText(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got != "timeout\n" {
+	if got != "exa-1\ntimeout\n" {
 		t.Errorf("search_text = %q", got)
+	}
+}
+
+// TestSearchIssues_IssueKeyKeyword は課題キーがキーワード検索の対象に
+// 含まれることを確認する(完全一致・部分一致・小文字入力・複数語)。
+func TestSearchIssues_IssueKeyKeyword(t *testing.T) {
+	s := openTempStore(t)
+	seedIssues(t, s)
+	ctx := context.Background()
+
+	tests := []struct {
+		name    string
+		keyword string
+		mode    string
+		want    []int64
+	}{
+		{"課題キーの完全一致", "EXA-2", "", []int64{2}},
+		{"小文字で入力しても一致する", "exa-2", "", []int64{2}},
+		{"課題キーの部分一致(番号側)", "a-3", "", []int64{3}},
+		{"プロジェクトキー部分は同一プロジェクトの全課題に一致", "EXA", "", []int64{1, 2, 3}},
+		{"別プロジェクトの課題キーでは 0 件", "EXB-1", "", nil},
+		{"AND: 課題キー + 本文の語", "EXA-1 timeout", "and", []int64{1}},
+		{"AND: 課題キーと本文の語が別課題なら 0 件", "EXA-1 レイアウト", "and", nil},
+		{"OR: 課題キー または 本文の語", "EXA-2 ログイン", "or", []int64{1, 2, 3}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			res, err := s.SearchIssues(ctx,
+				IssueFilter{ProjectID: 1, Keyword: tt.keyword, KeywordMode: tt.mode})
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := make([]int64, 0, len(res.Issues))
+			for _, i := range res.Issues {
+				got = append(got, i.ID)
+			}
+			if fmt.Sprint(got) != fmt.Sprint(tt.want) {
+				t.Errorf("キーワード %q(mode %q)の結果 = %v, want %v", tt.keyword, tt.mode, got, tt.want)
+			}
+			if res.Total != len(tt.want) {
+				t.Errorf("total = %d, want %d", res.Total, len(tt.want))
+			}
+		})
+	}
+}
+
+// TestSearchIssues_ShortProjectKeyUsesLikeFallback は 2 文字のプロジェクトキーでも
+// 課題キー検索が効くことを確認する。trigram 索引は 3 文字未満の語を索引できないが、
+// 既存のハイブリッド(短い語は LIKE のみで判定)がそのまま適用されるため、
+// 課題キーを検索対象に加えるにあたって追加の対応は要らない(issue_fts.go 参照)。
+func TestSearchIssues_ShortProjectKeyUsesLikeFallback(t *testing.T) {
+	s := openTempStore(t)
+	ctx := context.Background()
+	if err := s.UpsertIssues(ctx, []*Issue{
+		{ID: 1, IssueKey: "AB-1", ProjectID: 1, Summary: "短いキーの課題"},
+		{ID: 2, IssueKey: "CD-1", ProjectID: 1, Summary: "別のキーの課題"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// 2 文字の語なので FTS 索引は使わない(LIKE のみ)
+	spec, err := IssueFilter{ProjectID: 1, Keyword: "AB"}.buildFilter()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(spec.from, "issues_fts") || strings.Contains(spec.where, "MATCH") {
+		t.Errorf("2 文字のキーワードで FTS が使われた: from=%q where=%q", spec.from, spec.where)
+	}
+
+	res, err := s.SearchIssues(ctx, IssueFilter{ProjectID: 1, Keyword: "AB"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Total != 1 || len(res.Issues) != 1 || res.Issues[0].ID != 1 {
+		t.Errorf("2 文字のプロジェクトキーの検索結果 = %+v(total %d), want 課題 1 のみ", res.Issues, res.Total)
+	}
+	// 3 文字になれば FTS 索引を使い、結果は変わらない
+	res, err = s.SearchIssues(ctx, IssueFilter{ProjectID: 1, Keyword: "AB-"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Total != 1 || len(res.Issues) != 1 || res.Issues[0].ID != 1 {
+		t.Errorf("3 文字の課題キー断片の検索結果 = %+v(total %d), want 課題 1 のみ", res.Issues, res.Total)
 	}
 }
 

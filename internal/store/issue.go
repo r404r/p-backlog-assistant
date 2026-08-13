@@ -38,11 +38,29 @@ type Issue struct {
 	FetchedAt     string
 }
 
-// UpsertIssue は課題を id で UPSERT する。search_text(件名 + 詳細の正規化)は
-// 保存・更新時にここで必ず生成する(設計書 2 節)。
+// buildSearchText は検索用テキスト(search_text 列)を組み立てる。
+//
+// 対象は「課題キー + 件名 + 詳細」。課題キー(EXA-123)を含めることで、
+// 利用者が課題キーを貼り付けてそのまま検索できる(部分一致なので
+// プロジェクトキーだけ・番号だけでも当たる)。
+//
+// 連結は改行 1 つ。改行は NFKC でもケースフォールドでも前後の文字と
+// 合成・変化しないため、要素ごとに正規化した結果と、連結してから
+// 正規化した結果が必ず一致する(v6 マイグレーションはこの性質を使い、
+// 既存の search_text の先頭に課題キーを足すだけで作り直している)。
+//
+// 課題キーは 3 文字未満(2 文字のプロジェクトキー等)になりうるが、
+// trigram 索引を使えない語は従来どおり LIKE のみで判定されるため、
+// FTS 側に追加の対応は要らない(issue_fts.go の (2))。
+func buildSearchText(i *Issue) string {
+	return NormalizeSearchText(i.IssueKey + "\n" + i.Summary + "\n" + i.Description)
+}
+
+// UpsertIssue は課題を id で UPSERT する。search_text(課題キー + 件名 + 詳細の
+// 正規化)は保存・更新時にここで必ず生成する(設計書 2 節)。
 // q には *sql.DB(単発)または *sql.Tx(Store.WithTx 内)を渡す。
 func UpsertIssue(ctx context.Context, q dbtx, i *Issue) error {
-	searchText := NormalizeSearchText(i.Summary + "\n" + i.Description)
+	searchText := buildSearchText(i)
 	_, err := q.ExecContext(ctx, `
 		INSERT INTO issues (
 			id, issue_key, project_id, summary, description,

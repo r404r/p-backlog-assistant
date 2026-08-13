@@ -18,7 +18,7 @@ const DefaultSearchLimit = 5000
 // ProjectID は必須(スペース横断検索は行わない)。
 type IssueFilter struct {
 	ProjectID int64 `json:"projectId"` // 必須
-	// Keyword は件名 + 詳細の部分一致(search_text が対象)。空白区切りで複数語。
+	// Keyword は課題キー + 件名 + 詳細の部分一致(search_text が対象)。空白区切りで複数語。
 	// 3 文字以上の語は FTS5 索引で候補を絞り込んでから LIKE で再判定し、
 	// 3 文字未満の語は LIKE のみで判定する(結果は従来と同一。issue_fts.go 参照)。
 	Keyword string `json:"keyword"`

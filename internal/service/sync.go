@@ -214,7 +214,7 @@ func (s *ProfileService) ListProjects(ctx context.Context, profileID string) ([]
 }
 
 // SearchIssues はローカル DB から課題を抽出する(設計書 4 節・画面 2)。
-// Backlog API の keyword 検索とは範囲が異なる(件名 + 詳細のみ)。
+// Backlog API の keyword 検索とは範囲が異なる(課題キー + 件名 + 詳細のみ)。
 func (s *ProfileService) SearchIssues(ctx context.Context, profileID string, filter store.IssueFilter) (*store.IssueSearchResult, error) {
 	// store を使う操作はプロファイルの削除・保存と排他する(高 2)
 	s.profileMu.RLock()

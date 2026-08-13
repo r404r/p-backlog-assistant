@@ -13,7 +13,7 @@ import type { IssueQuery } from './backend'
 
 /** 検索条件フォームの入力値(すべて文字列。未入力は空文字) */
 export interface IssueConditions {
-  /** キーワード(件名 + 詳細の部分一致。空白区切りで複数語) */
+  /** キーワード(課題キー + 件名 + 詳細の部分一致。空白区切りで複数語) */
   keyword: string
   /** 複数キーワードの連結方法(既定は AND = すべて含む) */
   keywordMode: 'and' | 'or'

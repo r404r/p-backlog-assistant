@@ -251,7 +251,7 @@ export interface IssueQuery {
   /** 対象プロジェクト ID(必須) */
   projectId: number
   /**
-   * キーワード(件名 + 詳細の部分一致。Go 側で NFKC + ケースフォールド正規化)。
+   * キーワード(課題キー + 件名 + 詳細の部分一致。Go 側で NFKC + ケースフォールド正規化)。
    * 半角・全角スペース区切りで複数語を指定できる(連結方法は keywordMode)
    */
   keyword?: string
@@ -1608,8 +1608,8 @@ interface MockFilterResult {
 
 /**
  * モックのローカル検索(Go 側の LIKE 部分一致に相当する簡易版)。
- * Go 側は件名 + 詳細の正規化テキストを検索するが、モックデータは詳細を
- * 持たないため件名のみを対象とする(既知の簡易化)。
+ * Go 側は課題キー + 件名 + 詳細の正規化テキストを検索するが、モックデータは
+ * 詳細を持たないため課題キーと件名のみを対象とする(既知の簡易化)。
  */
 function filterMockIssues(rows: IssueRow[], query: IssueQuery): MockFilterResult {
   // Go 側(NFKC + ケースフォールド)に近づけた正規化。
@@ -1629,10 +1629,11 @@ function filterMockIssues(rows: IssueRow[], query: IssueQuery): MockFilterResult
   let unverifiable = 0
   const matched = rows.filter((r) => {
     if (terms.length > 0) {
-      const summary = normalize(r.summary)
+      // Go 側の search_text と同じ並び(課題キー + 件名。詳細はモックに無い)
+      const text = normalize(`${r.issueKey}\n${r.summary}`)
       const hit = orMode
-        ? terms.some((t) => summary.includes(t))
-        : terms.every((t) => summary.includes(t))
+        ? terms.some((t) => text.includes(t))
+        : terms.every((t) => text.includes(t))
       if (!hit) return false
     }
     if (query.updatedFrom && r.updated.slice(0, 10) < query.updatedFrom) return false

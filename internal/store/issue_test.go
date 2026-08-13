@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"testing"
 )
 
@@ -63,8 +64,9 @@ func TestUpsertIssue_GeneratesSearchText(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// 先頭に課題キー(小文字化済み)が入り、
 	// 全角 ＴＩＭＥＯＵＴ → 半角小文字 timeout に正規化されている
-	want := "ログイン画面のバグ\nie11 で timeout が発生する"
+	want := "ex-1\nログイン画面のバグ\nie11 で timeout が発生する"
 	if got != want {
 		t.Errorf("search_text = %q, want %q", got, want)
 	}
@@ -87,7 +89,7 @@ func TestUpsertIssue_UpdateRegeneratesSearchText(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got != "新タイトル abc\n" {
+	if got != "ex-2\n新タイトル abc\n" {
 		t.Errorf("更新後の search_text = %q", got)
 	}
 	// UPSERT なので行は 1 行のまま
@@ -142,6 +144,44 @@ func TestSearchIssueIDs_NormalizedMatch(t *testing.T) {
 	}
 	if len(ids) != 0 {
 		t.Errorf("%% の検索結果 = %v, want []", ids)
+	}
+}
+
+// TestSearchIssueIDs_MatchesIssueKey は課題キーがキーワード検索の対象に
+// 含まれること(スペース横断検索でも同じ規則が効くこと)を確認する。
+func TestSearchIssueIDs_MatchesIssueKey(t *testing.T) {
+	s := openTempStore(t)
+	ctx := context.Background()
+
+	issues := []*Issue{
+		{ID: 1, IssueKey: "EXA-10", ProjectID: 1, Summary: "ログイン不具合"},
+		{ID: 2, IssueKey: "EXB-10", ProjectID: 2, Summary: "画面崩れ"},
+	}
+	for _, i := range issues {
+		if err := s.UpsertIssue(ctx, i); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	for _, tc := range []struct {
+		name    string
+		keyword string
+		want    []int64
+	}{
+		{"課題キーの完全一致", "EXA-10", []int64{1}},
+		{"小文字入力でも一致する", "exa-10", []int64{1}},
+		{"課題キーの部分一致", "a-10", []int64{1}},
+		{"プロジェクトキー部分は同一プロジェクトの全課題に一致", "exb", []int64{2}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := s.SearchIssueIDs(ctx, tc.keyword)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if fmt.Sprint(got) != fmt.Sprint(tc.want) {
+				t.Errorf("キーワード %q の結果 = %v, want %v", tc.keyword, got, tc.want)
+			}
+		})
 	}
 }
 

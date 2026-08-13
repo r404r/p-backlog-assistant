@@ -1204,7 +1204,7 @@ async function exportExcel() {
             v-model="cond.keyword"
             type="text"
             class="wide"
-            placeholder="件名 + 詳細の部分一致(スペース区切りで複数指定)"
+            placeholder="課題キー + 件名 + 詳細の部分一致(スペース区切りで複数指定)"
             @keydown.enter="onKeywordEnter"
           />
         </div>
@@ -1220,7 +1220,7 @@ async function exportExcel() {
           </label>
         </div>
         <p class="hint">
-          キーワード検索はローカル DB に保存された<strong>件名と詳細</strong>に対する部分一致です。
+          キーワード検索はローカル DB に保存された<strong>課題キー・件名・詳細</strong>に対する部分一致です。
           コメント・添付ファイル等は対象外で、Backlog サイト上のキーワード検索とは範囲が異なります。
           スペース(半角・全角)で区切ると複数キーワードになります(スペースを含む語句そのものの検索はできません)。
           キーワード欄で Enter を押すと検索します。

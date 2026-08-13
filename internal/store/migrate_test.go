@@ -413,15 +413,8 @@ func TestMigrate_V4ToV5_AddsCommentStorageAndKeepsData(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "example.backlog.jp_1.db")
 	db := createLegacyDB(t, path, 4)
 	seedV3Reference(t, db)
-	mustExec(t, db, `INSERT INTO issues (
-			id, issue_key, project_id, summary, description,
-			status_id, status_name, assignee_id, assignee_name,
-			issue_type_name, priority_name, created, updated, due_date,
-			raw_json, search_text, fetched_at, deleted)
-		VALUES (101, 'EXA-1', 1, '既存の件名', '既存の詳細',
-			1, '未対応', 0, '', 'タスク', '中',
-			'2026-08-01T00:00:00Z', '2026-08-02T00:00:00Z', '',
-			'{}', '既存の件名\n既存の詳細', '2026-08-02T00:00:00Z', 0)`)
+	insertLegacyIssue(t, db, 101, "EXA-1", "既存の件名", "既存の詳細",
+		NormalizeSearchText("既存の件名\n既存の詳細"))
 	mustExec(t, db, `INSERT INTO jobs (id, kind, project_id, source_file, source_hash, created_at, status)
 		VALUES (5, 'update', 1, 'bulk.xlsx', 'hash-1', '2026-08-01T00:00:00Z', 'pending')`)
 	if err := db.Close(); err != nil {
@@ -527,6 +520,141 @@ func TestV5_CascadeDeletesComments(t *testing.T) {
 		(id, issue_id, project_id, author_name, content, created, updated)
 		VALUES (1, 999, 1, '', '', '', '')`); err == nil {
 		t.Error("存在しない課題のコメントを挿入できてしまった")
+	}
+}
+
+// insertLegacyIssue は旧バージョンのアプリが作った課題行を直接投入する
+// (search_text は呼び出し側が当時の規則で組み立てて渡す)。
+func insertLegacyIssue(t *testing.T, db *sql.DB, id int64, issueKey any, summary, description, searchText string) {
+	t.Helper()
+	mustExec(t, db, `INSERT INTO issues (
+			id, issue_key, project_id, summary, description,
+			status_id, status_name, assignee_id, assignee_name,
+			issue_type_name, priority_name, created, updated, due_date,
+			raw_json, search_text, fetched_at, deleted)
+		VALUES (?, ?, 1, ?, ?, 1, '未対応', 0, '', 'タスク', '中',
+			'2026-08-01T00:00:00Z', '2026-08-02T00:00:00Z', '',
+			'{}', ?, '2026-08-02T00:00:00Z', 0)`,
+		id, issueKey, summary, description, searchText)
+}
+
+// TestMigrate_V5ToV6_AddsIssueKeyToSearchText は、v5 までの規則(件名 + 詳細)で
+// 作られた search_text が v6 移行で作り直され、既存課題も課題キーで検索できる
+// ようになることを確認する。あわせて FTS 索引が rebuild され、本文検索と
+// 他テーブルのデータが従来どおりであることも確認する。
+func TestMigrate_V5ToV6_AddsIssueKeyToSearchText(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "example.backlog.jp_1.db")
+	db := createLegacyDB(t, path, 5)
+	seedV3Reference(t, db)
+
+	// 移行対象の課題(search_text は v5 までの規則で入っている)
+	legacy := []struct {
+		id                   int64
+		key                  string
+		summary, description string
+	}{
+		{101, "EXA-1", "ログイン不具合", "ＴＩＭＥＯＵＴ が発生する"},
+		{102, "PROJ_2-10", "全角キーの検証", "詳細なし"},
+		{103, "AB-7", "短いプロジェクトキー", ""},
+	}
+	for _, l := range legacy {
+		insertLegacyIssue(t, db, l.id, l.key, l.summary, l.description,
+			NormalizeSearchText(l.summary+"\n"+l.description))
+	}
+	// 課題キーが NULL の壊れた行(v1 のスキーマでは NULL を許していた)。
+	// 移行で search_text ごと NULL になって本文が検索できなくならないこと。
+	insertLegacyIssue(t, db, 104, nil, "キー無しの課題", "本文キーワード",
+		NormalizeSearchText("キー無しの課題\n本文キーワード"))
+	mustExec(t, db, `INSERT INTO jobs (id, kind, project_id, source_file, source_hash, created_at, status)
+		VALUES (5, 'update', 1, 'bulk.xlsx', 'hash-1', '2026-08-01T00:00:00Z', 'pending')`)
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	s, err := Open(path)
+	if err != nil {
+		t.Fatalf("v5 → v6 の移行に失敗: %v", err)
+	}
+	defer s.Close()
+
+	if v, err := s.SchemaVersion(); err != nil || v != LatestSchemaVersion() {
+		t.Fatalf("移行後の schema_version = %d(err %v), want %d", v, err, LatestSchemaVersion())
+	}
+	ctx := context.Background()
+
+	// (a) search_text が UpsertIssue の生成規則と一致すること
+	for _, l := range legacy {
+		got, err := issueSearchText(ctx, s.DB(), l.id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := NormalizeSearchText(l.key + "\n" + l.summary + "\n" + l.description)
+		if got != want {
+			t.Errorf("課題 %d の search_text = %q, want %q", l.id, got, want)
+		}
+	}
+	if got, err := issueSearchText(ctx, s.DB(), 104); err != nil {
+		t.Fatal(err)
+	} else if want := "\n" + NormalizeSearchText("キー無しの課題\n本文キーワード"); got != want {
+		t.Errorf("課題キーが NULL の行の search_text = %q, want %q", got, want)
+	}
+
+	// (b) 既存課題が課題キーで検索できるようになること(FTS 索引も rebuild 済み)
+	ftsIntegrityCheck(t, s.DB())
+	for _, tc := range []struct {
+		keyword string
+		want    int
+	}{
+		{"EXA-1", 1},
+		{"exa-1", 1},   // 小文字入力
+		{"AB", 1},      // 2 文字(索引を使わず LIKE のみ)
+		{"proj_2", 1},  // アンダースコア入りのプロジェクトキー
+		{"timeout", 1}, // 従来どおり本文でも検索できる
+		{"EXZ-9", 0},
+	} {
+		res, err := s.SearchIssues(ctx, IssueFilter{ProjectID: 1, Keyword: tc.keyword})
+		if err != nil {
+			t.Fatalf("キーワード %q: %v", tc.keyword, err)
+		}
+		if res.Total != tc.want {
+			t.Errorf("キーワード %q の件数 = %d, want %d", tc.keyword, res.Total, tc.want)
+		}
+	}
+	// 課題キーが NULL の行も本文で検索できる(SearchIssues は課題キーを
+	// 文字列として読むため、この壊れた行は ID だけを返す経路で確かめる)
+	if ids, err := s.SearchIssueIDs(ctx, "本文キーワード"); err != nil {
+		t.Fatal(err)
+	} else if len(ids) != 1 || ids[0] != 104 {
+		t.Errorf("課題キーが NULL の行の本文検索 = %v, want [104]", ids)
+	}
+
+	// (c) 課題の内容と他テーブルのデータが保持されていること
+	issue, err := s.GetIssueByKey(ctx, 1, "EXA-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if issue == nil || issue.Summary != "ログイン不具合" || issue.Description != "ＴＩＭＥＯＵＴ が発生する" {
+		t.Errorf("移行後の課題 = %+v", issue)
+	}
+	if job, err := s.GetJob(ctx, 5); err != nil || job == nil || job.SourceFile != "bulk.xlsx" {
+		t.Errorf("移行後のジョブ = %+v(err %v)", job, err)
+	}
+
+	// (d) 移行で外した UPDATE トリガーが戻っており、以後の更新も索引へ反映されること
+	if err := s.UpsertIssue(ctx, &Issue{ID: 101, IssueKey: "EXA-1", ProjectID: 1,
+		Summary: "更新後の件名", Description: "更新後の詳細"}); err != nil {
+		t.Fatal(err)
+	}
+	ftsIntegrityCheck(t, s.DB())
+	if res, err := s.SearchIssues(ctx, IssueFilter{ProjectID: 1, Keyword: "ログイン不具合"}); err != nil {
+		t.Fatal(err)
+	} else if res.Total != 0 {
+		t.Errorf("更新後も旧テキストで検索できる = %d 件, want 0(索引が更新されていない)", res.Total)
+	}
+	if res, err := s.SearchIssues(ctx, IssueFilter{ProjectID: 1, Keyword: "EXA-1 更新後の詳細"}); err != nil {
+		t.Fatal(err)
+	} else if res.Total != 1 {
+		t.Errorf("更新後の課題キー + 本文の検索 = %d 件, want 1", res.Total)
 	}
 }
 
