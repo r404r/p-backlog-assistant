@@ -215,7 +215,7 @@ describe('モックバックエンドの getIssueDetail', () => {
 
     expect(detail.issueKey).toBe('SAMPLE-1')
     expect(detail.summary).not.toBe('')
-    // 本文・取得時刻は「最終同期時点の内容です」の注記に使う
+    // 本文・取得時刻は「<日時> 時点の内容です」の注記に使う
     expect(detail.description).not.toBe('')
     expect(detail.fetchedAt).not.toBe('')
     // カスタム属性は常に配列(null を返さない)
@@ -242,6 +242,40 @@ describe('モックバックエンドの getIssueDetail', () => {
 
   it('ローカルに無い課題はエラーにする(空の詳細を返さない)', async () => {
     await expect(getBackend().getIssueDetail('p1', projectId, 'SAMPLE-99999')).rejects.toThrow()
+  })
+})
+
+/**
+ * モックバックエンドの refreshIssueDetail(詳細ポップアップの「最新の状態を取得」)。
+ *
+ * モックは Backlog を持たないため、Go 側の「取得した内容でローカルを上書きし、
+ * 反映後の詳細を返す」という契約だけを再現する(件名に印を付け、取得時刻を進める)。
+ */
+describe('モックバックエンドの refreshIssueDetail', () => {
+  /** モックの初期データはプロジェクト 101(SAMPLE)に投入されている */
+  const projectId = 101
+
+  it('反映後の詳細を返し、以降の詳細取得にも反映されている', async () => {
+    const backend = getBackend()
+    const before = await backend.getIssueDetail('p1', projectId, 'SAMPLE-2')
+
+    const after = await backend.refreshIssueDetail('p1', projectId, 'SAMPLE-2')
+
+    expect(after.issueKey).toBe('SAMPLE-2')
+    // 「取得したことが分かる変化」があること(内容と注記の時刻の両方)
+    expect(after.summary).not.toBe(before.summary)
+    expect(after.fetchedAt).not.toBe(before.fetchedAt)
+
+    // ローカルへ反映済みなので、通常の詳細取得でも同じ内容が返る
+    const again = await backend.getIssueDetail('p1', projectId, 'SAMPLE-2')
+    expect(again.summary).toBe(after.summary)
+    expect(again.fetchedAt).toBe(after.fetchedAt)
+  })
+
+  it('ローカルに無い課題はエラーにする(空の詳細を返さない)', async () => {
+    await expect(
+      getBackend().refreshIssueDetail('p1', projectId, 'SAMPLE-99999'),
+    ).rejects.toThrow()
   })
 })
 

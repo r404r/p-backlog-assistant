@@ -700,6 +700,17 @@ const detailError = ref('')
  */
 const detailCopyError = ref('')
 
+/** 「最新の状態を取得」を実行中か(ボタンの無効化・スピナー表示) */
+const detailRefreshing = ref(false)
+
+/**
+ * 「最新の状態を取得」の失敗表示(空 = 正常)。
+ *
+ * detailCopyError とは分けている。原因(コピー / 取得)も対処も異なるため、
+ * 同じ領域を使い回すと片方の失敗がもう片方の文言で上書きされて紛らわしい。
+ */
+const detailRefreshError = ref('')
+
 /** 詳細ポップアップを開いているか */
 const detailOpen = computed(() => detailIssueKey.value !== '')
 
@@ -740,6 +751,8 @@ async function openIssueDetail(issueKey: string, e: MouseEvent) {
   detail.value = null
   detailError.value = ''
   detailCopyError.value = ''
+  detailRefreshError.value = ''
+  detailRefreshing.value = false
   detailLoading.value = true
   try {
     const res = await backend.getIssueDetail(profileId.value, selectedProjectId.value, issueKey)
@@ -755,13 +768,51 @@ async function openIssueDetail(issueKey: string, e: MouseEvent) {
 }
 
 /**
- * 「最終同期時点の内容です」の注記(取得時刻が分かる場合は同期時刻を添える)。
+ * 「最新の状態を取得」: この課題 1 件だけを Backlog から取得し直し、
+ * ローカル DB へ反映したうえで表示を更新する。
+ *
+ * 取得できた内容はローカル DB に入っているため、検索結果一覧の該当行は
+ * ここでは書き換えない(次回の検索で反映される)。一覧と詳細で値が食い違って
+ * 見えることはあるが、正しいのは「DB に入っている = 詳細に出ている」方である。
+ */
+async function refreshIssueDetail() {
+  // 連打(実行中の再実行)は無視する。ボタンも無効化しているが判定を UI に任せない
+  if (detailRefreshing.value || detailLoading.value) return
+  // 同期中は実行しない(同期中はポップアップ自体を開けないが多重防御。R10)
+  if (issueSyncing.value) return
+  const issueKey = detailIssueKey.value
+  if (!issueKey) return
+
+  // 閉じた・別の課題を開いた後に届いた応答を反映しないためのガード
+  // (開いた時点の要求番号と照合する。openIssueDetail と同じ流儀)
+  const seq = detailRequestSeq
+  detailRefreshing.value = true
+  detailRefreshError.value = ''
+  try {
+    const res = await backend.refreshIssueDetail(profileId.value, selectedProjectId.value, issueKey)
+    if (seq !== detailRequestSeq) return
+    detail.value = res
+    // 取得に成功したので、開いたときの取得失敗(未同期等)の表示は消す
+    detailError.value = ''
+  } catch (err) {
+    if (seq !== detailRequestSeq) return
+    detailRefreshError.value = `最新の状態を取得できませんでした: ${errorMessage(err)}`
+  } finally {
+    if (seq === detailRequestSeq) detailRefreshing.value = false
+  }
+}
+
+/**
+ * 内容の時点を伝える注記。
+ *
  * 詳細はローカル DB の内容であり、Backlog 側の最新とは限らないため必ず出す。
+ * 「最新の状態を取得」で 1 件だけ取り込み直すと fetchedAt がその時刻になるため、
+ * 表示する時刻は常に「この課題をローカルへ取り込んだ時刻」を指す。
  */
 const detailNote = computed(() => {
   const at = detail.value?.fetchedAt ? formatDateTime(detail.value.fetchedAt) : ''
   const suffix = 'Backlog 側の最新の状態とは異なる場合があります。'
-  return at ? `最終同期時点の内容です(同期: ${at})。${suffix}` : `最終同期時点の内容です。${suffix}`
+  return at ? `${at} 時点の内容です。${suffix}` : `ローカルへ取り込んだ時点の内容です。${suffix}`
 })
 
 /**
@@ -779,6 +830,10 @@ function closeIssueDetail() {
   detail.value = null
   detailError.value = ''
   detailCopyError.value = ''
+  detailRefreshError.value = ''
+  // 実行中の取得は上の detailRequestSeq++ で失効させているため、
+  // その応答では解除されない(次に開いたときへ持ち越さないよう、ここで戻す)
+  detailRefreshing.value = false
   detailLoading.value = false
 }
 
@@ -1437,8 +1492,9 @@ async function exportExcel() {
 
     <!-- 課題詳細のポップアップ。
          背景クリック(@click.self)と ESC で閉じるのは、接続設定の削除確認
-         ダイアログ(SettingsView)と同じ流儀。内容はローカル DB の
-         最終同期時点のもので、開いても API は呼ばない -->
+         ダイアログ(SettingsView)と同じ流儀。内容はローカル DB へ取り込んだ
+         時点のもので、開くだけでは API を呼ばない(呼ぶのは「最新の状態を取得」
+         を押したときだけ) -->
     <div v-if="detailOpen" class="modal-overlay" @click.self="closeIssueDetail">
       <div
         ref="detailModal"
@@ -1493,10 +1549,21 @@ async function exportExcel() {
           <p class="hint detail-note">{{ detailNote }}</p>
         </template>
 
-        <!-- コピーの失敗はここに出す(一覧側のエラーはオーバーレイの背後で見えない) -->
+        <!-- コピー・再取得の失敗はここに出す(一覧側のエラーはオーバーレイの背後で見えない) -->
         <p v-if="detailCopyError" class="error detail-error">{{ detailCopyError }}</p>
+        <p v-if="detailRefreshError" class="error detail-error">{{ detailRefreshError }}</p>
 
         <div class="row buttons detail-buttons">
+          <!-- この課題 1 件だけを Backlog から取得し直してローカル DB へ反映する
+               (プロジェクト全体の同期は行わないため、最終同期時刻は変わらない) -->
+          <button
+            type="button"
+            :disabled="detailRefreshing || detailLoading || issueSyncing"
+            @click="refreshIssueDetail"
+          >
+            {{ detailRefreshing ? '取得中...' : '最新の状態を取得' }}
+          </button>
+          <span v-if="detailRefreshing" class="spinner" aria-hidden="true"></span>
           <button v-if="canCopyIssueUrl" type="button" @click="copyIssueUrl(detailIssueKey, true)">
             URL をコピー
           </button>

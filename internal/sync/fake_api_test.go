@@ -72,6 +72,9 @@ type fakeAPI struct {
 	projectTeamsErr  map[int64]error
 	// failIssuesAtOffset は指定 offset のページ取得を失敗させる(異常終了の再現)。
 	failIssuesAtOffset int
+	// getIssueErr は GET /issues/:key の注入エラー(401・403・429・通信エラー等)。
+	// 404 は deletedKeys / deletedIDs で再現する。
+	getIssueErr error
 }
 
 func newFakeAPI() *fakeAPI {
@@ -289,6 +292,9 @@ func (f *fakeAPI) GetIssuesCount(ctx context.Context, q backlogclient.IssueQuery
 
 func (f *fakeAPI) GetIssue(ctx context.Context, issueIDOrKey string) (*backlogclient.Issue, error) {
 	f.getIssueCalls = append(f.getIssueCalls, issueIDOrKey)
+	if f.getIssueErr != nil {
+		return nil, f.getIssueErr
+	}
 	if f.deletedKeys[issueIDOrKey] {
 		return nil, fmt.Errorf("%w: %s", backlogclient.ErrNotFound, issueIDOrKey)
 	}

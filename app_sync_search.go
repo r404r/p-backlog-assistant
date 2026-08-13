@@ -250,8 +250,9 @@ type IssueCustomFieldDTO struct {
 
 // IssueDetailDTO は課題 1 件の詳細(frontend/src/lib/backend.ts の IssueDetail と対)。
 //
-// 中身はすべてローカル DB の最終同期時点の内容。FetchedAt はその取得時刻で、
-// 画面が「いつ時点の内容か」を注記するために使う。
+// 中身はすべてローカル DB へ取り込んだ時点の内容(通常は最終同期時点。
+// RefreshIssueDetail でこの課題だけを取り込み直した場合はその時点)。
+// FetchedAt はその取得時刻で、画面が「いつ時点の内容か」を注記するために使う。
 type IssueDetailDTO struct {
 	IssueKey      string `json:"issueKey"`
 	Summary       string `json:"summary"`
@@ -318,8 +319,8 @@ func issueDetailDTOOf(is *store.Issue, parentKeys map[int64]string) IssueDetailD
 // GetIssueDetail は課題 1 件の詳細をローカル DB から返す(API は呼ばない)。
 //
 // 検索結果の課題キーをクリックしたときのポップアップ表示に使う。
-// 表示は最終同期時点の内容であり、Backlog 側の最新とは限らない
-// (画面はその旨を FetchedAt とともに注記する)。
+// 表示はローカルへ取り込んだ時点の内容であり、Backlog 側の最新とは限らない
+// (画面はその旨を FetchedAt とともに注記する。最新化は RefreshIssueDetail)。
 func (a *App) GetIssueDetail(profileID string, projectID int64, issueKey string) (*IssueDetailDTO, error) {
 	// 課題キー・件名は記録しない(既存のマスク方針。profileId / projectId のみ)
 	attrs := []slog.Attr{slog.String("profileId", profileID), slog.Int64("projectId", projectID)}
@@ -332,6 +333,26 @@ func (a *App) GetIssueDetail(profileID string, projectID int64, issueKey string)
 			dto := issueDetailDTOOf(detail.Issue, detail.ParentKeys)
 			// 記録するのは件数のみ。親の有無は「この課題が子課題である」という
 			// 課題の内容そのものなので残さない(マスク方針)
+			return &dto, []slog.Attr{slog.Int("customFields", len(dto.CustomFields))}, nil
+		})
+}
+
+// RefreshIssueDetail は課題 1 件を Backlog から取得し直してローカル DB へ反映し、
+// 反映後の詳細を返す(詳細ポップアップの「最新の状態を取得」)。
+//
+// GetIssueDetail と違い API を 1 回呼ぶ。反映は同期と同じ変換・同じ UPSERT を
+// 通すため、検索索引・親課題の引き当ても同時に最新化される。
+// 同期状態(最終同期時刻)は更新しない(1 件の最新化はプロジェクト同期ではない)。
+func (a *App) RefreshIssueDetail(profileID string, projectID int64, issueKey string) (*IssueDetailDTO, error) {
+	// 課題キー・件名は記録しない(既存のマスク方針。profileId / projectId のみ)
+	attrs := []slog.Attr{slog.String("profileId", profileID), slog.Int64("projectId", projectID)}
+	return appOp(a, "RefreshIssueDetail", attrs,
+		func(s *service.ProfileService) (*IssueDetailDTO, []slog.Attr, error) {
+			detail, err := s.RefreshIssue(a.ctx, profileID, projectID, issueKey)
+			if err != nil {
+				return nil, nil, err
+			}
+			dto := issueDetailDTOOf(detail.Issue, detail.ParentKeys)
 			return &dto, []slog.Attr{slog.Int("customFields", len(dto.CustomFields))}, nil
 		})
 }

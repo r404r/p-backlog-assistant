@@ -323,9 +323,11 @@ export interface IssueCustomField {
 }
 
 /**
- * 課題 1 件の詳細(ローカル DB の最終同期時点の内容。API は呼ばれない)。
+ * 課題 1 件の詳細(ローカル DB へ取り込んだ時点の内容)。
  *
  * 検索結果の課題キーをクリックしたときのポップアップ表示に使う。
+ * 通常は最終同期時点の内容だが、refreshIssueDetail でこの課題だけを
+ * 取り込み直した場合はその時点になる(いずれも fetchedAt がその時刻を指す)。
  * Backlog 側の最新とは限らないため、画面は fetchedAt を添えて注記すること。
  */
 export interface IssueDetail {
@@ -765,6 +767,15 @@ export interface Backend {
    * 課題がローカルに無い場合はエラーになる(空の詳細は返らない)。
    */
   getIssueDetail(profileId: string, projectId: number, issueKey: string): Promise<IssueDetail>
+  /**
+   * 課題 1 件を Backlog から取得し直してローカル DB へ反映し、反映後の詳細を返す
+   * (詳細ポップアップの「最新の状態を取得」)。getIssueDetail と違い API を呼ぶ。
+   *
+   * 反映は同期と同じ変換を通るため、検索索引もこの課題ぶんだけ最新になる
+   * (プロジェクトの同期状態・最終同期時刻は変わらない)。
+   * Backlog 上で削除されている場合はエラーになり、ローカルの内容は変わらない。
+   */
+  refreshIssueDetail(profileId: string, projectId: number, issueKey: string): Promise<IssueDetail>
   /** 条件フォームの状態・担当者候補を返す */
   listFilterOptions(profileId: string, projectId: number): Promise<FilterOptions>
   /** データ種別ごとの同期状態一覧を返す */
@@ -899,6 +910,7 @@ interface WailsApp {
     columns: string[],
   ): Promise<IssueSearchResult>
   GetIssueDetail(profileId: string, projectId: number, issueKey: string): Promise<IssueDetail>
+  RefreshIssueDetail(profileId: string, projectId: number, issueKey: string): Promise<IssueDetail>
   ListFilterOptions(profileId: string, projectId: number): Promise<FilterOptions>
   GetSyncState(profileId: string): Promise<SyncStateRow[]>
   GetIssueExportColumns(): Promise<ExportColumn[]>
@@ -988,6 +1000,31 @@ function normalizeExportColumns(cols: ExportColumn[] | null | undefined): Export
   return out
 }
 
+/**
+ * Go から届いた課題詳細を正規化する(getIssueDetail / refreshIssueDetail 共通)。
+ * Go の nil スライスは JSON null で届くため、配列・文字列は必ず埋める。
+ */
+function normalizeIssueDetail(r: IssueDetail | null | undefined, issueKey: string): IssueDetail {
+  return {
+    issueKey: r?.issueKey ?? issueKey,
+    summary: r?.summary ?? '',
+    description: r?.description ?? '',
+    statusName: r?.statusName ?? '',
+    assigneeName: r?.assigneeName ?? '',
+    issueTypeName: r?.issueTypeName ?? '',
+    priorityName: r?.priorityName ?? '',
+    created: r?.created ?? '',
+    updated: r?.updated ?? '',
+    dueDate: r?.dueDate ?? '',
+    parentIssueKey: r?.parentIssueKey ?? '',
+    customFields: (r?.customFields ?? []).map((c) => ({
+      name: c?.name ?? '',
+      value: c?.value ?? '',
+    })),
+    fetchedAt: r?.fetchedAt ?? '',
+  }
+}
+
 function createWailsBackend(app: WailsApp): Backend {
   // Go の nil スライス / nil マップは JSON null として届くため、配列・オブジェクトは
   // ここで必ず正規化する(初回起動時の ListProfiles null で画面が真っ白になった実績あり)
@@ -1032,26 +1069,20 @@ function createWailsBackend(app: WailsApp): Backend {
           '課題の詳細はこのバージョンのアプリでは表示できません(アプリを更新してください)',
         )
       }
-      const r = await app.GetIssueDetail(profileId, projectId, issueKey)
-      return {
-        issueKey: r?.issueKey ?? issueKey,
-        summary: r?.summary ?? '',
-        description: r?.description ?? '',
-        statusName: r?.statusName ?? '',
-        assigneeName: r?.assigneeName ?? '',
-        issueTypeName: r?.issueTypeName ?? '',
-        priorityName: r?.priorityName ?? '',
-        created: r?.created ?? '',
-        updated: r?.updated ?? '',
-        dueDate: r?.dueDate ?? '',
-        parentIssueKey: r?.parentIssueKey ?? '',
-        // Go の nil スライスは null で届くため、配列は必ず正規化する
-        customFields: (r?.customFields ?? []).map((c) => ({
-          name: c?.name ?? '',
-          value: c?.value ?? '',
-        })),
-        fetchedAt: r?.fetchedAt ?? '',
+      return normalizeIssueDetail(await app.GetIssueDetail(profileId, projectId, issueKey), issueKey)
+    },
+    refreshIssueDetail: async (profileId, projectId, issueKey) => {
+      // 旧バージョンのバインディング(メソッド未実装)では、取得できていないのに
+      // 「最新の状態」を表示してしまわないようエラーにする(getIssueDetail と同じ流儀)
+      if (typeof app.RefreshIssueDetail !== 'function') {
+        throw new Error(
+          '最新の状態の取得はこのバージョンのアプリでは利用できません(アプリを更新してください)',
+        )
       }
+      return normalizeIssueDetail(
+        await app.RefreshIssueDetail(profileId, projectId, issueKey),
+        issueKey,
+      )
     },
     listFilterOptions: async (profileId, projectId) => {
       const r = await app.ListFilterOptions(profileId, projectId)
@@ -1404,6 +1435,12 @@ function buildMockIssues(project: Project, count: number): IssueRow[] {
 }
 
 /**
+ * モック用: 「最新の状態を取得」で付ける件名の印。
+ * 何度押しても増えないよう、既に付いていれば付け直さない。
+ */
+const MOCK_REFRESHED_SUFFIX = '(更新済み)'
+
+/**
  * モック用: 課題詳細に出す本文(改行を含む複数行)。
  * 詳細ポップアップの折り返し・スクロールを Wails 外でも確認できるようにする。
  */
@@ -1678,6 +1715,12 @@ function createMockBackend(): Backend {
   const users: UserRow[] = MOCK_USERS.map((u) => ({ ...u }))
   const issuesByProject = new Map<number, IssueRow[]>()
   const syncState: SyncStateRow[] = []
+  /**
+   * 課題単位の取得時刻(`{プロジェクトID}:{課題キー}` -> RFC3339)。
+   * 「最新の状態を取得」で 1 件だけ取り込み直した課題は、プロジェクトの
+   * 最終同期時刻より新しくなるため(Go 側の fetched_at 相当)。
+   */
+  const issueFetchedAt = new Map<string, string>()
 
   // 一括更新のモック状態。ジョブは新しい順に保持する。
   const jobs: BulkJobRow[] = []
@@ -1691,6 +1734,38 @@ function createMockBackend(): Backend {
   // 1 回目の取り込みは検証エラーあり、2 回目以降はエラー無しにして、
   // 「実行できない状態」と「実行できる状態」の両方を手動確認できるようにする。
   let importSeq = 0
+
+  /** 課題単位の取得時刻のキー */
+  function issueFetchedAtKey(projectId: number, issueKey: string): string {
+    return `${projectId}:${issueKey}`
+  }
+
+  /**
+   * モックの課題詳細を組み立てる(getIssueDetail / refreshIssueDetail 共通)。
+   * ローカルに無い課題は Go 側と同じく明確なエラーにする。
+   */
+  function buildIssueDetail(projectId: number, issueKey: string): IssueDetail {
+    const all = issuesByProject.get(projectId) ?? []
+    const row = all.find((r) => r.issueKey === issueKey)
+    if (!row) {
+      throw new Error('課題がローカルに見つかりません(同期後に削除されたか、まだ同期されていません)')
+    }
+    return {
+      ...row,
+      description: mockDescription(row),
+      parentIssueKey: mockParentIssueKey(row.issueKey),
+      // モックは表示文字列しか持たないため、定義順に並べる
+      // (Wails 実行時は課題レスポンスの順になる。既知の簡易化)
+      customFields: MOCK_MASTER.customFields
+        .filter((def) => customColumnKey(def.id) in row.customFields)
+        .map((def) => ({ name: def.name, value: row.customFields[customColumnKey(def.id)] })),
+      // 1 件だけ取り込み直した課題はその時刻、それ以外はプロジェクトの最終同期時刻
+      fetchedAt:
+        issueFetchedAt.get(issueFetchedAtKey(projectId, issueKey)) ??
+        syncState.find((s) => s.dataKind === 'issues' && s.projectId === projectId)?.lastSyncedAt ??
+        '',
+    }
+  }
 
   function putSyncState(dataKind: string, projectId: number, at: string) {
     const found = syncState.find((s) => s.dataKind === dataKind && s.projectId === projectId)
@@ -1875,25 +1950,31 @@ function createMockBackend(): Backend {
 
     async getIssueDetail(_profileId, projectId, issueKey) {
       await delay(200)
+      // Go 側と同じく、ローカルに無い課題は明確なエラーにする(buildIssueDetail 内)
+      return buildIssueDetail(projectId, issueKey)
+    },
+
+    async refreshIssueDetail(_profileId, projectId, issueKey) {
+      await delay(400)
       const all = issuesByProject.get(projectId) ?? []
       const row = all.find((r) => r.issueKey === issueKey)
-      // Go 側と同じく、ローカルに無い課題は明確なエラーにする
+      // モックには Backlog 側が無いため、ローカルに無い課題を「削除された」扱いにする
+      // (Go 側で 404 になったときと同じ案内)
       if (!row) {
-        throw new Error('課題がローカルに見つかりません(同期後に削除されたか、まだ同期されていません)')
+        throw new Error(
+          '課題を Backlog 上で確認できませんでした。削除された可能性があります' +
+            '(ローカルの内容はそのままです。削除はフル同期で反映されます)',
+        )
       }
-      return {
-        ...row,
-        description: mockDescription(row),
-        parentIssueKey: mockParentIssueKey(row.issueKey),
-        // モックは表示文字列しか持たないため、定義順に並べる
-        // (Wails 実行時は課題レスポンスの順になる。既知の簡易化)
-        customFields: MOCK_MASTER.customFields
-          .filter((def) => customColumnKey(def.id) in row.customFields)
-          .map((def) => ({ name: def.name, value: row.customFields[customColumnKey(def.id)] })),
-        fetchedAt:
-          syncState.find((s) => s.dataKind === 'issues' && s.projectId === projectId)
-            ?.lastSyncedAt ?? '',
+      // Go 側は取得した内容で行を上書きする。モックは取得元が無いので、
+      // 「取得できたことが画面で分かる」最小限の変化(件名の印と更新日時)を入れる
+      const at = new Date().toISOString()
+      if (!row.summary.endsWith(MOCK_REFRESHED_SUFFIX)) {
+        row.summary += MOCK_REFRESHED_SUFFIX
       }
+      row.updated = at
+      issueFetchedAt.set(issueFetchedAtKey(projectId, issueKey), at)
+      return buildIssueDetail(projectId, issueKey)
     },
 
     async listFilterOptions(_profileId, projectId) {

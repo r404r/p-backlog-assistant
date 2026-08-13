@@ -1,6 +1,8 @@
 build/bin
 node_modules
 frontend/dist
+# Vitest のカバレッジ出力(計測時の生成物)
+frontend/coverage
 
 # 注意: 以下のパターンは全階層に適用される。将来、匿名化済みの
 # テストフィクスチャ等を追跡したい場合は !testdata/**/*.xlsx のような

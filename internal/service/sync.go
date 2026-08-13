@@ -252,6 +252,13 @@ func (s *ProfileService) GetIssueDetail(ctx context.Context, profileID string, p
 	// store を使う操作はプロファイルの削除・保存と排他する(高 2)
 	s.profileMu.RLock()
 	defer s.profileMu.RUnlock()
+	return s.issueDetailLocked(ctx, profileID, projectID, issueKey)
+}
+
+// issueDetailLocked は profileMu 取得済みの前提で課題詳細を読む
+// (公開メソッドから再度 RLock を取ると自己デッドロックしうるため分離する。
+// masterDataLocked と同じ流儀)。
+func (s *ProfileService) issueDetailLocked(ctx context.Context, profileID string, projectID int64, issueKey string) (*IssueDetail, error) {
 	st, err := s.storeForProfile(profileID)
 	if err != nil {
 		return nil, err
@@ -284,6 +291,35 @@ func (s *ProfileService) GetIssueDetail(ctx context.Context, profileID string, p
 		return nil, err
 	}
 	return &detail, nil
+}
+
+// RefreshIssue は課題 1 件を Backlog から取得し直してローカル DB へ反映し、
+// 反映後の詳細を返す(画面 2 の課題詳細ポップアップ「最新の状態を取得」)。
+//
+// 反映と読み直しを 1 往復にまとめているのは、画面が「取得 → 再表示」を
+// 2 回のバインディング呼び出しに分けなくて済むようにするため。
+//
+// ロック: ローカル DB への書き込みを伴うため、同期・一括更新と同じ
+// 直列化(profileMu → syncMu)を行う。反映後の読み直しも syncMu を保持したまま
+// 行い、書いた内容と表示内容が食い違わないようにする。
+//
+// 同期状態(sync_state)は更新しない(理由は syncpkg.Engine.RefreshIssue を参照)。
+func (s *ProfileService) RefreshIssue(ctx context.Context, profileID string, projectID int64, issueKey string) (*IssueDetail, error) {
+	// プロファイルの削除・保存と排他する(高 2。ロック順序 profileMu → syncMu)
+	s.profileMu.RLock()
+	defer s.profileMu.RUnlock()
+	// ローカル DB への書き込みを直列化する(SQLite の接続数は 1)
+	s.syncMu.Lock()
+	defer s.syncMu.Unlock()
+
+	engine, err := s.engineForProfile(ctx, profileID)
+	if err != nil {
+		return nil, err
+	}
+	if err := engine.RefreshIssue(ctx, projectID, issueKey); err != nil {
+		return nil, err
+	}
+	return s.issueDetailLocked(ctx, profileID, projectID, issueKey)
 }
 
 // IterateIssues はローカル DB の課題を条件に一致した順(ID 昇順)で
