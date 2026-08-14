@@ -1,0 +1,66 @@
+{
+  "title": "About",
+  "description": "A desktop app that safely exports and bulk-updates Nulab Backlog issues and users while caching them locally.",
+  "field": {
+    "version": "Version",
+    "author": "Author",
+    "github": "GitHub",
+    "docs": "Documentation",
+    "contact": "Contact",
+    "license": "License"
+  },
+  "author": "r404r",
+  "github": {
+    "note": "Please report bugs and requests to Issues in this repository."
+  },
+  "docs": {
+    "readme": "README",
+    "userGuide": "User Guide",
+    "note": "Opens in your default browser (README for an overview, User Guide for detailed steps)."
+  },
+  "license": {
+    "name": "MIT License",
+    "note": "See the LICENSE file in the distribution and the repository."
+  },
+  "theme": {
+    "title": "Appearance",
+    "description": "Switches the color scheme. The choice is applied immediately and saved automatically.",
+    "mode": {
+      "system": "Match system (default)",
+      "light": "Light",
+      "dark": "Dark"
+    },
+    "systemNote": "\"Match system\" follows the appearance setting of your OS.",
+    "titleBarNote": "The window frame (title bar) follows the app theme on Windows, and the OS appearance setting on macOS."
+  },
+  "language": {
+    "title": "言語 / Language",
+    "description": "Switches the display language. The choice is applied immediately and saved automatically.",
+    "mode": {
+      "system": "Match system (default)",
+      "ja": "日本語",
+      "en": "English"
+    },
+    "systemNote": "\"Match system\" follows the language setting of your OS and browser.",
+    "limitationNote": "In this version, data fetched from Backlog, some messages returned by the app, and Excel output remain in Japanese."
+  },
+  "storage": {
+    "title": "Stored Data",
+    "description": "Where this app stores files on this computer. API keys are stored in the OS keychain, not in the files below.",
+    "loadFailed": "Could not load the stored data information: {message}",
+    "configDir": "Config folder",
+    "configDirNote": "Where connection profiles (config.json) are stored.",
+    "database": "Local DB",
+    "databaseNote": "A cache of the issues and users fetched so far. You can delete it; the app can fetch them again.",
+    "noProfile": "No profile is registered.",
+    "dbError": "Failed to read: {message}",
+    "dbSize": "{size} (total including WAL and SHM)",
+    "dbMissing": "Not created yet (created after a connection test)",
+    "dbLeftover": "Only WAL and SHM remain (total {size})",
+    "bytes": "{count} bytes",
+    "log": "Operation log",
+    "logNote": "Attaching this file to a bug report speeds up the investigation.",
+    "logDisabled": "Disabled",
+    "logDisabledNote": "Log output is disabled, so no file is created."
+  }
+}

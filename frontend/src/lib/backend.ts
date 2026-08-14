@@ -11,6 +11,13 @@
 // (契約は Go 側のユニットテストで担保する)。ランタイムに依存しない純ヘルパ
 // (formatSyncProgress / actionLabel / rowStatusLabel / customColumnKey / newSyncRunId)は
 // backend.test.ts で検証する(R15)。
+//
+// 多言語対応(設計 §3.1)で、進捗文言の生成にだけ lib/format.ts 経由で
+// i18n のグローバル Composer を参照するようになった(それ以外は従来どおり
+// 他モジュールへの依存を持たない)。
+
+import { currentLanguage, globalTranslate, type TranslateFn } from './format'
+import type { Language } from './i18n'
 
 // ---------------------------------------------------------------------------
 // 型定義
@@ -155,19 +162,31 @@ export function newSyncRunId(): string {
 /**
  * 同期の進捗を画面表示用の文字列にする(課題抽出画面・同期状態画面で共用)。
  * 総件数が分からない段階では分母を出さない(0 件中と誤解させないため)。
+ *
+ * 多言語対応(設計 §3.1 / §3.2): 文言はカタログ(`sync.progress.*`)から引く。
+ * 翻訳関数と表示言語は**呼び出し元(画面)から明示的に渡す**こと。省略時は
+ * グローバル Composer(lib/i18n.ts のシングルトン)を使うが、テストが
+ * `mountWithI18n` で画面ごとの独立インスタンスを使う場合は食い違うため、
+ * 画面からは `formatSyncProgress(p, t, language)` の形で呼ぶ。
+ * 桁区切りは実行環境ロケールではなく**解決済みの表示言語**を明示指定する。
  */
-export function formatSyncProgress(p: SyncProgress): string {
+export function formatSyncProgress(
+  p: SyncProgress,
+  t: TranslateFn = globalTranslate,
+  language: Language = currentLanguage(),
+): string {
+  const num = (n: number) => n.toLocaleString(language)
   switch (p.phase) {
     case 'count':
-      return '総件数を確認中...'
+      return t('sync.progress.count')
     case 'fetch':
       return p.total > 0
-        ? `取得中 ${p.fetched.toLocaleString()} / ${p.total.toLocaleString()} 件`
-        : `取得中 ${p.fetched.toLocaleString()} 件`
+        ? t('sync.progress.fetch', { fetched: num(p.fetched), total: num(p.total) })
+        : t('sync.progress.fetchUnknownTotal', { fetched: num(p.fetched) })
     case 'deleteScan':
-      return `削除された課題を確認中(${p.fetched.toLocaleString()} 件取得済み)`
+      return t('sync.progress.deleteScan', { fetched: num(p.fetched) })
     case 'done':
-      return `取得完了 ${p.fetched.toLocaleString()} 件(仕上げ中...)`
+      return t('sync.progress.done', { fetched: num(p.fetched) })
     default:
       return ''
   }
@@ -195,6 +214,16 @@ export function customColumnKey(defId: number): string {
  *   2. Wails 外で動くモックバックエンド。
  *   3. 行データを伴わない集計見出し(取り込み結果の「新規追加 / 更新 / 変更なし」)。
  * Go 側でラベルを変えたらここも合わせること(検査は R14 の残課題)。
+ *
+ * **多言語対応(設計 §3.1)による方針変更 — 移行済み**: 表示経路はこの日本語の
+ * 写しではなく、生の機械値(action / status)を lib/enumLabels.ts でフロント翻訳
+ * する方式へ移行した。フェーズ 1 の画面変換が済んだ時点で、**ここと
+ * actionLabel() / rowStatusLabel() を参照する画面は 1 つも無い**
+ * (BulkUpdateView は action / status から translateAction / translateRowStatus で
+ * 翻訳する)。残しているのは上記 1(旧バインディングのフォールバック)と
+ * 2(モックバックエンド)の**契約フィールドを埋める用途**だけで、
+ * ユーザに見える文字列としては使わない。Go 側が旧バインディングを切ったときに
+ * まとめて削除する。
  */
 const ACTION_LABELS: Record<string, string> = {
   create: '新規追加',
@@ -1375,7 +1404,7 @@ const MOCK_USERS: UserRow[] = [
     name: 'モック 花子',
     mailAddress: 'mock.hanako@example.invalid',
     roleType: 2,
-    roleName: '一般ユーザー',
+    roleName: '一般ユーザ',
     teamNames: ['開発チーム'],
     projectKeys: ['SAMPLE'],
     adminProjectKeys: [],
@@ -1386,7 +1415,7 @@ const MOCK_USERS: UserRow[] = [
     name: 'モック 次郎',
     mailAddress: 'mock.jiro@example.invalid',
     roleType: 2,
-    roleName: '一般ユーザー',
+    roleName: '一般ユーザ',
     teamNames: [],
     projectKeys: ['DEMO', 'TRIAL'],
     adminProjectKeys: ['TRIAL'],

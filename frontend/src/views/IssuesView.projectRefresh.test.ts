@@ -7,7 +7,8 @@
  * **実際の IssuesView をマウントし、バックエンド呼び出しの有無で** 検証する。
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { createApp, nextTick, type App } from 'vue'
+import { nextTick, type App } from 'vue'
+import { mountWithI18n } from '../lib/testing/mountWithI18n'
 import type { Backend, IssueSearchResult, Project } from '../lib/backend'
 import {
   PROJECT_REFRESH_INTERVAL_MS,
@@ -87,10 +88,7 @@ interface Screen {
 
 async function mountIssuesView(backend: Backend): Promise<Screen> {
   holder.backend = backend
-  const host = document.createElement('div')
-  document.body.appendChild(host)
-  const app = createApp(IssuesView)
-  app.mount(host)
+  const { app, host } = mountWithI18n(IssuesView)
   // onMounted の非同期連鎖(プロファイル → プロジェクト → 候補・カスタム属性)を待つ
   await flush()
   return {

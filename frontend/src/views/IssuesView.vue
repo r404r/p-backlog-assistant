@@ -1,6 +1,12 @@
 <script lang="ts" setup>
-// 課題抽出画面。TDD 例外(GUI): フロントエンドにテスト基盤が無いため手動確認で担保する。
+// 課題抽出画面。TDD 例外(GUI): 見た目・レイアウトは手動確認で担保する
+// (状態遷移の配線は IssuesView.stale.test.ts / IssuesView.projectRefresh.test.ts、
+//  英語表示は IssuesView.i18n.test.ts で検証している)。
+//
+// 表示文字列はすべてカタログ(locales/{ja,en}/issues.json・common.json)経由にする
+// (設計 §3.3)。生の文字列が戻っていないことは lib/noHardcodedText.test.ts が検査する。
 import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 import {
   copyToClipboard,
   customColumnKey,
@@ -21,9 +27,13 @@ import {
   type SyncResult,
 } from '../lib/backend'
 import { issueUrl } from '../lib/backlogUrl'
-import { errorMessage, formatDateTime, formatElapsed, syncModeLabel } from '../lib/format'
+import { columnLabel } from '../lib/columnLabels'
+import { translateSyncMode } from '../lib/enumLabels'
+import { errorMessage, formatDateTime, formatElapsed } from '../lib/format'
+import type { Language } from '../lib/i18n'
 import { useIssuePagination } from '../lib/issuePagination'
 import { buildIssueQuery, newIssueConditions, resetIssueConditions } from '../lib/issueQuery'
+import { useMessage } from '../lib/message'
 import { useModalFocus } from '../lib/modalFocus'
 import { runSharedProjectRefresh, shouldSkipProjectRefreshFor } from '../lib/projectRefresh'
 import {
@@ -36,6 +46,22 @@ import { beginIssueSync, endIssueSync, issueSyncRunning } from '../lib/syncState
 
 const backend = getBackend()
 const mock = isMockBackend()
+
+// 翻訳関数と表示言語は**この画面の i18n インスタンス**から取る。
+// グローバル Composer を使う lib の既定値に任せると、テストが独立インスタンスで
+// 別言語をマウントしたときに表示が混ざる(Codex レビュー指摘)。
+const { t, locale } = useI18n()
+const language = computed(() => locale.value as Language)
+
+/**
+ * 一覧の見出し・詳細の項目名は、Excel の列見出し(Go の label)とは別物なので
+ * 画面側のカタログ(issues.result.column.* / issues.detail.field.*)で持つ。
+ * Go が返す列(Excel 出力の列選択・カスタム属性の列見出し)は列キーで引く
+ * columnLabel() を通す(設計 §3.3)。
+ */
+function exportColumnLabel(c: ExportColumn): string {
+  return columnLabel(t, 'issue', c.key, c.label)
+}
 
 /**
  * 破棄済み・プロファイル切替後の画面が、後から届いた古い応答で
@@ -69,7 +95,7 @@ const CF_LIST_TYPE_IDS = [5, 6, 7, 8]
 const fixedExportColumns = ref<ExportColumn[]>([])
 
 /** 固定列の取得に失敗した場合の説明(空 = 正常) */
-const exportColumnsError = ref('')
+const [exportColumnsError, setExportColumnsError] = useMessage(t)
 
 /**
  * 列選択を既定値で初期化済みか。
@@ -85,13 +111,13 @@ async function loadExportColumns() {
   try {
     const cols = await backend.getIssueExportColumns()
     fixedExportColumns.value = cols
-    exportColumnsError.value = ''
+    setExportColumnsError(null)
     if (!exportColumnsInitialized) {
       selectedColumns.value = cols.filter((c) => c.byDefault).map((c) => c.key)
       exportColumnsInitialized = true
     }
   } catch (e) {
-    exportColumnsError.value = `出力する列の情報を取得できませんでした: ${errorMessage(e)}`
+    setExportColumnsError('issues.error.exportColumns', { message: errorMessage(e) })
   }
 }
 
@@ -101,7 +127,7 @@ async function loadExportColumns() {
 
 const profileId = ref('')
 const initializing = ref(true)
-const globalError = ref('')
+const [globalError, setGlobalError] = useMessage(t)
 
 const projects = ref<Project[]>([])
 // プロジェクト選択は画面をまたいで共有する(サイドバー切替で破棄されないよう
@@ -109,7 +135,7 @@ const projects = ref<Project[]>([])
 const projectsLoading = ref(false)
 const projectsSyncing = ref(false)
 /** プロジェクト一覧の最新化に失敗した場合の警告(キャッシュ表示は継続する) */
-const projectsWarning = ref('')
+const [projectsWarning, setProjectsWarning] = useMessage(t)
 
 const selectedProject = computed(
   () => projects.value.find((p) => p.id === selectedProjectId.value) ?? null,
@@ -130,7 +156,7 @@ async function loadProjects() {
   if (!profileId.value) return
   const token = selectionGuard.begin()
   projectsLoading.value = true
-  globalError.value = ''
+  setGlobalError(null)
   try {
     const list = await backend.listProjects(profileId.value)
     // 画面が破棄済み、またはプロファイルが切り替わっていたら反映しない
@@ -140,7 +166,7 @@ async function loadProjects() {
     // 復元した(または選択中の)プロジェクトが一覧に無ければ先頭へフォールバックする
     selectedProjectId.value = resolveProjectSelection(projects.value, selectedProjectId.value)
   } catch (e) {
-    globalError.value = `プロジェクト一覧の取得に失敗しました: ${errorMessage(e)}`
+    setGlobalError('issues.error.loadProjects', { message: errorMessage(e) })
   } finally {
     projectsLoading.value = false
   }
@@ -158,14 +184,14 @@ async function syncProjects() {
   // 判定を UI だけに任せない(SyncStatusView と同じ流儀)
   if (!profileId.value || busy.value) return
   projectsSyncing.value = true
-  globalError.value = ''
-  projectsWarning.value = ''
+  setGlobalError(null)
+  setProjectsWarning(null)
   try {
     // 成功すると自動突合の起点も更新される(手動同期でも突合は済んでいるため)
     await runSharedProjectRefresh(profileId.value, () => backend.syncProjects(profileId.value))
     await loadProjects()
   } catch (e) {
-    globalError.value = `プロジェクトの同期に失敗しました: ${errorMessage(e)}`
+    setGlobalError('issues.error.syncProjects', { message: errorMessage(e) })
   } finally {
     projectsSyncing.value = false
   }
@@ -192,8 +218,7 @@ async function syncProjects() {
 async function refreshProjects() {
   if (!profileId.value || projectsSyncing.value) return
   if (issueSyncRunning.value) {
-    projectsWarning.value =
-      '課題の同期中のため、プロジェクト一覧の最新化は省略しました(表示はローカルキャッシュです)。'
+    setProjectsWarning('issues.project.refreshSkippedBySync')
     await loadProjects()
     return
   }
@@ -202,13 +227,12 @@ async function refreshProjects() {
     return
   }
   projectsSyncing.value = true
-  projectsWarning.value = ''
+  setProjectsWarning(null)
   try {
     // 成功時だけ起点が記録される(失敗時は記録されず、次の画面表示で再試行する)
     await runSharedProjectRefresh(profileId.value, () => backend.syncProjects(profileId.value))
   } catch {
-    projectsWarning.value =
-      'プロジェクト一覧を最新化できませんでした(オフライン等)。表示はローカルキャッシュです。'
+    setProjectsWarning('issues.project.refreshFailed')
   } finally {
     projectsSyncing.value = false
   }
@@ -233,7 +257,7 @@ onMounted(async () => {
   try {
     profileId.value = await backend.getActiveProfile()
   } catch (e) {
-    globalError.value = `接続先プロファイルの取得に失敗しました: ${errorMessage(e)}`
+    setGlobalError('issues.error.activeProfile', { message: errorMessage(e) })
   } finally {
     initializing.value = false
   }
@@ -269,7 +293,7 @@ const customColumns = computed<ExportColumn[]>(() =>
 )
 
 /** カスタム属性の取得失敗の表示用メッセージ(空 = 正常) */
-const customFieldsError = ref('')
+const [customFieldsError, setCustomFieldsError] = useMessage(t)
 
 /** カスタム属性 1 定義ぶんの絞り込み条件(型に応じて使うフィールドが変わる) */
 interface CustomFieldCondition {
@@ -353,7 +377,7 @@ async function loadCustomFields() {
   const seq = ++customFieldsRequestSeq
   // 前のプロジェクトの定義・条件・列選択が残らないようにしてから取得する
   customFields.value = []
-  customFieldsError.value = ''
+  setCustomFieldsError(null)
   resetCustomFieldConditions()
   pruneUnavailableColumns()
   if (!profileId.value || !selectedProjectId.value) return
@@ -365,9 +389,7 @@ async function loadCustomFields() {
     resetCustomFieldConditions()
   } catch (e) {
     if (seq !== customFieldsRequestSeq) return
-    customFieldsError.value =
-      'カスタム属性の取得に失敗しました(固定列は検索・出力できます): ' +
-      (e instanceof Error ? e.message : String(e))
+    setCustomFieldsError('issues.error.customFields', { message: errorMessage(e) })
   }
 }
 
@@ -412,7 +434,7 @@ async function loadFilterOptions() {
     if (cond.assigneeName && !opts.assignees.includes(cond.assigneeName)) cond.assigneeName = ''
   } catch (e) {
     if (seq !== filterOptionsRequestSeq) return
-    globalError.value = `絞り込み候補の取得に失敗しました: ${errorMessage(e)}`
+    setGlobalError('issues.error.filterOptions', { message: errorMessage(e) })
   } finally {
     // 読込中表示は最新の要求だけが下ろす(古い応答が新しい要求の表示を消さないため)
     if (seq === filterOptionsRequestSeq) optionsLoading.value = false
@@ -431,15 +453,15 @@ watch(selectedProjectId, () => {
   pagination.reset()
   // 消した一覧に対する「コピーしました」・コピー失敗の表示を残さない
   clearCopiedFeedback()
-  copyError.value = ''
+  setCopyError(null)
   // 前のプロジェクトの課題を表示したままにしない(取得中の要求も失効させる)
   closeIssueDetail()
   syncResult.value = null
-  syncError.value = ''
+  setSyncError(null)
   exportPath.value = ''
   exportUnverifiable.value = 0
   exportCanceled.value = false
-  exportError.value = ''
+  setExportError(null)
   void loadFilterOptions()
   void loadCustomFields()
 })
@@ -477,6 +499,8 @@ function clearConditions() {
  */
 const pagination = useIssuePagination<ExportColumn>({
   pageSize: PAGE_SIZE,
+  // 失敗メッセージはこの画面の i18n インスタンスで翻訳する(言語切替にも追従する)
+  t,
   fetch: (query, columns) =>
     backend.searchIssues(
       profileId.value,
@@ -553,7 +577,7 @@ async function search() {
   if (!selectedProjectId.value || searching.value || issueSyncing.value) return
   // 前の一覧に対するコピーの表示は、結果が入れ替わる前に消す
   clearCopiedFeedback()
-  copyError.value = ''
+  setCopyError(null)
   // 検索条件と値を取得する列は「この検索の時点」のものをスナップショットとして渡す
   // (以降のページ移動はこのスナップショットで取得する。フォーム・列選択を
   //  後から変えても表示中の結果には影響しない)
@@ -576,7 +600,7 @@ async function goToPage(n: number) {
   if (!canPage.value) return
   // 前の一覧に対するコピーの表示は、結果が入れ替わる前に消す
   clearCopiedFeedback()
-  copyError.value = ''
+  setCopyError(null)
   await pagination.goToPage(n)
   // クランプ・取得失敗で要求どおりのページにならないことがあるため、
   // 入力欄は確定済みのページへ必ず戻す
@@ -656,7 +680,7 @@ const canCopyIssueUrl = computed(() => !!spaceUrl.value)
 const copyToastKey = ref('')
 
 /** コピーに失敗したときの説明(空 = 正常) */
-const copyError = ref('')
+const [copyError, setCopyError] = useMessage(t)
 
 /** トーストの表示時間(ミリ秒) */
 const COPY_TOAST_MS = 2000
@@ -716,8 +740,8 @@ async function copyIssueUrl(issueKey: string, inDetail = false) {
     await copyToClipboard(url)
     // 完了までの間に別の課題キーがクリックされていたら、この(古い)結果は反映しない
     if (seq !== copyRequestSeq) return
-    copyError.value = ''
-    detailCopyError.value = ''
+    setCopyError(null)
+    setDetailCopyError(null)
     if (copiedTimer !== null) clearTimeout(copiedTimer)
     // 同じ課題を連続コピーしたときも支援技術(role="status")へ再通知されるよう、
     // 一度空にして次のティックで再設定する(DOM 内容が変化しないと読み上げられない)
@@ -733,11 +757,12 @@ async function copyIssueUrl(issueKey: string, inDetail = false) {
     if (seq !== copyRequestSeq) return
     // 成功表示が残っていると失敗に気づけないため、先に消してからエラーを出す
     clearCopiedFeedback()
-    const message = `課題 URL をコピーできませんでした: ${errorMessage(e)}`
+    // 表示先が違うだけで内容は同じ(翻訳は表示時に行うため、ここでは素材を渡す)
+    const params = { message: errorMessage(e) }
     if (inDetail) {
-      detailCopyError.value = message
+      setDetailCopyError('issues.error.copyUrl', params)
     } else {
-      copyError.value = message
+      setCopyError('issues.error.copyUrl', params)
     }
   }
 }
@@ -763,7 +788,7 @@ const detailIssueKey = ref('')
 const detail = ref<IssueDetail | null>(null)
 
 const detailLoading = ref(false)
-const detailError = ref('')
+const [detailError, setDetailError] = useMessage(t)
 
 /**
  * ポップアップ内の「URL をコピー」の失敗表示(空 = 正常)。
@@ -771,7 +796,7 @@ const detailError = ref('')
  * 一覧側の copyError はオーバーレイの背後に隠れて見えないため、
  * ポップアップから実行したコピーの失敗はポップアップ内に出す。
  */
-const detailCopyError = ref('')
+const [detailCopyError, setDetailCopyError] = useMessage(t)
 
 /** 「最新の状態を取得」を実行中か(ボタンの無効化・スピナー表示) */
 const detailRefreshing = ref(false)
@@ -782,7 +807,7 @@ const detailRefreshing = ref(false)
  * detailCopyError とは分けている。原因(コピー / 取得)も対処も異なるため、
  * 同じ領域を使い回すと片方の失敗がもう片方の文言で上書きされて紛らわしい。
  */
-const detailRefreshError = ref('')
+const [detailRefreshError, setDetailRefreshError] = useMessage(t)
 
 /** 詳細ポップアップを開いているか */
 const detailOpen = computed(() => detailIssueKey.value !== '')
@@ -822,9 +847,9 @@ async function openIssueDetail(issueKey: string, e: MouseEvent) {
   const seq = ++detailRequestSeq
   detailIssueKey.value = issueKey
   detail.value = null
-  detailError.value = ''
-  detailCopyError.value = ''
-  detailRefreshError.value = ''
+  setDetailError(null)
+  setDetailCopyError(null)
+  setDetailRefreshError(null)
   detailRefreshing.value = false
   detailLoading.value = true
   try {
@@ -834,7 +859,7 @@ async function openIssueDetail(issueKey: string, e: MouseEvent) {
     detail.value = res
   } catch (err) {
     if (seq !== detailRequestSeq) return
-    detailError.value = `課題の詳細を取得できませんでした: ${errorMessage(err)}`
+    setDetailError('issues.error.issueDetail', { message: errorMessage(err) })
   } finally {
     if (seq === detailRequestSeq) detailLoading.value = false
   }
@@ -862,16 +887,16 @@ async function refreshIssueDetail() {
   // 検索結果の stale 判定に使う起点プロジェクト(非同期の前に控える)
   const originProjectId = selectedProjectId.value
   detailRefreshing.value = true
-  detailRefreshError.value = ''
+  setDetailRefreshError(null)
   try {
     const res = await backend.refreshIssueDetail(profileId.value, originProjectId, issueKey)
     if (seq !== detailRequestSeq) return
     detail.value = res
     // 取得に成功したので、開いたときの取得失敗(未同期等)の表示は消す
-    detailError.value = ''
+    setDetailError(null)
   } catch (err) {
     if (seq !== detailRequestSeq) return
-    detailRefreshError.value = `最新の状態を取得できませんでした: ${errorMessage(err)}`
+    setDetailRefreshError('issues.error.refreshDetail', { message: errorMessage(err) })
   } finally {
     if (seq === detailRequestSeq) detailRefreshing.value = false
     // 試行が終わった時点で、成功・失敗を問わずローカル DB は変わり得る
@@ -892,8 +917,8 @@ async function refreshIssueDetail() {
  */
 const detailNote = computed(() => {
   const at = detail.value?.fetchedAt ? formatDateTime(detail.value.fetchedAt) : ''
-  const suffix = 'Backlog 側の最新の状態とは異なる場合があります。'
-  return at ? `${at} 時点の内容です。${suffix}` : `ローカルへ取り込んだ時点の内容です。${suffix}`
+  // 時刻の有無で文が変わるため、断片をつなぐのではなく文ごとにキーを分ける
+  return at ? t('issues.detail.note.fetched', { at }) : t('issues.detail.note.unknown')
 })
 
 /**
@@ -906,8 +931,8 @@ const detailNote = computed(() => {
 const commentNote = computed(() => {
   const at = detail.value?.commentsFetchedAt ? formatDateTime(detail.value.commentsFetchedAt) : ''
   return at
-    ? `コメントは同期では取得されません。「最新の状態を取得」を押した時点の内容です(取得: ${at})。`
-    : 'コメントは未取得です。「最新の状態を取得」で取得できます。'
+    ? t('issues.detail.commentNote.fetched', { at })
+    : t('issues.detail.commentNote.notFetched')
 })
 
 /** コメントを取得済みか(取得済みで 0 件 = 「コメントなし」と未取得を区別する) */
@@ -926,9 +951,9 @@ function closeIssueDetail() {
   copyRequestSeq++
   detailIssueKey.value = ''
   detail.value = null
-  detailError.value = ''
-  detailCopyError.value = ''
-  detailRefreshError.value = ''
+  setDetailError(null)
+  setDetailCopyError(null)
+  setDetailRefreshError(null)
   // 実行中の取得は上の detailRequestSeq++ で失効させているため、
   // その応答では解除されない(次に開いたときへ持ち越さないよう、ここで戻す)
   detailRefreshing.value = false
@@ -950,7 +975,7 @@ function openIssueInBrowser() {
 const syncMode = ref<SyncMode>('auto')
 const syncing = ref(false)
 const syncResult = ref<SyncResult | null>(null)
-const syncError = ref('')
+const [syncError, setSyncError] = useMessage(t)
 
 /**
  * 課題同期が実行中か。
@@ -996,7 +1021,7 @@ let syncRequestSeq = 0
  */
 const syncProgress = ref<SyncProgress | null>(null)
 const syncProgressText = computed(() =>
-  syncProgress.value ? formatSyncProgress(syncProgress.value) : '',
+  syncProgress.value ? formatSyncProgress(syncProgress.value, t, language.value) : '',
 )
 let unsubscribeSyncProgress: (() => void) | null = null
 
@@ -1026,7 +1051,7 @@ async function runSync() {
   if (!selectedProjectId.value || syncBlocked.value) return
   const seq = ++syncRequestSeq
   syncing.value = true
-  syncError.value = ''
+  setSyncError(null)
   syncResult.value = null
   syncProgress.value = null
   const runId = newSyncRunId()
@@ -1049,7 +1074,7 @@ async function runSync() {
     await loadFilterOptions()
   } catch (e) {
     if (seq !== syncRequestSeq) return
-    syncError.value = `同期に失敗しました: ${errorMessage(e)}`
+    setSyncError('issues.error.sync', { message: errorMessage(e) })
   } finally {
     // 同期は多重起動しないため、失効済みの応答でもここで必ず下ろす
     syncing.value = false
@@ -1099,7 +1124,7 @@ const exportPath = ref('')
 const exportRows = ref(0)
 const exportUnverifiable = ref(0)
 const exportCanceled = ref(false)
-const exportError = ref('')
+const [exportError, setExportError] = useMessage(t)
 
 /**
  * exportExcel の世代番号(検索と同じ理由。高 1)。
@@ -1128,7 +1153,7 @@ async function exportExcel() {
   if (!canExport.value) return
   const seq = ++exportRequestSeq
   exporting.value = true
-  exportError.value = ''
+  setExportError(null)
   exportPath.value = ''
   exportUnverifiable.value = 0
   exportCanceled.value = false
@@ -1149,7 +1174,7 @@ async function exportExcel() {
     }
   } catch (e) {
     if (seq !== exportRequestSeq) return
-    exportError.value = `Excel 出力に失敗しました: ${errorMessage(e)}`
+    setExportError('issues.error.export', { message: errorMessage(e) })
   } finally {
     // Excel 出力は多重起動しないため、失効済みの応答でもここで必ず下ろす
     exporting.value = false
@@ -1159,89 +1184,77 @@ async function exportExcel() {
 
 <template>
   <div class="issues">
-    <h1>課題抽出</h1>
+    <h1>{{ t('issues.title') }}</h1>
 
-    <p v-if="mock" class="mock-note">
-      Wails ランタイム外で動作中のため、モックデータを表示しています(実データではありません)。
-    </p>
+    <p v-if="mock" class="mock-note">{{ t('issues.mockNote') }}</p>
 
     <p v-if="globalError" class="error">{{ globalError }}</p>
 
-    <p v-if="initializing">読み込み中...</p>
+    <p v-if="initializing">{{ t('common.state.loading') }}</p>
 
-    <p v-else-if="!profileId" class="notice">
-      接続先プロファイルが選択されていません。「接続設定」画面でプロファイルを登録・選択してください。
-    </p>
+    <p v-else-if="!profileId" class="notice">{{ t('issues.noProfile') }}</p>
 
     <template v-else>
       <!-- プロジェクト選択 -->
       <section class="panel">
-        <h2>プロジェクト</h2>
+        <h2>{{ t('common.label.project') }}</h2>
         <div class="row">
-          <label for="i-project">プロジェクト</label>
+          <label for="i-project">{{ t('common.label.project') }}</label>
           <!-- 同期中は選択を固定する(R10。切り替えると同期完了後の再読込・
                結果表示が切替先に作用してしまうため) -->
           <select id="i-project" v-model="selectedProjectId" :disabled="busy">
-            <option v-if="projects.length === 0" :value="0">(プロジェクトがありません)</option>
+            <option v-if="projects.length === 0" :value="0">{{ t('issues.project.empty') }}</option>
             <option v-for="p in projects" :key="p.id" :value="p.id">
-              {{ p.name }}({{ p.projectKey }})
+              {{ t('issues.project.option', { name: p.name, key: p.projectKey }) }}
             </option>
           </select>
-          <button
-            :disabled="busy"
-            title="プロジェクト一覧を最新化(課題は同期しません)"
-            @click="syncProjects"
-          >
-            {{ projectsSyncing ? 'プロジェクト同期中...' : 'プロジェクト一覧を同期' }}
+          <button :disabled="busy" :title="t('issues.project.syncTitle')" @click="syncProjects">
+            {{ projectsSyncing ? t('issues.project.syncing') : t('issues.project.sync') }}
           </button>
           <span v-if="projectsSyncing" class="spinner" aria-hidden="true"></span>
         </div>
 
-        <p v-if="issueSyncing" class="hint warn">
-          同期中はプロジェクトを切り替えできません(同期の完了後に切り替えてください)。
-        </p>
+        <p v-if="issueSyncing" class="hint warn">{{ t('issues.project.lockedBySync') }}</p>
 
-        <p class="hint">
-          「プロジェクト一覧を同期」はプロジェクト一覧を最新化(課題は同期しません)。
-          課題を取り込むには下の「同期」を実行してください。
-        </p>
+        <p class="hint">{{ t('issues.project.hint') }}</p>
 
         <p v-if="projectsWarning" class="notice warn">{{ projectsWarning }}</p>
 
         <p v-if="selectedProject" class="freshness">
-          データ鮮度:
-          <template v-if="syncStateUnknown">鮮度を取得できませんでした(ログを確認してください)</template>
+          {{ t('issues.freshness.label') }}
+          <template v-if="syncStateUnknown">{{ t('issues.freshness.unknown') }}</template>
           <template v-else-if="selectedProject.lastSyncedAt">
-            最終同期 {{ formatDateTime(selectedProject.lastSyncedAt) }}
-            ({{ formatElapsed(selectedProject.lastSyncedAt) }})
+            {{
+              t('issues.freshness.lastSynced', {
+                at: formatDateTime(selectedProject.lastSyncedAt),
+                elapsed: formatElapsed(selectedProject.lastSyncedAt, t),
+              })
+            }}
           </template>
-          <template v-else>未同期</template>
+          <template v-else>{{ t('common.state.notSynced') }}</template>
         </p>
-        <p v-if="neverSynced" class="notice warn">
-          このプロジェクトの課題はまだ同期されていません。下の「同期」ボタン(課題の同期)を実行してください
-          (「プロジェクト一覧を同期」はプロジェクト一覧の更新のみです)。
-        </p>
+        <p v-if="neverSynced" class="notice warn">{{ t('issues.project.neverSynced') }}</p>
       </section>
 
       <!-- 同期(検索の前に実行する想定のため検索条件より上に配置) -->
       <section class="panel">
-        <h2>同期</h2>
+        <h2>{{ t('issues.sync.title') }}</h2>
         <div class="row">
-          <label>同期モード</label>
+          <label>{{ t('issues.sync.mode') }}</label>
           <label class="radio">
             <input v-model="syncMode" type="radio" value="auto" :disabled="syncBlocked" />
-            自動(初回はフル同期)
+            {{ t('issues.sync.modeAuto') }}
           </label>
           <label class="radio">
             <input v-model="syncMode" type="radio" value="full" :disabled="syncBlocked" />
-            フル同期
+            {{ t('common.enum.syncMode.full') }}
           </label>
           <label class="radio">
             <input v-model="syncMode" type="radio" value="incremental" :disabled="syncBlocked" />
-            差分同期
+            {{ t('common.enum.syncMode.incremental') }}
           </label>
           <button :disabled="syncBlocked || !selectedProjectId" @click="runSync">
-            {{ syncing ? '同期中...' : '同期' }}
+            {{ syncing ? t('common.state.syncing') : t('issues.sync.run') }}
           </button>
           <span v-if="syncing" class="spinner" aria-hidden="true"></span>
           <!-- 進捗・結果に対象プロジェクト名は添えない(R10)。同期中は上のセレクタが
@@ -1255,25 +1268,31 @@ async function exportExcel() {
         <!-- 他画面で開始した同期(この画面は runId を知らないため進捗は出せない)。
              実行中であることだけは伝えないと、操作できない理由が分からなくなる -->
         <p v-if="!syncing && issueSyncRunning" class="hint warn">
-          他の画面で開始した課題同期が実行中です。完了するまで同期・検索・Excel 出力は実行できません。
+          {{ t('issues.sync.runningElsewhere') }}
         </p>
-        <p class="hint">
-          自動は同期状態から判定します(未同期・長期間未同期ならフル同期)。
-          差分同期は前回同期以降の更新のみを取得します。不整合が疑われる場合はフル同期を選んでください。
-        </p>
+        <p class="hint">{{ t('issues.sync.hint') }}</p>
 
         <p v-if="syncError" class="error">{{ syncError }}</p>
 
         <div v-if="syncResult" class="result ok">
-          <p class="result-title">{{ syncModeLabel(syncResult.mode) }}が完了しました</p>
+          <!-- モードは Go が解決した機械値(full / incremental)を表示の正とする(設計 §3.1) -->
+          <p class="result-title">
+            {{ t('issues.sync.result.title', { mode: translateSyncMode(t, syncResult.mode) }) }}
+          </p>
           <ul>
-            <li>取得: {{ syncResult.fetched }} 件</li>
-            <li>登録・更新: {{ syncResult.upserted }} 件</li>
-            <li>削除: {{ syncResult.deleted }} 件</li>
-            <li>所要時間: {{ (syncResult.durationMs / 1000).toFixed(1) }} 秒</li>
+            <li>{{ t('issues.sync.result.fetched', { count: syncResult.fetched }) }}</li>
+            <li>{{ t('issues.sync.result.upserted', { count: syncResult.upserted }) }}</li>
+            <li>{{ t('issues.sync.result.deleted', { count: syncResult.deleted }) }}</li>
+            <li>
+              {{
+                t('issues.sync.result.duration', {
+                  seconds: (syncResult.durationMs / 1000).toFixed(1),
+                })
+              }}
+            </li>
           </ul>
           <div v-if="syncResult.warnings.length > 0" class="warnings">
-            <p class="result-title">警告</p>
+            <p class="result-title">{{ t('common.label.warning') }}</p>
             <ul>
               <li v-for="(w, i) in syncResult.warnings" :key="i">{{ w }}</li>
             </ul>
@@ -1283,64 +1302,64 @@ async function exportExcel() {
 
       <!-- 検索条件 -->
       <section class="panel">
-        <h2>検索条件</h2>
+        <h2>{{ t('issues.search.title') }}</h2>
         <div class="row">
-          <label for="i-keyword">キーワード</label>
+          <label for="i-keyword">{{ t('issues.search.keyword') }}</label>
           <input
             id="i-keyword"
             v-model="cond.keyword"
             type="text"
             class="wide"
-            placeholder="課題キー + 件名 + 詳細の部分一致(スペース区切りで複数指定)"
+            :placeholder="t('issues.search.keywordPlaceholder')"
             @keydown.enter="onKeywordEnter"
           />
         </div>
         <div class="row">
-          <label>複数キーワード</label>
+          <label>{{ t('issues.search.keywordMode') }}</label>
           <label class="radio">
             <input v-model="cond.keywordMode" type="radio" value="and" :disabled="searching" />
-            すべて含む(AND)
+            {{ t('issues.search.keywordAnd') }}
           </label>
           <label class="radio">
             <input v-model="cond.keywordMode" type="radio" value="or" :disabled="searching" />
-            いずれかを含む(OR)
+            {{ t('issues.search.keywordOr') }}
           </label>
         </div>
+        <!-- 強調(<strong>)を挟むため、この案内だけは前・強調・後の 3 キーに分ける
+             (マークアップをカタログへ入れて v-html で描画するのは避ける)。
+             改行を入れると強調の前後に空白が入るため、1 行で並べている -->
         <p class="hint">
-          キーワード検索はローカル DB に保存された<strong>課題キー・件名・詳細</strong>に対する部分一致です。
-          コメント・添付ファイル等は対象外で、Backlog サイト上のキーワード検索とは範囲が異なります。
-          スペース(半角・全角)で区切ると複数キーワードになります(スペースを含む語句そのものの検索はできません)。
-          キーワード欄で Enter を押すと検索します。
+          {{ t('issues.search.keywordHintPrefix') }}<strong>{{ t('issues.search.keywordHintTarget') }}</strong>{{ t('issues.search.keywordHintSuffix') }}
         </p>
 
         <div class="row">
-          <label for="i-updated-from">更新日</label>
+          <label for="i-updated-from">{{ t('issues.search.updated') }}</label>
           <input id="i-updated-from" v-model="cond.updatedFrom" type="date" />
-          <span>〜</span>
+          <span>{{ t('issues.rangeSeparator') }}</span>
           <input v-model="cond.updatedTo" type="date" />
         </div>
 
         <div class="row">
-          <label for="i-created-from">作成日</label>
+          <label for="i-created-from">{{ t('issues.search.created') }}</label>
           <input id="i-created-from" v-model="cond.createdFrom" type="date" />
-          <span>〜</span>
+          <span>{{ t('issues.rangeSeparator') }}</span>
           <input v-model="cond.createdTo" type="date" />
         </div>
 
         <div class="row">
-          <label for="i-status">状態</label>
+          <label for="i-status">{{ t('common.label.status') }}</label>
           <select id="i-status" v-model="cond.statusName" :disabled="optionsLoading">
-            <option value="">すべて</option>
+            <option value="">{{ t('common.state.all') }}</option>
             <option v-for="s in statusOptions" :key="s" :value="s">{{ s }}</option>
           </select>
-          <label for="i-assignee" class="inline-label">担当者</label>
+          <label for="i-assignee" class="inline-label">{{ t('issues.search.assignee') }}</label>
           <select id="i-assignee" v-model="cond.assigneeName" :disabled="optionsLoading">
-            <option value="">すべて</option>
+            <option value="">{{ t('common.state.all') }}</option>
             <option v-for="a in assigneeOptions" :key="a" :value="a">{{ a }}</option>
           </select>
         </div>
         <p v-if="!optionsLoading && statusOptions.length === 0 && assigneeOptions.length === 0" class="hint">
-          状態・担当者の候補は同期済みの課題から作成されます。同期後に選択できるようになります。
+          {{ t('issues.search.optionsHint') }}
         </p>
 
         <!-- カスタム属性の絞り込み(定義があるプロジェクトでのみ表示) -->
@@ -1351,9 +1370,9 @@ async function exportExcel() {
           @toggle="cfPanelOpen = ($event.target as HTMLDetailsElement).open"
         >
           <summary>
-            カスタム属性で絞り込む
+            {{ t('issues.cf.summary') }}
             <span v-if="customFieldFilterCount > 0" class="cf-count">
-              ({{ customFieldFilterCount }} 件指定中)
+              {{ t('issues.cf.count', { count: customFieldFilterCount }) }}
             </span>
           </summary>
 
@@ -1375,21 +1394,21 @@ async function exportExcel() {
                   type="number"
                   step="any"
                   class="narrow"
-                  placeholder="下限"
+                  :placeholder="t('issues.cf.min')"
                 />
-                <span>〜</span>
+                <span>{{ t('issues.rangeSeparator') }}</span>
                 <input
                   v-model="cfCond[def.id].max"
                   type="number"
                   step="any"
                   class="narrow"
-                  placeholder="上限"
+                  :placeholder="t('issues.cf.max')"
                 />
               </template>
               <!-- 日付: 範囲 -->
               <template v-else-if="def.typeId === CF_TYPE_DATE">
                 <input :id="`i-cf-${def.id}`" v-model="cfCond[def.id].min" type="date" />
-                <span>〜</span>
+                <span>{{ t('issues.rangeSeparator') }}</span>
                 <input v-model="cfCond[def.id].max" type="date" />
               </template>
               <!-- 文字列・文章(選択肢が取れないリスト系を含む): 部分一致 -->
@@ -1399,19 +1418,13 @@ async function exportExcel() {
                   v-model="cfCond[def.id].text"
                   type="text"
                   class="wide"
-                  placeholder="部分一致"
+                  :placeholder="t('issues.cf.contains')"
                 />
               </template>
             </template>
           </div>
 
-          <p class="hint">
-            複数のカスタム属性を指定した場合はすべてを満たす課題(AND)が対象です。
-            選択肢はいずれか 1 つに一致すれば対象になります。値が未入力の課題は、
-            範囲や部分一致を指定した属性では対象外になります。
-            絞り込みは同期済みのローカルデータに対して行われるため、
-            件数の多いプロジェクトでは他の条件より時間がかかることがあります。
-          </p>
+          <p class="hint">{{ t('issues.cf.hint') }}</p>
         </details>
 
         <div class="row buttons">
@@ -1421,60 +1434,60 @@ async function exportExcel() {
             :disabled="searching || issueSyncing || !selectedProjectId"
             @click="search"
           >
-            {{ searching ? '検索中...' : '検索' }}
+            {{ searching ? t('issues.search.searching') : t('common.action.search') }}
           </button>
-          <button :disabled="searching" @click="clearConditions">条件をクリア</button>
+          <button :disabled="searching" @click="clearConditions">
+            {{ t('common.action.clearConditions') }}
+          </button>
           <span v-if="searching" class="spinner" aria-hidden="true"></span>
         </div>
-        <p v-if="issueSyncing" class="hint warn">
-          同期中は検索できません(同期の完了後に実行してください)。
-        </p>
+        <p v-if="issueSyncing" class="hint warn">{{ t('issues.search.blockedBySync') }}</p>
         <p v-if="searchError" class="error">{{ searchError }}</p>
       </section>
 
       <!-- 検索結果 -->
       <section v-if="searched" class="panel">
-        <h2>検索結果</h2>
+        <h2>{{ t('issues.result.title') }}</h2>
         <p class="summary">
-          該当 {{ total }} 件
-          <span v-if="rows.length > 0">({{ rangeStart }}〜{{ rangeEnd }} 件目を表示)</span>
+          {{ t('issues.result.total', { count: total }) }}
+          <span v-if="rows.length > 0">
+            {{ t('issues.result.range', { from: rangeStart, to: rangeEnd }) }}
+          </span>
         </p>
         <p v-if="totalPages > 1" class="hint">
-          Excel には条件に一致する全 {{ total }} 件が出力されます。
+          {{ t('issues.result.exportAllNote', { count: total }) }}
         </p>
 
         <!-- 表示中の結果より後にローカル DB が変わった(同期・詳細の再取得)。
              ページを跨いだ行のずれを避けるため、ページャを止めて再検索を促す -->
-        <p v-if="resultsStale" class="notice warn">
-          データが更新されました。最新の結果を見るには再検索してください。
-        </p>
+        <p v-if="resultsStale" class="notice warn">{{ t('issues.result.stale') }}</p>
 
         <p v-if="unverifiable > 0" class="notice warn">
-          {{ unverifiable }} 件はローカルの課題データが古く、カスタム属性の条件を判定できませんでした
-          (上の該当件数には含まれていません)。フル同期を実行すると解消します。
+          {{ t('issues.result.unverifiable', { count: unverifiable }) }}
         </p>
 
         <p v-if="customColumnsOutOfDate" class="hint warn">
-          カスタム属性の列選択が変わりました。表示に反映するには再度検索してください。
+          {{ t('issues.result.columnsOutOfDate') }}
         </p>
 
-        <p v-if="rows.length === 0" class="notice">条件に一致する課題はありませんでした。</p>
+        <p v-if="rows.length === 0" class="notice">{{ t('issues.result.empty') }}</p>
 
         <div v-else class="table-wrap">
           <table>
             <thead>
               <tr>
-                <th>課題キー</th>
-                <th>件名</th>
-                <th>状態</th>
-                <th>担当者</th>
-                <th>種別</th>
-                <th>優先度</th>
-                <th>作成日</th>
-                <th>更新日</th>
-                <th>期限</th>
-                <!-- カスタム属性列は「Excel 出力」の列選択に連動する -->
-                <th v-for="c in shownCustomColumns" :key="c.key">{{ c.label }}</th>
+                <th>{{ t('issues.result.column.issueKey') }}</th>
+                <th>{{ t('issues.result.column.summary') }}</th>
+                <th>{{ t('issues.result.column.statusName') }}</th>
+                <th>{{ t('issues.result.column.assigneeName') }}</th>
+                <th>{{ t('issues.result.column.issueTypeName') }}</th>
+                <th>{{ t('issues.result.column.priorityName') }}</th>
+                <th>{{ t('issues.result.column.created') }}</th>
+                <th>{{ t('issues.result.column.updated') }}</th>
+                <th>{{ t('issues.result.column.dueDate') }}</th>
+                <!-- カスタム属性列は「Excel 出力」の列選択に連動する
+                     (属性名は利用者データなので翻訳しない。columnLabel が素通しする) -->
+                <th v-for="c in shownCustomColumns" :key="c.key">{{ exportColumnLabel(c) }}</th>
               </tr>
             </thead>
             <tbody>
@@ -1487,7 +1500,11 @@ async function exportExcel() {
                     type="button"
                     class="issue-key"
                     :disabled="issueSyncing"
-                    :title="issueSyncing ? '同期中は詳細を表示できません' : 'クリックで詳細を表示'"
+                    :title="
+                      issueSyncing
+                        ? t('issues.result.detailDisabled')
+                        : t('issues.result.detailTitle')
+                    "
                     @click="openIssueDetail(r.issueKey, $event)"
                   >
                     {{ r.issueKey }}
@@ -1498,8 +1515,8 @@ async function exportExcel() {
                     v-if="canCopyIssueUrl"
                     type="button"
                     class="copy-icon"
-                    title="課題 URL をコピー"
-                    aria-label="課題 URL をコピー"
+                    :title="t('issues.result.copyUrl')"
+                    :aria-label="t('issues.result.copyUrl')"
                     @click="copyIssueUrl(r.issueKey)"
                   >
                     <!-- クリップボード(線画)。外部アイコンライブラリを持ち込まず、
@@ -1522,7 +1539,7 @@ async function exportExcel() {
                 </td>
                 <td>{{ r.summary }}</td>
                 <td class="nowrap">{{ r.statusName }}</td>
-                <td class="nowrap">{{ r.assigneeName || '(未設定)' }}</td>
+                <td class="nowrap">{{ r.assigneeName || t('issues.value.unset') }}</td>
                 <td class="nowrap">{{ r.issueTypeName }}</td>
                 <td class="nowrap">{{ r.priorityName }}</td>
                 <td class="nowrap">{{ formatDateTime(r.created) }}</td>
@@ -1539,12 +1556,12 @@ async function exportExcel() {
              検索中・同期中・stale 中は操作できない -->
         <div v-if="totalPages > 1" class="row pager">
           <button type="button" :disabled="!canPage || !hasPrev" @click="goToPage(1)">
-            « 最初
+            {{ t('issues.pager.first') }}
           </button>
           <button type="button" :disabled="!canPage || !hasPrev" @click="goToPage(currentPage - 1)">
-            ‹ 前へ
+            {{ t('issues.pager.prev') }}
           </button>
-          <label for="i-page" class="pager-label">ページ</label>
+          <label for="i-page" class="pager-label">{{ t('common.label.page') }}</label>
           <input
             id="i-page"
             v-model="pageInput"
@@ -1552,16 +1569,16 @@ async function exportExcel() {
             inputmode="numeric"
             class="page-input"
             :disabled="!canPage"
-            aria-label="ページ番号(Enter で移動)"
+            :aria-label="t('issues.pager.inputLabel')"
             @keydown.enter="onPageInputEnter"
             @blur="syncPageInput"
           />
-          <span class="pager-total">/ {{ totalPages }} ページ</span>
+          <span class="pager-total">{{ t('issues.pager.total', { count: totalPages }) }}</span>
           <button type="button" :disabled="!canPage || !hasNext" @click="goToPage(currentPage + 1)">
-            次へ ›
+            {{ t('issues.pager.next') }}
           </button>
           <button type="button" :disabled="!canPage || !hasNext" @click="goToPage(totalPages)">
-            最後 »
+            {{ t('issues.pager.last') }}
           </button>
           <span v-if="searching" class="spinner" aria-hidden="true"></span>
         </div>
@@ -1569,64 +1586,64 @@ async function exportExcel() {
         <p v-if="copyError" class="error">{{ copyError }}</p>
 
         <p v-if="rows.length > 0" class="hint">
-          課題キーをクリックすると、同期済みの内容で課題の詳細を表示します。
-          <template v-if="canCopyIssueUrl">
-            右隣のクリップボードのアイコンをクリックすると、その課題の URL をコピーします。
-          </template>
+          {{ t('issues.result.hintDetail') }}
+          <template v-if="canCopyIssueUrl">{{ t('issues.result.hintCopy') }}</template>
         </p>
 
         <p v-if="customColumns.length > 0" class="hint">
-          一覧に表示するカスタム属性は、下の「Excel 出力」で選んだ列に連動します。
+          {{ t('issues.result.hintCustomColumns') }}
         </p>
       </section>
 
       <!-- Excel 出力 -->
       <section class="panel">
-        <h2>Excel 出力</h2>
-        <p class="hint">出力する列を選択してください(現在の検索条件に一致する全件が出力されます)。</p>
+        <h2>{{ t('issues.export.title') }}</h2>
+        <p class="hint">{{ t('issues.export.hint') }}</p>
         <div class="columns">
+          <!-- 固定列のラベルは Go が返す日本語ではなく列キーから引く(設計 §3.3) -->
           <label v-for="c in fixedExportColumns" :key="c.key" class="checkbox">
             <input v-model="selectedColumns" type="checkbox" :value="c.key" />
-            {{ c.label }}
+            {{ exportColumnLabel(c) }}
           </label>
         </div>
         <template v-if="customColumns.length > 0">
-          <p class="hint">
-            カスタム属性(既定では出力しません)。ここで選んだ列は検索結果の一覧にも表示されます。
-          </p>
+          <p class="hint">{{ t('issues.export.customHint') }}</p>
           <div class="columns">
             <label v-for="c in customColumns" :key="c.key" class="checkbox">
               <input v-model="selectedColumns" type="checkbox" :value="c.key" />
-              {{ c.label }}
+              {{ exportColumnLabel(c) }}
             </label>
           </div>
         </template>
         <p v-if="customFieldsError" class="hint warn">
           {{ customFieldsError }}
-          <button type="button" class="link" @click="loadCustomFields">再試行</button>
+          <button type="button" class="link" @click="loadCustomFields">
+            {{ t('common.action.retry') }}
+          </button>
         </p>
         <p v-if="exportColumnsError" class="hint warn">
           {{ exportColumnsError }}
-          <button type="button" class="link" @click="loadExportColumns">再試行</button>
+          <button type="button" class="link" @click="loadExportColumns">
+            {{ t('common.action.retry') }}
+          </button>
         </p>
         <div class="row buttons">
           <button class="primary" :disabled="!canExport" @click="exportExcel">
-            {{ exporting ? '出力中...' : 'Excel 出力' }}
+            {{ exporting ? t('common.state.exporting') : t('issues.export.run') }}
           </button>
           <span v-if="exporting" class="spinner" aria-hidden="true"></span>
         </div>
-        <p v-if="issueSyncing" class="hint warn">
-          同期中は Excel 出力できません(同期の完了後に実行してください)。
+        <p v-if="issueSyncing" class="hint warn">{{ t('issues.export.blockedBySync') }}</p>
+        <p v-if="selectedColumns.length === 0" class="hint warn">
+          {{ t('issues.export.noColumns') }}
         </p>
-        <p v-if="selectedColumns.length === 0" class="hint warn">出力する列を 1 つ以上選択してください。</p>
         <p v-if="exportError" class="error">{{ exportError }}</p>
-        <p v-if="exportCanceled" class="notice">Excel 出力はキャンセルされました。</p>
+        <p v-if="exportCanceled" class="notice">{{ t('issues.export.canceled') }}</p>
         <div v-if="exportPath" class="result ok">
-          <p class="result-title">Excel 出力が完了しました({{ exportRows }} 件)</p>
+          <p class="result-title">{{ t('issues.export.done', { count: exportRows }) }}</p>
           <p class="path">{{ exportPath }}</p>
           <p v-if="exportUnverifiable > 0" class="warnings">
-            {{ exportUnverifiable }} 件はローカルの課題データが古く、カスタム属性の条件を判定できず
-            出力に含まれていません。フル同期を実行すると解消します。
+            {{ t('issues.export.unverifiable', { count: exportUnverifiable }) }}
           </p>
         </div>
       </section>
@@ -1661,57 +1678,59 @@ async function exportExcel() {
           <span v-if="detail" class="detail-summary">{{ detail.summary }}</span>
         </h2>
 
-        <p v-if="detailLoading" class="notice">読み込み中...</p>
+        <p v-if="detailLoading" class="notice">{{ t('common.state.loading') }}</p>
         <p v-else-if="detailError" class="error">{{ detailError }}</p>
 
         <template v-else-if="detail">
           <dl class="detail-grid">
-            <dt>状態</dt>
+            <dt>{{ t('issues.detail.field.status') }}</dt>
             <dd>{{ detail.statusName || '-' }}</dd>
-            <dt>種別</dt>
+            <dt>{{ t('issues.detail.field.issueType') }}</dt>
             <dd>{{ detail.issueTypeName || '-' }}</dd>
-            <dt>優先度</dt>
+            <dt>{{ t('issues.detail.field.priority') }}</dt>
             <dd>{{ detail.priorityName || '-' }}</dd>
-            <dt>担当者</dt>
-            <dd>{{ detail.assigneeName || '(未設定)' }}</dd>
-            <dt>期限</dt>
+            <dt>{{ t('issues.detail.field.assignee') }}</dt>
+            <dd>{{ detail.assigneeName || t('issues.value.unset') }}</dd>
+            <dt>{{ t('issues.detail.field.dueDate') }}</dt>
             <dd>{{ detail.dueDate || '-' }}</dd>
-            <dt>作成日時</dt>
+            <dt>{{ t('issues.detail.field.created') }}</dt>
             <dd>{{ formatDateTime(detail.created) || '-' }}</dd>
-            <dt>更新日時</dt>
+            <dt>{{ t('issues.detail.field.updated') }}</dt>
             <dd>{{ formatDateTime(detail.updated) || '-' }}</dd>
-            <dt>親課題</dt>
-            <dd>{{ detail.parentIssueKey || '(なし)' }}</dd>
+            <dt>{{ t('issues.detail.field.parentIssue') }}</dt>
+            <dd>{{ detail.parentIssueKey || t('issues.value.none') }}</dd>
           </dl>
 
-          <!-- カスタム属性(定義があり、値を持つ課題でのみ表示) -->
+          <!-- カスタム属性(定義があり、値を持つ課題でのみ表示)。属性名は利用者データ -->
           <template v-if="detail.customFields.length > 0">
-            <h3 class="detail-section">カスタム属性</h3>
+            <h3 class="detail-section">{{ t('issues.detail.customFields') }}</h3>
             <dl class="detail-grid">
               <template v-for="(f, i) in detail.customFields" :key="i">
                 <dt>{{ f.name }}</dt>
-                <dd>{{ f.value || '(未設定)' }}</dd>
+                <dd>{{ f.value || t('issues.value.unset') }}</dd>
               </template>
             </dl>
           </template>
 
-          <h3 class="detail-section">詳細</h3>
+          <h3 class="detail-section">{{ t('issues.detail.description') }}</h3>
           <pre v-if="detail.description" class="detail-description">{{ detail.description }}</pre>
-          <p v-else class="hint">(詳細は入力されていません)</p>
+          <p v-else class="hint">{{ t('issues.detail.noDescription') }}</p>
 
           <!-- コメント(オンデマンド取得)。同期では取得されないため、
                未取得・取得済み 0 件・取得済みありの 3 状態を出し分ける -->
-          <h3 class="detail-section">コメント</h3>
+          <h3 class="detail-section">{{ t('issues.detail.comments') }}</h3>
           <p v-if="!commentsFetched" class="hint">
-            まだ取得していません(「最新の状態を取得」で取得できます)。
+            {{ t('issues.detail.commentsNotFetched') }}
           </p>
           <p v-else-if="detail.comments.length === 0" class="hint">
-            (コメントはありません)
+            {{ t('issues.detail.noComments') }}
           </p>
           <ol v-else class="comment-list">
             <li v-for="(c, i) in detail.comments" :key="i" class="comment">
               <p class="comment-meta">
-                <span class="comment-author">{{ c.authorName || '(不明)' }}</span>
+                <span class="comment-author">{{
+                  c.authorName || t('issues.detail.unknownAuthor')
+                }}</span>
                 <span class="comment-date">{{ formatDateTime(c.created) }}</span>
               </p>
               <pre class="comment-body">{{ c.content }}</pre>
@@ -1719,10 +1738,10 @@ async function exportExcel() {
           </ol>
           <!-- 本文を持たない項目(状態変更等)は件数だけを伝える -->
           <p v-if="commentsFetched && detail.commentsHistoryOnly > 0" class="hint">
-            ほか変更履歴 {{ detail.commentsHistoryOnly }} 件(Backlog で確認)
+            {{ t('issues.detail.historyOnly', { count: detail.commentsHistoryOnly }) }}
           </p>
           <p v-if="detail.commentsTruncated" class="hint warn">
-            コメントが多いため最新分のみ取得しました。以前のコメントは Backlog で確認してください。
+            {{ t('issues.detail.commentsTruncated') }}
           </p>
 
           <p class="hint detail-note">{{ detailNote }}</p>
@@ -1740,16 +1759,18 @@ async function exportExcel() {
             :disabled="detailRefreshing || detailLoading || issueSyncing"
             @click="refreshIssueDetail"
           >
-            {{ detailRefreshing ? '取得中...' : '最新の状態を取得' }}
+            {{ detailRefreshing ? t('issues.detail.refreshing') : t('issues.detail.refresh') }}
           </button>
           <span v-if="detailRefreshing" class="spinner" aria-hidden="true"></span>
           <button v-if="canCopyIssueUrl" type="button" @click="copyIssueUrl(detailIssueKey, true)">
-            URL をコピー
+            {{ t('issues.detail.copyUrl') }}
           </button>
           <button v-if="canCopyIssueUrl" type="button" @click="openIssueInBrowser">
-            ブラウザで開く
+            {{ t('issues.detail.openInBrowser') }}
           </button>
-          <button ref="detailCloseButton" type="button" @click="closeIssueDetail">閉じる</button>
+          <button ref="detailCloseButton" type="button" @click="closeIssueDetail">
+            {{ t('common.action.close') }}
+          </button>
         </div>
       </div>
     </div>
@@ -1761,7 +1782,7 @@ async function exportExcel() {
          (2 画面目で必要になった時点で共通コンポーネント化する) -->
     <Transition name="toast">
       <p v-if="copyToastKey" class="copy-toast" role="status">
-        課題 URL をコピーしました({{ copyToastKey }})
+        {{ t('issues.toast.copied', { key: copyToastKey }) }}
       </p>
     </Transition>
   </div>

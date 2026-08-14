@@ -1,0 +1,158 @@
+{
+  "title": "Bulk Update & Add",
+  "dangerNote": "This feature changes data in Backlog. We recommend trying it on a test project first.",
+  "mockNote": "Running outside the Wails runtime, so mock data is shown (not real data). Nothing is written to Backlog.",
+  "noProfile": "No connection profile is selected. Register and select a profile on the Connection screen.",
+  "syncRunningNote": "An issue sync started on another screen is running. Until it finishes you cannot switch projects, export a template, import Excel, or run a bulk update (you can still view the job history and export results to Excel).",
+  "newIssue": "(New)",
+  "flow": {
+    "title": "Steps",
+    "step1": "Select a project and export the template Excel file",
+    "step2": "Fill in the Excel file and load it with \"Import Excel\" (nothing is written at this point)",
+    "step3": "Review the validation errors and the dry-run preview",
+    "step4": "Write to Backlog with \"Run\" (progress is shown and can be canceled)",
+    "step5": "Check the result summary (conflicting issues are not overwritten)",
+    "step6": "If the run was interrupted, resume it from the job history",
+    "excelNote": "The Excel entry rules (blank = leave unchanged, #CLEAR# to clear, blank issueKey = add new) are described on the \"記入方法\" (How to fill in) sheet of the template.",
+    "customFieldNote": "Enter custom fields in the \"属性:定義名\" (Attribute: definition name) columns (dates as yyyy-MM-dd; multiple lists and checkboxes as comma-separated option names). Values outside the option list (free input for \"Other\") are not supported yet."
+  },
+  "project": {
+    "empty": "(No projects)",
+    "option": "{name} ({key})"
+  },
+  "estimate": {
+    "lessThanMinute": "less than 1 minute",
+    "minutes": "about {minutes} minutes"
+  },
+  "filter": {
+    "title": "Conditions for the issues to export",
+    "keyword": "Keyword",
+    "keywordPlaceholder": "Partial match on Issue Key + Summary + Description (separate multiple keywords with spaces)",
+    "keywordMode": "Multiple keywords",
+    "keywordModeAnd": "Match all (AND)",
+    "keywordModeOr": "Match any (OR)",
+    "updated": "Updated",
+    "created": "Created",
+    "rangeSeparator": "-",
+    "assignee": "Assignee",
+    "optionsEmptyNote": "Status and Assignee choices are built from synced issues (sync on the Issues screen to make them selectable).",
+    "matchNote": "Only the issues matching the conditions are included in the template (all blank means all issues).",
+    "conditionsSet": "Conditions are currently set.",
+    "conditionsNone": "No conditions are set, so all issues will be exported.",
+    "localDataNote": "The search runs against synced local data (filtering by custom field is not supported)."
+  },
+  "step1": {
+    "title": "① Export template",
+    "projectNote": "The project is fixed in the template, so it cannot be changed per row. Issue Type, Status, Priority and Assignee can be edited with the drop-downs in the name columns (rows with an empty name column use the value in the ID column). When a name column has a value it always takes precedence, and a conflicting ID column is ignored with a warning.",
+    "exportButton": "Export template",
+    "canceled": "The template export was canceled.",
+    "exported": "Exported the template ({count} issues)"
+  },
+  "step2": {
+    "title": "② Import Excel",
+    "defaultPriority": "Default priority",
+    "priorityUnavailable": "(Not available)",
+    "priorityNote": "Applied to new rows that have no priority (only for imports in this project).",
+    "importing": "Importing...",
+    "importButton": "Import Excel",
+    "note": "Choose the filled-in Excel file in the file dialog. Importing only validates and runs a dry run; this operation does not write to Backlog.",
+    "canceled": "The Excel import was canceled."
+  },
+  "step3": {
+    "title": "③ Validation result and change preview (dry run)",
+    "summary": "Imported {total} rows / {createLabel} {creates} / {updateLabel} {updates} / {skipLabel} {skips}",
+    "importWarnings": "Warnings during import",
+    "validationErrors": "{count} validation errors (fix them and import again)",
+    "errorLine": "Row {rowNo}: {message}",
+    "noErrors": "There are no validation errors. Review the changes and run.",
+    "conflictWarning": "{count} issues have been updated remotely since the template was exported. They may be excluded as conflicts when you run.",
+    "needsCheck": "Check"
+  },
+  "step4": {
+    "title": "④ Run",
+    "note": "Issues are written to Backlog one at a time (there is no bulk API). Estimate: 8-10 minutes per 1,000 rows. The {count} target rows of this run will take {estimate}.",
+    "running": "Running...",
+    "canceling": "Canceling...",
+    "invalidNote": "Cannot run because there are validation errors. Fix the Excel file and import it again."
+  },
+  "confirm": {
+    "title": "{count} rows will be written to Backlog. Are you sure?",
+    "force": "Remote changes will be overwritten. Changes made remotely to the conflicting issues will be lost.",
+    "resend": "Already created issues are checked before resending (duplicate creation is prevented automatically).",
+    "estimate": "Estimated time: {estimate}",
+    "ok": "Write",
+    "cancel": "Don't write"
+  },
+  "progress": {
+    "count": "{processed} / {total} ({percent}%)",
+    "canceling": "— Cancellation requested. Will stop after the row being sent finishes."
+  },
+  "step5": {
+    "title": "⑤ Result",
+    "finished": "The bulk run has finished",
+    "done": "Succeeded: {count}",
+    "failed": "Failed: {count}",
+    "conflict": "Conflicts: {count}",
+    "skipped": "Skipped: {count} (rows with no change at import)",
+    "duration": "Elapsed time: {seconds} sec",
+    "skippedNote": "Skipped counts the rows judged as \"no change\" at import. Rows left unprocessed by a cancellation or an interruption are not included. Check the warnings below and the Pending / Sending columns of the job history for unprocessed rows.",
+    "conflictNote": "{count} conflicts: the remote side has been updated. Review the latest state, then choose \"Overwrite conflicts and run again\" to force an overwrite.",
+    "exportNote": "Exports the per-row result (done, failed, conflict, error details) to Excel."
+  },
+  "resultExport": {
+    "title": "Result report export",
+    "canceled": "The result report export was canceled.",
+    "done": "Exported the result report for job #{jobId} ({rows} rows)"
+  },
+  "step6": {
+    "title": "⑥ Job history",
+    "refresh": "Refresh history",
+    "empty": "There is no run history yet.",
+    "sendingNote": "The send result of some rows could not be confirmed ({count} rows). Resuming processes them after checking (they are matched against the already created issues, so duplicate creation is prevented automatically).",
+    "rowsLoading": "Loading row details...",
+    "rowsEmpty": "There are no row details for this job."
+  },
+  "jobRows": {
+    "newWithKey": "(New) {issueKey}",
+    "newWithId": "(New) Created ID: {issueId}"
+  },
+  "action": {
+    "resume": "Resume",
+    "resumeResend": "Resume and resend the sending rows",
+    "forceRerun": "Overwrite conflicts and run again",
+    "showRows": "Show details",
+    "hideRows": "Hide details",
+    "exportResult": "Export result to Excel"
+  },
+  "col": {
+    "row": "Row",
+    "action": "Action",
+    "issueKey": "Issue Key",
+    "summary": "Summary",
+    "changes": "Changes",
+    "conflict": "Conflict",
+    "job": "Job",
+    "createdAt": "Created",
+    "kind": "Type",
+    "total": "Target",
+    "done": "Done",
+    "failed": "Failed",
+    "pending": "Pending",
+    "sending": "Sending",
+    "skipped": "Skipped",
+    "actions": "Actions"
+  },
+  "error": {
+    "loadProfile": "Failed to load the connection profile: {message}",
+    "loadProjects": "Failed to load the project list: {message}",
+    "loadMaster": "Failed to load the master data: {message}",
+    "loadFilterOptions": "Failed to load the filter choices: {message}",
+    "exportTemplate": "Failed to export the template: {message}",
+    "import": "Failed to import the Excel file: {message}",
+    "run": "The bulk run failed: {message}",
+    "cancel": "Failed to request the cancellation: {message}",
+    "loadJobs": "Failed to load the job history: {message}",
+    "loadJobRows": "Failed to load the row details: {message}",
+    "exportResult": "Failed to export the result report: {message}"
+  }
+}

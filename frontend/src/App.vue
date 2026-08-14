@@ -2,6 +2,7 @@
 // アプリ外枠(サイドバー + コンテンツ)。TDD 例外(GUI): 描画・ポインタ操作は
 // 手動確認で担保し、切り出せる純ロジック(サイドバー幅など)は lib/ 側でテストする。
 import { computed, onBeforeUnmount, onErrorCaptured, onMounted, ref, type Component } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { getBackend } from './lib/backend'
 import {
   DEFAULT_SIDEBAR_WIDTH,
@@ -16,24 +17,29 @@ import UsersView from './views/UsersView.vue'
 import SyncStatusView from './views/SyncStatusView.vue'
 import AboutView from './views/AboutView.vue'
 
+const { t } = useI18n()
+
 type ScreenId = 'settings' | 'issues' | 'bulkUpdate' | 'users' | 'syncStatus' | 'about'
 
 interface Screen {
   id: ScreenId
+  /** メニューのラベル(表示言語に追従させるため翻訳済みの文字列を持つ) */
   label: string
   /** サイドバー折りたたみ時に表示する 1〜2 文字の短縮ラベル */
   short: string
   component: Component
 }
 
-const screens: Screen[] = [
-  { id: 'settings', label: '接続設定', short: '接', component: SettingsView },
-  { id: 'issues', label: '課題抽出', short: '課', component: IssuesView },
-  { id: 'bulkUpdate', label: '一括更新・追加', short: '一', component: BulkUpdateView },
-  { id: 'users', label: 'ユーザ抽出', short: 'ユ', component: UsersView },
-  { id: 'syncStatus', label: '同期状態', short: '同', component: SyncStatusView },
-  { id: 'about', label: 'アプリ情報', short: '情', component: AboutView },
-]
+// 画面の定義。ラベルは表示言語で変わるため computed で組み立てる
+// (コンポーネント自体は不変なので、参照の作り直しによる再マウントは起きない)。
+const screens = computed<Screen[]>(() => [
+  { id: 'settings', label: t('app.nav.settings'), short: t('app.nav.settingsShort'), component: SettingsView },
+  { id: 'issues', label: t('app.nav.issues'), short: t('app.nav.issuesShort'), component: IssuesView },
+  { id: 'bulkUpdate', label: t('app.nav.bulkUpdate'), short: t('app.nav.bulkUpdateShort'), component: BulkUpdateView },
+  { id: 'users', label: t('app.nav.users'), short: t('app.nav.usersShort'), component: UsersView },
+  { id: 'syncStatus', label: t('app.nav.syncStatus'), short: t('app.nav.syncStatusShort'), component: SyncStatusView },
+  { id: 'about', label: t('app.nav.about'), short: t('app.nav.aboutShort'), component: AboutView },
+])
 
 /** サイドバーの折りたたみ状態の保存先(次回起動時も維持する) */
 const SIDEBAR_COLLAPSED_KEY = 'ba.sidebarCollapsed'
@@ -60,7 +66,7 @@ function saveCollapsed(): void {
 }
 
 const toggleTitle = computed(() =>
-  collapsed.value ? 'メニューを展開する' : 'メニューを折りたたむ',
+  collapsed.value ? t('app.sidebar.expand') : t('app.sidebar.collapse'),
 )
 
 function toggleSidebar(): void {
@@ -196,8 +202,8 @@ onErrorCaptured((err) => {
       >
         ≡
       </button>
-      <div class="app-title" title="Backlog Assistant">
-        {{ collapsed ? 'BA' : 'Backlog Assistant' }}
+      <div class="app-title" :title="t('app.title')">
+        {{ collapsed ? t('app.titleShort') : t('app.title') }}
       </div>
       <ul>
         <li v-for="s in screens" :key="s.id">
@@ -211,7 +217,11 @@ onErrorCaptured((err) => {
           </button>
         </li>
       </ul>
-      <div v-if="appVersion && !collapsed" class="app-version" :title="'バージョン ' + appVersion">
+      <div
+        v-if="appVersion && !collapsed"
+        class="app-version"
+        :title="t('app.versionTitle', { version: appVersion })"
+      >
         {{ appVersion }}
       </div>
       <!-- 幅調整ハンドル(サイドバー右端に重ねる)。マウス専用のため支援技術からは隠す。
@@ -220,7 +230,7 @@ onErrorCaptured((err) => {
         ref="handleEl"
         class="resize-handle"
         aria-hidden="true"
-        title="ドラッグで幅を調整(ダブルクリックで既定幅に戻す)"
+        :title="t('app.sidebar.resizeHandle')"
         @pointerdown="onHandlePointerDown"
         @pointermove="onHandlePointerMove"
         @pointerup="onHandlePointerEnd"
@@ -231,10 +241,10 @@ onErrorCaptured((err) => {
     </nav>
     <main class="content">
       <div v-if="fatalError" class="fatal-error">
-        <h2>画面の表示中にエラーが発生しました</h2>
+        <h2>{{ t('app.fatalError.title') }}</h2>
         <p class="detail">{{ fatalError }}</p>
-        <p>他の画面に切り替えるか、アプリを再起動してください。解決しない場合はこのメッセージを開発者に連絡してください。</p>
-        <button @click="fatalError = ''">閉じる</button>
+        <p>{{ t('app.fatalError.hint') }}</p>
+        <button @click="fatalError = ''">{{ t('common.action.close') }}</button>
       </div>
       <component :is="screens.find((s) => s.id === current)!.component" v-else />
     </main>

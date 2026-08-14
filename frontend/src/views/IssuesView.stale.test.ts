@@ -8,7 +8,8 @@
  *
  * 方式(@vue/test-utils を入れずに createApp でマウントする理由):
  * このテストが必要とするのは「マウント・DOM のクリック・テキストの確認」だけで、
- * Vue の createApp と happy-dom の DOM API で足りる。@vue/test-utils は
+ * Vue の createApp と happy-dom の DOM API で足りる(i18n の登録だけは
+ * lib/testing/mountWithI18n.ts に集約している)。@vue/test-utils は
  * js-beautify / glob 等 30 以上の依存を持ち込むため、意図的に軽く保っている
  * 現在の開発ツール構成(happy-dom を選んだ経緯は vite.config.ts のコメント参照)に
  * 対して割に合わない。
@@ -17,7 +18,8 @@
  * ここで固定するのは「配線されているか」という状態遷移の部分だけ。
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { createApp, nextTick, type App } from 'vue'
+import { nextTick, type App } from 'vue'
+import { mountWithI18n } from '../lib/testing/mountWithI18n'
 import type {
   Backend,
   IssueDetail,
@@ -177,10 +179,7 @@ interface Screen {
 
 async function mountIssuesView(backend: Backend): Promise<Screen> {
   holder.backend = backend
-  const host = document.createElement('div')
-  document.body.appendChild(host)
-  const app = createApp(IssuesView)
-  app.mount(host)
+  const { app, host } = mountWithI18n(IssuesView)
   // onMounted の非同期連鎖(プロファイル → プロジェクト → 候補・カスタム属性)を待つ
   await flush()
 

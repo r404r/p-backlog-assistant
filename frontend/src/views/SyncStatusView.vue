@@ -1,6 +1,7 @@
 <script lang="ts" setup>
 // 同期状態画面。TDD 例外(GUI): フロントエンドにテスト基盤が無いため手動確認で担保する。
 import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { useI18n } from 'vue-i18n'
 import {
   formatSyncProgress,
   getBackend,
@@ -15,7 +16,10 @@ import {
   type SyncResult,
   type SyncStateRow,
 } from '../lib/backend'
-import { errorMessage, formatDateTime, formatElapsed, syncModeLabel } from '../lib/format'
+import { translateSyncMode } from '../lib/enumLabels'
+import { errorMessage, formatDateTime, formatElapsed } from '../lib/format'
+import type { Language } from '../lib/i18n'
+import { useMessage } from '../lib/message'
 import { runSharedProjectRefresh, shouldSkipProjectRefreshFor } from '../lib/projectRefresh'
 import {
   resolveProjectSelection,
@@ -33,23 +37,33 @@ import {
 const backend = getBackend()
 const mock = isMockBackend()
 
+// 翻訳関数と表示言語はこの画面の i18n インスタンスから取る
+// (lib の既定値=グローバル Composer に任せると、独立インスタンスと食い違う)
+const { t, locale } = useI18n()
+const language = computed(() => locale.value as Language)
+
 /**
  * 破棄済み・プロファイル切替後の画面が、後から届いた古い応答で
  * 共有のプロジェクト選択を書き換えてしまうのを防ぐガード(高 1)。
  */
 const selectionGuard = useProjectSelectionGuard()
 
-/** データ種別の日本語表記 */
-const DATA_KIND_LABELS: Record<string, string> = {
-  projects: 'プロジェクト',
-  issues: '課題',
-  users: 'ユーザ',
-  teams: 'チーム',
-  project_users: 'プロジェクト参加ユーザ',
+/**
+ * データ種別 → カタログキーの対応表(設計 §3.3 の「キー対応表」)。
+ * dataKind は Go 側 sync_state テーブルの機械値なのでフロントで翻訳できる。
+ */
+const DATA_KIND_LABEL_KEYS: Record<string, string> = {
+  projects: 'sync.dataKind.projects',
+  issues: 'sync.dataKind.issues',
+  users: 'sync.dataKind.users',
+  teams: 'sync.dataKind.teams',
+  project_users: 'sync.dataKind.projectUsers',
 }
 
+/** 未知の種別は訳を捏造せず、機械値をそのまま出す(異常に気付けるように) */
 function dataKindLabel(kind: string): string {
-  return DATA_KIND_LABELS[kind] ?? kind
+  const key = DATA_KIND_LABEL_KEYS[kind]
+  return key ? t(key) : kind
 }
 
 // ---------------------------------------------------------------------------
@@ -59,19 +73,21 @@ function dataKindLabel(kind: string): string {
 const profileId = ref('')
 const initializing = ref(true)
 const loading = ref(false)
-const globalError = ref('')
+const [globalError, setGlobalError] = useMessage(t)
 
 const states = ref<SyncStateRow[]>([])
 const projects = ref<Project[]>([])
 // プロジェクト選択は画面をまたいで共有する(projectSelection モジュールが保持し、
 // プロファイルごとに localStorage へ保存する)
 /** プロジェクト一覧の最新化に失敗した場合の警告(キャッシュ表示は継続する) */
-const projectsWarning = ref('')
+const [projectsWarning, setProjectsWarning] = useMessage(t)
 
 function projectLabel(projectId: number): string {
-  if (!projectId) return '(スペース全体)'
+  if (!projectId) return t('sync.project.whole')
   const p = projects.value.find((x) => x.id === projectId)
-  return p ? `${p.name}(${p.projectKey})` : `プロジェクト ID ${projectId}`
+  return p
+    ? t('sync.project.named', { name: p.name, key: p.projectKey })
+    : t('sync.project.byId', { id: projectId })
 }
 
 async function reload() {
@@ -82,7 +98,7 @@ async function reload() {
   await loadRateLimit()
   const token = selectionGuard.begin()
   loading.value = true
-  globalError.value = ''
+  setGlobalError(null)
   try {
     const [s, p] = await Promise.all([
       backend.getSyncState(profileId.value),
@@ -96,7 +112,7 @@ async function reload() {
     // 復元した(または選択中の)プロジェクトが一覧に無ければ先頭へフォールバックする
     selectedProjectId.value = resolveProjectSelection(projects.value, selectedProjectId.value)
   } catch (e) {
-    globalError.value = `同期状態の取得に失敗しました: ${errorMessage(e)}`
+    setGlobalError('sync.error.loadState', { message: errorMessage(e) })
   } finally {
     loading.value = false
   }
@@ -123,8 +139,7 @@ async function reload() {
 async function refreshProjects() {
   if (!profileId.value || syncingProjects.value) return
   if (issueSyncRunning.value) {
-    projectsWarning.value =
-      '課題の同期中のため、プロジェクト一覧の最新化は省略しました(表示はローカルキャッシュです)。'
+    setProjectsWarning('sync.warning.skippedDuringIssueSync')
     await reload()
     return
   }
@@ -133,13 +148,12 @@ async function refreshProjects() {
     return
   }
   syncingProjects.value = true
-  projectsWarning.value = ''
+  setProjectsWarning(null)
   try {
     // 成功時だけ起点が記録される(失敗時は記録されず、次の画面表示で再試行する)
     await runSharedProjectRefresh(profileId.value, () => backend.syncProjects(profileId.value))
   } catch {
-    projectsWarning.value =
-      'プロジェクト一覧を最新化できませんでした(オフライン等)。表示はローカルキャッシュです。'
+    setProjectsWarning('sync.warning.refreshFailed')
   } finally {
     syncingProjects.value = false
   }
@@ -150,11 +164,17 @@ async function refreshProjects() {
 // レート制限の残量
 // ---------------------------------------------------------------------------
 
-const RATE_CATEGORY_LABELS: Record<string, string> = {
-  read: '読み込み',
-  update: '更新',
-  search: '検索',
-  icon: 'アイコン',
+const RATE_CATEGORY_LABEL_KEYS: Record<string, string> = {
+  read: 'sync.rate.category.read',
+  update: 'sync.rate.category.update',
+  search: 'sync.rate.category.search',
+  icon: 'sync.rate.category.icon',
+}
+
+/** 未知の区分は訳を捏造せず、Go から届いた名前をそのまま出す */
+function rateCategoryLabel(name: string): string {
+  const key = RATE_CATEGORY_LABEL_KEYS[name]
+  return key ? t(key) : name
 }
 
 /** 残量の自動更新間隔(ミリ秒)。バックエンド呼び出しは追加の API 通信を伴わない */
@@ -220,7 +240,7 @@ onMounted(async () => {
   try {
     profileId.value = await backend.getActiveProfile()
   } catch (e) {
-    globalError.value = `接続先プロファイルの取得に失敗しました: ${errorMessage(e)}`
+    setGlobalError('sync.error.activeProfile', { message: errorMessage(e) })
   } finally {
     initializing.value = false
   }
@@ -250,7 +270,7 @@ const syncing = ref(false)
 const syncingProjects = ref(false)
 const syncResult = ref<SyncResult | null>(null)
 const syncResultProject = ref('')
-const syncError = ref('')
+const [syncError, setSyncError] = useMessage(t)
 
 /**
  * 課題同期が実行中か。ローカルの syncing に加えて共有状態も見る(R10)。
@@ -269,7 +289,7 @@ const issueSyncing = computed(() => syncing.value || issueSyncRunning.value)
 const activeIssueSyncLabel = computed(() => {
   const running = activeIssueSync.value
   if (!running) return ''
-  if (running.profileId !== profileId.value) return '別の接続先のプロジェクト'
+  if (running.profileId !== profileId.value) return t('sync.project.otherProfile')
   return projectLabel(running.projectId)
 })
 
@@ -281,7 +301,8 @@ const busy = computed(() => issueSyncing.value || syncingProjects.value || loadi
  */
 const syncProgress = ref<SyncProgress | null>(null)
 const syncProgressText = computed(() =>
-  syncProgress.value ? formatSyncProgress(syncProgress.value) : '',
+  // 翻訳関数・表示言語はこの画面の i18n インスタンスから渡す(IssuesView と同じ流儀)
+  syncProgress.value ? formatSyncProgress(syncProgress.value, t, language.value) : '',
 )
 let unsubscribeSyncProgress: (() => void) | null = null
 
@@ -310,7 +331,7 @@ onUnmounted(() => {
 async function runIssueSync() {
   if (!selectedProjectId.value || busy.value) return
   syncing.value = true
-  syncError.value = ''
+  setSyncError(null)
   syncResult.value = null
   syncProgress.value = null
   syncResultProject.value = projectLabel(selectedProjectId.value)
@@ -328,7 +349,7 @@ async function runIssueSync() {
     )
     await reload()
   } catch (e) {
-    syncError.value = `同期に失敗しました: ${errorMessage(e)}`
+    setSyncError('sync.error.syncIssues', { message: errorMessage(e) })
   } finally {
     syncing.value = false
     syncProgress.value = null
@@ -349,14 +370,14 @@ async function runIssueSync() {
 async function runProjectSync() {
   if (busy.value) return
   syncingProjects.value = true
-  syncError.value = ''
-  projectsWarning.value = ''
+  setSyncError(null)
+  setProjectsWarning(null)
   try {
     // 成功すると自動突合の起点も更新される(手動同期でも突合は済んでいるため)
     await runSharedProjectRefresh(profileId.value, () => backend.syncProjects(profileId.value))
     await reload()
   } catch (e) {
-    syncError.value = `プロジェクトの同期に失敗しました: ${errorMessage(e)}`
+    setSyncError('sync.error.syncProjects', { message: errorMessage(e) })
   } finally {
     syncingProjects.value = false
   }
@@ -365,95 +386,93 @@ async function runProjectSync() {
 
 <template>
   <div class="sync-status">
-    <h1>同期状態</h1>
+    <h1>{{ t('sync.title') }}</h1>
 
-    <p v-if="mock" class="mock-note">
-      Wails ランタイム外で動作中のため、モックデータを表示しています(実データではありません)。
-    </p>
+    <p v-if="mock" class="mock-note">{{ t('sync.mockNote') }}</p>
 
     <p v-if="globalError" class="error">{{ globalError }}</p>
 
     <p v-if="projectsWarning" class="notice warn">{{ projectsWarning }}</p>
 
-    <p v-if="initializing">読み込み中...</p>
+    <p v-if="initializing">{{ t('common.state.loading') }}</p>
 
-    <p v-else-if="!profileId" class="notice">
-      接続先プロファイルが選択されていません。「接続設定」画面でプロファイルを登録・選択してください。
-    </p>
+    <p v-else-if="!profileId" class="notice">{{ t('sync.noProfile') }}</p>
 
     <template v-else>
       <!-- 同期状態一覧 -->
       <section class="panel">
-        <h2>データ種別ごとの最終同期時刻</h2>
+        <h2>{{ t('sync.state.title') }}</h2>
 
-        <p v-if="loading">読み込み中...</p>
+        <p v-if="loading">{{ t('common.state.loading') }}</p>
 
-        <p v-else-if="states.length === 0" class="notice">
-          同期の記録がありません。下の「手動同期」から同期を実行してください。
-        </p>
+        <p v-else-if="states.length === 0" class="notice">{{ t('sync.state.empty') }}</p>
 
         <div v-else class="table-wrap">
           <table>
             <thead>
               <tr>
-                <th>データ種別</th>
-                <th>プロジェクト</th>
-                <th>最終同期時刻</th>
-                <th>経過</th>
+                <th>{{ t('sync.state.colDataKind') }}</th>
+                <th>{{ t('common.label.project') }}</th>
+                <th>{{ t('sync.state.colLastSynced') }}</th>
+                <th>{{ t('sync.state.colElapsed') }}</th>
               </tr>
             </thead>
             <tbody>
               <tr v-for="s in states" :key="`${s.dataKind}-${s.projectId}`">
                 <td>{{ dataKindLabel(s.dataKind) }}</td>
                 <td>{{ projectLabel(s.projectId) }}</td>
-                <td>{{ s.lastSyncedAt ? formatDateTime(s.lastSyncedAt) : '未同期' }}</td>
-                <td>{{ s.lastSyncedAt ? formatElapsed(s.lastSyncedAt) : '-' }}</td>
+                <td>
+                  {{ s.lastSyncedAt ? formatDateTime(s.lastSyncedAt) : t('common.state.notSynced') }}
+                </td>
+                <td>{{ s.lastSyncedAt ? formatElapsed(s.lastSyncedAt, t) : '-' }}</td>
               </tr>
             </tbody>
           </table>
         </div>
 
         <div class="row buttons">
-          <button :disabled="busy" @click="reload">再読込</button>
+          <button :disabled="busy" @click="reload">{{ t('common.action.reload') }}</button>
         </div>
       </section>
 
       <!-- 手動同期 -->
       <section class="panel">
-        <h2>手動同期</h2>
+        <h2>{{ t('sync.manual.title') }}</h2>
 
         <div class="row">
-          <label for="s-project">プロジェクト</label>
+          <label for="s-project">{{ t('common.label.project') }}</label>
           <select id="s-project" v-model="selectedProjectId" :disabled="busy">
-            <option v-if="projects.length === 0" :value="0">(プロジェクトがありません)</option>
+            <option v-if="projects.length === 0" :value="0">
+              {{ t('sync.manual.noProjects') }}
+            </option>
             <option v-for="p in projects" :key="p.id" :value="p.id">
-              {{ p.name }}({{ p.projectKey }})
+              {{ t('sync.project.named', { name: p.name, key: p.projectKey }) }}
             </option>
           </select>
         </div>
 
         <div class="row">
-          <label>同期モード</label>
+          <label>{{ t('sync.manual.modeLabel') }}</label>
           <label class="radio">
             <input v-model="syncMode" type="radio" value="auto" :disabled="busy" />
-            自動(初回はフル同期)
+            {{ t('sync.manual.modeAuto') }}
           </label>
           <label class="radio">
             <input v-model="syncMode" type="radio" value="full" :disabled="busy" />
-            フル同期
+            {{ translateSyncMode(t, 'full') }}
           </label>
           <label class="radio">
             <input v-model="syncMode" type="radio" value="incremental" :disabled="busy" />
-            差分同期
+            {{ translateSyncMode(t, 'incremental') }}
           </label>
         </div>
 
         <div class="row buttons">
           <button class="primary" :disabled="busy || !selectedProjectId" @click="runIssueSync">
-            {{ syncing ? '課題を同期中...' : '課題を同期' }}
+            {{ syncing ? t('sync.manual.syncingIssues') : t('sync.manual.syncIssues') }}
           </button>
           <button :disabled="busy" @click="runProjectSync">
-            {{ syncingProjects ? 'プロジェクト同期中...' : 'プロジェクト一覧を同期' }}
+            {{ syncingProjects ? t('sync.manual.syncingProjects') : t('sync.manual.syncProjects') }}
           </button>
           <span v-if="syncing || syncingProjects" class="spinner" aria-hidden="true"></span>
           <span v-if="syncing && syncProgressText" class="sync-progress" aria-live="polite">
@@ -464,30 +483,34 @@ async function runProjectSync() {
         <!-- 他画面(課題抽出)で開始した同期。runId を知らないため進捗は出せないが、
              操作できない理由は伝える(R10) -->
         <p v-if="!syncing && issueSyncRunning" class="hint warn">
-          他の画面で開始した課題同期({{ activeIssueSyncLabel }})が実行中です。
-          完了するまでプロジェクトの切り替えと同期は実行できません。
+          {{ t('sync.manual.otherSyncRunning', { target: activeIssueSyncLabel }) }}
         </p>
 
-        <p class="hint">
-          自動は同期状態から判定します(未同期・長期間未同期ならフル同期)。
-          差分同期は前回同期以降の更新のみを取得します。不整合が疑われる場合はフル同期を選んでください。
-          「プロジェクト一覧を同期」はプロジェクト一覧を最新化するだけで、課題は同期しません。
-        </p>
+        <p class="hint">{{ t('sync.manual.hint') }}</p>
 
         <p v-if="syncError" class="error">{{ syncError }}</p>
 
         <div v-if="syncResult" class="result ok">
           <p class="result-title">
-            {{ syncResultProject }} の{{ syncModeLabel(syncResult.mode) }}が完了しました
+            {{
+              t('sync.result.title', {
+                project: syncResultProject,
+                mode: translateSyncMode(t, syncResult.mode),
+              })
+            }}
           </p>
           <ul>
-            <li>取得: {{ syncResult.fetched }} 件</li>
-            <li>登録・更新: {{ syncResult.upserted }} 件</li>
-            <li>削除: {{ syncResult.deleted }} 件</li>
-            <li>所要時間: {{ (syncResult.durationMs / 1000).toFixed(1) }} 秒</li>
+            <li>{{ t('sync.result.fetched', { count: syncResult.fetched }) }}</li>
+            <li>{{ t('sync.result.upserted', { count: syncResult.upserted }) }}</li>
+            <li>{{ t('sync.result.deleted', { count: syncResult.deleted }) }}</li>
+            <li>
+              {{
+                t('sync.result.duration', { seconds: (syncResult.durationMs / 1000).toFixed(1) })
+              }}
+            </li>
           </ul>
           <div v-if="syncResult.warnings.length > 0" class="warnings">
-            <p class="result-title">警告</p>
+            <p class="result-title">{{ t('common.label.warning') }}</p>
             <ul>
               <li v-for="(w, i) in syncResult.warnings" :key="i">{{ w }}</li>
             </ul>
@@ -497,19 +520,19 @@ async function runProjectSync() {
 
       <!-- レート制限の残量(観測値のみ。10 秒間隔で自動更新) -->
       <section class="panel">
-        <h2>レート制限の残量</h2>
+        <h2>{{ t('sync.rate.title') }}</h2>
         <div v-if="rateLimit" class="table-wrap">
           <table class="rate-table">
             <thead>
               <tr>
-                <th>区分</th>
-                <th>残量 / 上限(毎分)</th>
-                <th>リセット時刻</th>
+                <th>{{ t('sync.rate.colCategory') }}</th>
+                <th>{{ t('sync.rate.colRemaining') }}</th>
+                <th>{{ t('sync.rate.colReset') }}</th>
               </tr>
             </thead>
             <tbody>
               <tr v-for="c in rateLimit.categories" :key="c.name">
-                <td>{{ RATE_CATEGORY_LABELS[c.name] ?? c.name }}</td>
+                <td>{{ rateCategoryLabel(c.name) }}</td>
                 <template v-if="c.observed">
                   <td>
                     <span :class="{ 'rate-low': c.limit > 0 && c.remaining < c.limit * 0.2 }">
@@ -520,25 +543,23 @@ async function runProjectSync() {
                   <td>{{ formatResetTime(c.resetUnix) }}</td>
                 </template>
                 <template v-else>
-                  <td colspan="2" class="rate-unknown">未取得(API 利用後に表示されます)</td>
+                  <td colspan="2" class="rate-unknown">{{ t('sync.rate.notObserved') }}</td>
                 </template>
               </tr>
             </tbody>
           </table>
         </div>
-        <p v-else class="hint">残量情報を取得できませんでした。</p>
-        <p class="hint">
-          サーバから観測した実測値を表示します(表示の更新に API は消費しません)。課題検索の同期は「検索」、一括更新の書き込みは「更新」の枠を使用します。
-        </p>
+        <p v-else class="hint">{{ t('sync.rate.unavailable') }}</p>
+        <p class="hint">{{ t('sync.rate.hint') }}</p>
       </section>
     </template>
 
     <!-- 動作ログの出力先(プロファイル未選択でも表示する) -->
     <p class="log-info">
       <template v-if="logInfo.enabled">
-        動作ログ: <span class="log-path">{{ logInfo.path }}</span>
+        {{ t('sync.log.label') }} <span class="log-path">{{ logInfo.path }}</span>
       </template>
-      <template v-else>ログ出力は無効です</template>
+      <template v-else>{{ t('sync.log.disabled') }}</template>
     </p>
   </div>
 </template>

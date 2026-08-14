@@ -7,7 +7,8 @@
  * 食い違わないよう、同じ観点を両方に用意する)。
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { createApp, nextTick, type App } from 'vue'
+import { nextTick, type App } from 'vue'
+import { mountWithI18n } from '../lib/testing/mountWithI18n'
 import type { Backend, Project } from '../lib/backend'
 import {
   PROJECT_REFRESH_INTERVAL_MS,
@@ -70,10 +71,7 @@ interface Screen {
 
 async function mountSyncStatusView(backend: Backend): Promise<Screen> {
   holder.backend = backend
-  const host = document.createElement('div')
-  document.body.appendChild(host)
-  const app = createApp(SyncStatusView)
-  app.mount(host)
+  const { app, host } = mountWithI18n(SyncStatusView)
   // onMounted の非同期連鎖(プロファイル → 動作ログ → プロジェクト一覧)を待つ
   await flush()
   return {

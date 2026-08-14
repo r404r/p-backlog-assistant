@@ -1,0 +1,28 @@
+{
+  "title": "Backlog Assistant",
+  "titleShort": "BA",
+  "versionTitle": "Version {version}",
+  "sidebar": {
+    "expand": "Expand the menu",
+    "collapse": "Collapse the menu",
+    "resizeHandle": "Drag to adjust the width (double-click to restore the default width)"
+  },
+  "nav": {
+    "settings": "Connection",
+    "settingsShort": "Cn",
+    "issues": "Issues",
+    "issuesShort": "Is",
+    "bulkUpdate": "Bulk Update",
+    "bulkUpdateShort": "Bu",
+    "users": "Users",
+    "usersShort": "Us",
+    "syncStatus": "Sync Status",
+    "syncStatusShort": "Sy",
+    "about": "About",
+    "aboutShort": "Ab"
+  },
+  "fatalError": {
+    "title": "An error occurred while displaying this screen",
+    "hint": "Switch to another screen or restart the app. If the problem persists, please report this message to the developer."
+  }
+}

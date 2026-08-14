@@ -1,0 +1,164 @@
+{
+  "title": "Issues",
+  "mockNote": "Running outside the Wails runtime, so mock data is shown (this is not real data).",
+  "noProfile": "No connection profile is selected. Add and select a profile on the Connection screen.",
+  "rangeSeparator": "–",
+  "value": {
+    "unset": "(Not set)",
+    "none": "(None)"
+  },
+  "project": {
+    "empty": "(No projects)",
+    "option": "{name} ({key})",
+    "sync": "Sync project list",
+    "syncing": "Syncing projects...",
+    "syncTitle": "Update the project list (issues are not synced)",
+    "lockedBySync": "You cannot switch projects while syncing (switch after the sync finishes).",
+    "hint": "\"Sync project list\" only updates the list of projects (issues are not synced). To import issues, run \"Sync\" below.",
+    "neverSynced": "The issues of this project have not been synced yet. Run the \"Sync\" button below (issue sync). (\"Sync project list\" only updates the list of projects.)",
+    "refreshSkippedBySync": "Skipped updating the project list because issues are being synced (showing the local cache).",
+    "refreshFailed": "Could not update the project list (offline, etc.). Showing the local cache."
+  },
+  "freshness": {
+    "label": "Data freshness:",
+    "unknown": "Could not get the freshness (check the log)",
+    "lastSynced": "Last synced {at} ({elapsed})"
+  },
+  "sync": {
+    "title": "Sync",
+    "mode": "Sync mode",
+    "modeAuto": "Auto (full sync on the first run)",
+    "run": "Sync",
+    "runningElsewhere": "An issue sync started on another screen is running. Sync, search, and Excel export are unavailable until it finishes.",
+    "hint": "Auto decides from the sync state (full sync if never synced or not synced for a long time). Incremental sync fetches only the updates since the last sync. Choose full sync if you suspect inconsistencies.",
+    "result": {
+      "title": "{mode} completed",
+      "fetched": "Fetched: {count}",
+      "upserted": "Added / updated: {count}",
+      "deleted": "Deleted: {count}",
+      "duration": "Elapsed: {seconds} s"
+    }
+  },
+  "search": {
+    "title": "Search conditions",
+    "keyword": "Keyword",
+    "keywordPlaceholder": "Partial match on issue key + summary + description (separate multiple keywords with spaces)",
+    "keywordMode": "Multiple keywords",
+    "keywordAnd": "Match all (AND)",
+    "keywordOr": "Match any (OR)",
+    "keywordHintPrefix": "Keyword search is a partial match on the ",
+    "keywordHintTarget": "issue key, summary, and description",
+    "keywordHintSuffix": " stored in the local database. Comments, attachments, and so on are out of scope, so the range differs from the keyword search on the Backlog site. Separate words with spaces (half-width or full-width) to use multiple keywords (you cannot search for a phrase that contains spaces). Press Enter in the keyword field to search.",
+    "updated": "Updated",
+    "created": "Created",
+    "assignee": "Assignee",
+    "optionsHint": "The status and assignee choices are built from synced issues. They become selectable after a sync.",
+    "searching": "Searching...",
+    "blockedBySync": "You cannot search while syncing (run it after the sync finishes)."
+  },
+  "cf": {
+    "summary": "Filter by custom fields",
+    "count": "({count} set)",
+    "min": "Min",
+    "max": "Max",
+    "contains": "Partial match",
+    "hint": "When several custom fields are specified, only issues that match all of them (AND) are targeted. For choices, matching any one of them is enough. Issues with no value are excluded for fields where a range or a partial match is specified. Filtering runs against synced local data, so it may take longer than other conditions in projects with many issues."
+  },
+  "result": {
+    "title": "Search results",
+    "total": "Matches: {count}",
+    "range": "(showing {from}–{to})",
+    "exportAllNote": "All {count} matching issues are exported to Excel.",
+    "stale": "The data has been updated. Search again to see the latest results.",
+    "unverifiable": "{count} issues could not be checked against the custom field conditions because the local issue data is out of date (they are not included in the number of matches above). Running a full sync resolves this.",
+    "columnsOutOfDate": "The custom field column selection has changed. Search again to apply it to the list.",
+    "empty": "No issues matched the conditions.",
+    "column": {
+      "issueKey": "Issue key",
+      "summary": "Summary",
+      "statusName": "Status",
+      "assigneeName": "Assignee",
+      "issueTypeName": "Issue Type",
+      "priorityName": "Priority",
+      "created": "Created",
+      "updated": "Updated",
+      "dueDate": "Due Date"
+    },
+    "detailTitle": "Click to show the details",
+    "detailDisabled": "Details are unavailable while syncing",
+    "copyUrl": "Copy the issue URL",
+    "hintDetail": "Click an issue key to show the issue details from the synced data.",
+    "hintCopy": "Click the clipboard icon next to it to copy the URL of that issue.",
+    "hintCustomColumns": "The custom fields shown in the list follow the columns selected in \"Excel export\" below."
+  },
+  "pager": {
+    "first": "« First",
+    "prev": "‹ Previous",
+    "next": "Next ›",
+    "last": "Last »",
+    "inputLabel": "Page number (press Enter to move)",
+    "total": "/ {count} pages"
+  },
+  "export": {
+    "title": "Excel export",
+    "hint": "Select the columns to export (all issues matching the current conditions are exported).",
+    "customHint": "Custom fields (not exported by default). The columns selected here are also shown in the search results.",
+    "run": "Export to Excel",
+    "blockedBySync": "You cannot export to Excel while syncing (run it after the sync finishes).",
+    "noColumns": "Select at least one column to export.",
+    "canceled": "The Excel export was canceled.",
+    "done": "The Excel export finished ({count} rows)",
+    "unverifiable": "{count} issues could not be checked against the custom field conditions because the local issue data is out of date, so they are not included in the export. Running a full sync resolves this."
+  },
+  "detail": {
+    "field": {
+      "status": "Status",
+      "issueType": "Issue Type",
+      "priority": "Priority",
+      "assignee": "Assignee",
+      "dueDate": "Due Date",
+      "created": "Created",
+      "updated": "Updated",
+      "parentIssue": "Parent Issue"
+    },
+    "customFields": "Custom fields",
+    "description": "Description",
+    "noDescription": "(No description)",
+    "comments": "Comments",
+    "commentsNotFetched": "Not fetched yet (use \"Get the latest state\" to fetch them).",
+    "noComments": "(No comments)",
+    "unknownAuthor": "(Unknown)",
+    "historyOnly": "{count} more change history entries (check them in Backlog)",
+    "commentsTruncated": "This issue has many comments, so only the latest ones were fetched. Check the older comments in Backlog.",
+    "commentNote": {
+      "fetched": "Comments are not fetched by sync. This is the content at the time you pressed \"Get the latest state\" (fetched: {at}).",
+      "notFetched": "Comments have not been fetched. You can fetch them with \"Get the latest state\"."
+    },
+    "note": {
+      "fetched": "This is the content as of {at}. It may differ from the latest state in Backlog.",
+      "unknown": "This is the content as of the time it was imported locally. It may differ from the latest state in Backlog."
+    },
+    "refresh": "Get the latest state",
+    "refreshing": "Fetching...",
+    "copyUrl": "Copy URL",
+    "openInBrowser": "Open in browser"
+  },
+  "toast": {
+    "copied": "Copied the issue URL ({key})"
+  },
+  "error": {
+    "activeProfile": "Failed to get the active connection profile: {message}",
+    "loadProjects": "Failed to get the project list: {message}",
+    "syncProjects": "Failed to sync the projects: {message}",
+    "exportColumns": "Could not get the information about the columns to export: {message}",
+    "customFields": "Failed to get the custom fields (you can still search and export the fixed columns): {message}",
+    "filterOptions": "Failed to get the filter choices: {message}",
+    "search": "Failed to search: {message}",
+    "page": "Failed to load the page: {message}",
+    "copyUrl": "Could not copy the issue URL: {message}",
+    "issueDetail": "Could not get the issue details: {message}",
+    "refreshDetail": "Could not get the latest state: {message}",
+    "sync": "Failed to sync: {message}",
+    "export": "Failed to export to Excel: {message}"
+  }
+}

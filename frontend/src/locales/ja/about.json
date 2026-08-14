@@ -1,0 +1,66 @@
+{
+  "title": "アプリ情報",
+  "description": "Nulab Backlog の課題とユーザ情報を、ローカルにキャッシュしながら安全に抽出・一括更新するデスクトップアプリです。",
+  "field": {
+    "version": "バージョン",
+    "author": "作者",
+    "github": "GitHub",
+    "docs": "ドキュメント",
+    "contact": "連絡先",
+    "license": "ライセンス"
+  },
+  "author": "r404r",
+  "github": {
+    "note": "不具合の報告・要望はこちらの Issues へお寄せください。"
+  },
+  "docs": {
+    "readme": "README",
+    "userGuide": "ユーザガイド",
+    "note": "既定のブラウザで開きます(概要は README、操作手順はユーザガイド)。"
+  },
+  "license": {
+    "name": "MIT License",
+    "note": "配布物およびリポジトリの LICENSE ファイルをご確認ください。"
+  },
+  "theme": {
+    "title": "表示テーマ",
+    "description": "画面の配色を切り替えます。選ぶとすぐに反映され、設定は自動で保存されます。",
+    "mode": {
+      "system": "システムに合わせる(既定)",
+      "light": "ライト",
+      "dark": "ダーク"
+    },
+    "systemNote": "「システムに合わせる」は OS の外観設定に追従します。",
+    "titleBarNote": "ウィンドウ枠(タイトルバー)の配色は、Windows ではテーマに追従し、macOS では OS の外観設定に従います。"
+  },
+  "language": {
+    "title": "言語 / Language",
+    "description": "画面の表示言語を切り替えます。選ぶとすぐに反映され、設定は自動で保存されます。",
+    "mode": {
+      "system": "システムに合わせる(既定)",
+      "ja": "日本語",
+      "en": "English"
+    },
+    "systemNote": "「システムに合わせる」は OS・ブラウザの言語設定に追従します。",
+    "limitationNote": "このバージョンでは、Backlog から取得したデータ、アプリが返す一部のメッセージ、Excel の出力内容は日本語のままです。"
+  },
+  "storage": {
+    "title": "保存データ",
+    "description": "このアプリがこのパソコンに保存しているファイルの場所です。API キーは下記のファイルではなく OS のキーチェーンに保存されます。",
+    "loadFailed": "保存データの情報を取得できませんでした: {message}",
+    "configDir": "設定フォルダ",
+    "configDirNote": "接続プロファイル(config.json)の保存先です。",
+    "database": "ローカル DB",
+    "databaseNote": "取得した課題・ユーザのキャッシュです。削除してもアプリは再取得できます。",
+    "noProfile": "プロファイルが登録されていません。",
+    "dbError": "取得エラー: {message}",
+    "dbSize": "{size}(WAL・SHM を含む合計)",
+    "dbMissing": "未作成(接続テスト後に作成されます)",
+    "dbLeftover": "WAL・SHM のみ残っています(合計 {size})",
+    "bytes": "{count} バイト",
+    "log": "動作ログ",
+    "logNote": "不具合の報告時に添付いただくと調査が早くなります。",
+    "logDisabled": "無効",
+    "logDisabledNote": "ログ出力が無効なため、ファイルは作成されません。"
+  }
+}

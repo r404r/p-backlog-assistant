@@ -1,0 +1,81 @@
+{
+  "action": {
+    "cancel": "キャンセル",
+    "close": "閉じる",
+    "retry": "再試行",
+    "reload": "再読込",
+    "search": "検索",
+    "clearConditions": "条件をクリア",
+    "run": "実行"
+  },
+  "state": {
+    "loading": "読み込み中...",
+    "exporting": "出力中...",
+    "syncing": "同期中...",
+    "notSynced": "未同期",
+    "all": "すべて",
+    "unknown": "不明"
+  },
+  "label": {
+    "project": "プロジェクト",
+    "status": "状態",
+    "warning": "警告",
+    "error": "エラー",
+    "page": "ページ"
+  },
+  "enum": {
+    "action": {
+      "create": "新規追加",
+      "update": "更新",
+      "skip": "変更なし"
+    },
+    "rowStatus": {
+      "pending": "未処理",
+      "sending": "送信中(結果未確認)",
+      "done": "完了",
+      "error": "失敗",
+      "conflict": "競合",
+      "skip": "変更なし"
+    },
+    "roleType": {
+      "role1": "管理者",
+      "role2": "一般ユーザ",
+      "role3": "レポーター",
+      "role4": "閲覧者",
+      "role5": "ゲストレポーター",
+      "role6": "ゲスト閲覧者",
+      "unknown": "不明({value})"
+    },
+    "syncMode": {
+      "auto": "自動",
+      "full": "フル同期",
+      "incremental": "差分同期"
+    }
+  },
+  "column": {
+    "_comment": "common.column.* は Excel の列名・列選択に出すラベルで、短さを優先する。画面の結果表の見出しなど、短いと曖昧になる場所では各画面のカタログ側で明確な語を使う(例: issueKey は列選択では『Key』、課題一覧の見出しでは issues.* の『Issue key』)。意図的な使い分けのため統一しないこと。JSON にコメントが書けないための注記キーで、表示には使わない(先頭が _ のキーは localeCatalog.test.ts が注記として扱う)。",
+    "issue": {
+      "issueKey": "キー",
+      "summary": "件名",
+      "statusName": "状態",
+      "assigneeName": "担当者",
+      "issueTypeName": "種別",
+      "priorityName": "優先度",
+      "created": "作成日時",
+      "updated": "更新日時",
+      "dueDate": "期限",
+      "description": "詳細",
+      "parentIssueKey": "親課題キー"
+    },
+    "user": {
+      "userCode": "ユーザID",
+      "name": "名前",
+      "mailAddress": "メールアドレス",
+      "roleName": "ロール",
+      "roleType": "ロール値",
+      "teamNames": "所属チーム",
+      "projectKeys": "参加プロジェクト",
+      "adminProjectKeys": "管理者プロジェクト"
+    }
+  }
+}

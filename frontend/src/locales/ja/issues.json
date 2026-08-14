@@ -1,0 +1,164 @@
+{
+  "title": "課題抽出",
+  "mockNote": "Wails ランタイム外で動作中のため、モックデータを表示しています(実データではありません)。",
+  "noProfile": "接続先プロファイルが選択されていません。「接続設定」画面でプロファイルを登録・選択してください。",
+  "rangeSeparator": "〜",
+  "value": {
+    "unset": "(未設定)",
+    "none": "(なし)"
+  },
+  "project": {
+    "empty": "(プロジェクトがありません)",
+    "option": "{name}({key})",
+    "sync": "プロジェクト一覧を同期",
+    "syncing": "プロジェクト同期中...",
+    "syncTitle": "プロジェクト一覧を最新化(課題は同期しません)",
+    "lockedBySync": "同期中はプロジェクトを切り替えできません(同期の完了後に切り替えてください)。",
+    "hint": "「プロジェクト一覧を同期」はプロジェクト一覧を最新化(課題は同期しません)。課題を取り込むには下の「同期」を実行してください。",
+    "neverSynced": "このプロジェクトの課題はまだ同期されていません。下の「同期」ボタン(課題の同期)を実行してください(「プロジェクト一覧を同期」はプロジェクト一覧の更新のみです)。",
+    "refreshSkippedBySync": "課題の同期中のため、プロジェクト一覧の最新化は省略しました(表示はローカルキャッシュです)。",
+    "refreshFailed": "プロジェクト一覧を最新化できませんでした(オフライン等)。表示はローカルキャッシュです。"
+  },
+  "freshness": {
+    "label": "データ鮮度:",
+    "unknown": "鮮度を取得できませんでした(ログを確認してください)",
+    "lastSynced": "最終同期 {at} ({elapsed})"
+  },
+  "sync": {
+    "title": "同期",
+    "mode": "同期モード",
+    "modeAuto": "自動(初回はフル同期)",
+    "run": "同期",
+    "runningElsewhere": "他の画面で開始した課題同期が実行中です。完了するまで同期・検索・Excel 出力は実行できません。",
+    "hint": "自動は同期状態から判定します(未同期・長期間未同期ならフル同期)。差分同期は前回同期以降の更新のみを取得します。不整合が疑われる場合はフル同期を選んでください。",
+    "result": {
+      "title": "{mode}が完了しました",
+      "fetched": "取得: {count} 件",
+      "upserted": "登録・更新: {count} 件",
+      "deleted": "削除: {count} 件",
+      "duration": "所要時間: {seconds} 秒"
+    }
+  },
+  "search": {
+    "title": "検索条件",
+    "keyword": "キーワード",
+    "keywordPlaceholder": "課題キー + 件名 + 詳細の部分一致(スペース区切りで複数指定)",
+    "keywordMode": "複数キーワード",
+    "keywordAnd": "すべて含む(AND)",
+    "keywordOr": "いずれかを含む(OR)",
+    "keywordHintPrefix": "キーワード検索はローカル DB に保存された",
+    "keywordHintTarget": "課題キー・件名・詳細",
+    "keywordHintSuffix": "に対する部分一致です。コメント・添付ファイル等は対象外で、Backlog サイト上のキーワード検索とは範囲が異なります。スペース(半角・全角)で区切ると複数キーワードになります(スペースを含む語句そのものの検索はできません)。キーワード欄で Enter を押すと検索します。",
+    "updated": "更新日",
+    "created": "作成日",
+    "assignee": "担当者",
+    "optionsHint": "状態・担当者の候補は同期済みの課題から作成されます。同期後に選択できるようになります。",
+    "searching": "検索中...",
+    "blockedBySync": "同期中は検索できません(同期の完了後に実行してください)。"
+  },
+  "cf": {
+    "summary": "カスタム属性で絞り込む",
+    "count": "({count} 件指定中)",
+    "min": "下限",
+    "max": "上限",
+    "contains": "部分一致",
+    "hint": "複数のカスタム属性を指定した場合はすべてを満たす課題(AND)が対象です。選択肢はいずれか 1 つに一致すれば対象になります。値が未入力の課題は、範囲や部分一致を指定した属性では対象外になります。絞り込みは同期済みのローカルデータに対して行われるため、件数の多いプロジェクトでは他の条件より時間がかかることがあります。"
+  },
+  "result": {
+    "title": "検索結果",
+    "total": "該当 {count} 件",
+    "range": "({from}〜{to} 件目を表示)",
+    "exportAllNote": "Excel には条件に一致する全 {count} 件が出力されます。",
+    "stale": "データが更新されました。最新の結果を見るには再検索してください。",
+    "unverifiable": "{count} 件はローカルの課題データが古く、カスタム属性の条件を判定できませんでした(上の該当件数には含まれていません)。フル同期を実行すると解消します。",
+    "columnsOutOfDate": "カスタム属性の列選択が変わりました。表示に反映するには再度検索してください。",
+    "empty": "条件に一致する課題はありませんでした。",
+    "column": {
+      "issueKey": "課題キー",
+      "summary": "件名",
+      "statusName": "状態",
+      "assigneeName": "担当者",
+      "issueTypeName": "種別",
+      "priorityName": "優先度",
+      "created": "作成日",
+      "updated": "更新日",
+      "dueDate": "期限"
+    },
+    "detailTitle": "クリックで詳細を表示",
+    "detailDisabled": "同期中は詳細を表示できません",
+    "copyUrl": "課題 URL をコピー",
+    "hintDetail": "課題キーをクリックすると、同期済みの内容で課題の詳細を表示します。",
+    "hintCopy": "右隣のクリップボードのアイコンをクリックすると、その課題の URL をコピーします。",
+    "hintCustomColumns": "一覧に表示するカスタム属性は、下の「Excel 出力」で選んだ列に連動します。"
+  },
+  "pager": {
+    "first": "« 最初",
+    "prev": "‹ 前へ",
+    "next": "次へ ›",
+    "last": "最後 »",
+    "inputLabel": "ページ番号(Enter で移動)",
+    "total": "/ {count} ページ"
+  },
+  "export": {
+    "title": "Excel 出力",
+    "hint": "出力する列を選択してください(現在の検索条件に一致する全件が出力されます)。",
+    "customHint": "カスタム属性(既定では出力しません)。ここで選んだ列は検索結果の一覧にも表示されます。",
+    "run": "Excel 出力",
+    "blockedBySync": "同期中は Excel 出力できません(同期の完了後に実行してください)。",
+    "noColumns": "出力する列を 1 つ以上選択してください。",
+    "canceled": "Excel 出力はキャンセルされました。",
+    "done": "Excel 出力が完了しました({count} 件)",
+    "unverifiable": "{count} 件はローカルの課題データが古く、カスタム属性の条件を判定できず出力に含まれていません。フル同期を実行すると解消します。"
+  },
+  "detail": {
+    "field": {
+      "status": "状態",
+      "issueType": "種別",
+      "priority": "優先度",
+      "assignee": "担当者",
+      "dueDate": "期限",
+      "created": "作成日時",
+      "updated": "更新日時",
+      "parentIssue": "親課題"
+    },
+    "customFields": "カスタム属性",
+    "description": "詳細",
+    "noDescription": "(詳細は入力されていません)",
+    "comments": "コメント",
+    "commentsNotFetched": "まだ取得していません(「最新の状態を取得」で取得できます)。",
+    "noComments": "(コメントはありません)",
+    "unknownAuthor": "(不明)",
+    "historyOnly": "ほか変更履歴 {count} 件(Backlog で確認)",
+    "commentsTruncated": "コメントが多いため最新分のみ取得しました。以前のコメントは Backlog で確認してください。",
+    "commentNote": {
+      "fetched": "コメントは同期では取得されません。「最新の状態を取得」を押した時点の内容です(取得: {at})。",
+      "notFetched": "コメントは未取得です。「最新の状態を取得」で取得できます。"
+    },
+    "note": {
+      "fetched": "{at} 時点の内容です。Backlog 側の最新の状態とは異なる場合があります。",
+      "unknown": "ローカルへ取り込んだ時点の内容です。Backlog 側の最新の状態とは異なる場合があります。"
+    },
+    "refresh": "最新の状態を取得",
+    "refreshing": "取得中...",
+    "copyUrl": "URL をコピー",
+    "openInBrowser": "ブラウザで開く"
+  },
+  "toast": {
+    "copied": "課題 URL をコピーしました({key})"
+  },
+  "error": {
+    "activeProfile": "接続先プロファイルの取得に失敗しました: {message}",
+    "loadProjects": "プロジェクト一覧の取得に失敗しました: {message}",
+    "syncProjects": "プロジェクトの同期に失敗しました: {message}",
+    "exportColumns": "出力する列の情報を取得できませんでした: {message}",
+    "customFields": "カスタム属性の取得に失敗しました(固定列は検索・出力できます): {message}",
+    "filterOptions": "絞り込み候補の取得に失敗しました: {message}",
+    "search": "検索に失敗しました: {message}",
+    "page": "ページの取得に失敗しました: {message}",
+    "copyUrl": "課題 URL をコピーできませんでした: {message}",
+    "issueDetail": "課題の詳細を取得できませんでした: {message}",
+    "refreshDetail": "最新の状態を取得できませんでした: {message}",
+    "sync": "同期に失敗しました: {message}",
+    "export": "Excel 出力に失敗しました: {message}"
+  }
+}

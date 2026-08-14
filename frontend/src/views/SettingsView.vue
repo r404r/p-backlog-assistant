@@ -1,5 +1,6 @@
 <script lang="ts" setup>
 import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 import {
   getBackend,
   isMockBackend,
@@ -8,11 +9,14 @@ import {
   type Profile,
 } from '../lib/backend'
 import { errorMessage } from '../lib/format'
+import { useMessage } from '../lib/message'
 import { useModalFocus } from '../lib/modalFocus'
 import { invalidateProjectRefresh } from '../lib/projectRefresh'
 
 const backend = getBackend()
 const mock = isMockBackend()
+
+const { t } = useI18n()
 
 // ---------------------------------------------------------------------------
 // プロファイル一覧・接続先セレクタ
@@ -21,7 +25,7 @@ const mock = isMockBackend()
 const profiles = ref<Profile[]>([])
 const activeProfileId = ref<string>('')
 const loading = ref(true)
-const globalError = ref('')
+const [globalError, setGlobalError] = useMessage(t)
 
 const isFirstRun = computed(() => !loading.value && profiles.value.length === 0)
 
@@ -33,7 +37,7 @@ let activeSelectGen = 0
 
 async function reloadProfiles() {
   loading.value = true
-  globalError.value = ''
+  setGlobalError(null)
   try {
     profiles.value = await backend.listProfiles()
     // バックエンドに永続化された接続先を復元する
@@ -49,7 +53,7 @@ async function reloadProfiles() {
       activeProfileId.value = profiles.value.length > 0 ? profiles.value[0].id : ''
     }
   } catch (e) {
-    globalError.value = `プロファイル一覧の取得に失敗しました: ${errorMessage(e)}`
+    setGlobalError('settings.error.loadProfiles', { message: errorMessage(e) })
   } finally {
     loading.value = false
   }
@@ -68,7 +72,7 @@ watch(activeProfileId, async (id) => {
     persistedActiveId = id
   } catch (e) {
     if (gen !== activeSelectGen) return // 古い失敗で新しい選択を巻き戻さない
-    globalError.value = `接続先の保存に失敗しました: ${errorMessage(e)}`
+    setGlobalError('settings.error.saveActiveProfile', { message: errorMessage(e) })
     activeProfileId.value = persistedActiveId // UI の選択を元へ戻す
   }
 })
@@ -87,13 +91,15 @@ const form = reactive({
   apiKey: '',
 })
 const saving = ref(false)
-const formError = ref('')
+const [formError, setFormError] = useMessage(t)
 
 // 接続テスト状態
 const testing = ref(false)
 const testResult = ref<ConnectionTestResult | null>(null)
 
-const formTitle = computed(() => (formMode.value === 'edit' ? 'プロファイルの変更' : 'プロファイルの新規登録'))
+const formTitle = computed(() =>
+  formMode.value === 'edit' ? t('settings.form.titleEdit') : t('settings.form.titleCreate'),
+)
 
 /** 保存はテスト成功時のみ有効 */
 const canSave = computed(
@@ -114,7 +120,7 @@ function openCreateForm() {
   form.name = ''
   form.spaceUrl = ''
   form.apiKey = ''
-  formError.value = ''
+  setFormError(null)
   testResult.value = null
 }
 
@@ -124,25 +130,25 @@ function openEditForm(p: Profile) {
   form.name = p.name
   form.spaceUrl = p.spaceUrl
   form.apiKey = '' // 再表示機能は無し。空のままなら「キーは変更しない」
-  formError.value = ''
+  setFormError(null)
   testResult.value = null
 }
 
 function closeForm() {
   formMode.value = 'closed'
   form.apiKey = ''
-  formError.value = ''
+  setFormError(null)
   testResult.value = null
 }
 
 async function runTest() {
-  formError.value = ''
+  setFormError(null)
   if (!form.spaceUrl.trim()) {
-    formError.value = 'スペース URL を入力してください'
+    setFormError('settings.error.spaceUrlRequired')
     return
   }
   if (formMode.value === 'create' && !form.apiKey) {
-    formError.value = 'API キーを入力してください'
+    setFormError('settings.error.apiKeyRequired')
     return
   }
   testing.value = true
@@ -155,7 +161,7 @@ async function runTest() {
       form.apiKey.trim(),
     )
   } catch (e) {
-    formError.value = `接続テストに失敗しました: ${errorMessage(e)}`
+    setFormError('settings.error.test', { message: errorMessage(e) })
   } finally {
     testing.value = false
   }
@@ -177,7 +183,7 @@ async function refreshPermissionStatus(p: Profile) {
   try {
     permStatus.value = await backend.getPermissionStatus(p.id)
   } catch (e) {
-    globalError.value = `権限状態の確認に失敗しました: ${errorMessage(e)}`
+    setGlobalError('settings.error.permission', { message: errorMessage(e) })
   } finally {
     permLoading.value = false
   }
@@ -185,9 +191,9 @@ async function refreshPermissionStatus(p: Profile) {
 
 async function save() {
   if (!canSave.value) return
-  formError.value = ''
+  setFormError(null)
   if (!form.name.trim()) {
-    formError.value = 'プロファイル名を入力してください'
+    setFormError('settings.error.nameRequired')
     return
   }
   saving.value = true
@@ -215,7 +221,7 @@ async function save() {
     // 保存成功後に実権限を確認し、暫定表示を確定値へ置き換える
     await refreshPermissionStatus(saved)
   } catch (e) {
-    formError.value = `保存に失敗しました: ${errorMessage(e)}`
+    setFormError('settings.error.save', { message: errorMessage(e) })
   } finally {
     saving.value = false
   }
@@ -228,12 +234,12 @@ async function save() {
 const deleteTarget = ref<Profile | null>(null)
 const deleteLocalData = ref(true) // 既定 ON(設計書 4.1)
 const deleting = ref(false)
-const deleteError = ref('')
+const [deleteError, setDeleteError] = useMessage(t)
 
 function openDeleteDialog(p: Profile) {
   deleteTarget.value = p
   deleteLocalData.value = true
-  deleteError.value = ''
+  setDeleteError(null)
 }
 
 function closeDeleteDialog() {
@@ -256,7 +262,7 @@ useModalFocus(deleteModal, deleteDialogOpen, { onEscape: () => closeDeleteDialog
 async function confirmDelete() {
   if (!deleteTarget.value) return
   deleting.value = true
-  deleteError.value = ''
+  setDeleteError(null)
   try {
     await backend.deleteProfile(deleteTarget.value.id, deleteLocalData.value)
     if (form.id === deleteTarget.value.id) closeForm()
@@ -267,7 +273,7 @@ async function confirmDelete() {
     deleteTarget.value = null
     await reloadProfiles()
   } catch (e) {
-    deleteError.value = `削除に失敗しました: ${errorMessage(e)}`
+    setDeleteError('settings.error.delete', { message: errorMessage(e) })
   } finally {
     deleting.value = false
   }
@@ -276,47 +282,45 @@ async function confirmDelete() {
 
 <template>
   <div class="settings">
-    <h1>接続設定</h1>
+    <h1>{{ t('settings.title') }}</h1>
 
-    <p v-if="mock" class="mock-note">
-      Wails ランタイム外で動作中のため、モックデータを表示しています(保存内容はリロードで消えます)。
-    </p>
+    <p v-if="mock" class="mock-note">{{ t('settings.mockNote') }}</p>
 
     <p v-if="globalError" class="error">{{ globalError }}</p>
 
-    <p v-if="loading">読み込み中...</p>
+    <p v-if="loading">{{ t('common.state.loading') }}</p>
 
     <!-- 初回起動(プロファイル 0 件)ウィザード -->
     <div v-else-if="isFirstRun && formMode === 'closed'" class="first-run">
-      <h2>ようこそ</h2>
+      <h2>{{ t('settings.firstRun.title') }}</h2>
       <p>
-        Backlog に接続するための設定がまだありません。<br />
-        最初の接続プロファイルを登録してください。
+        {{ t('settings.firstRun.line1') }}<br />
+        {{ t('settings.firstRun.line2') }}
       </p>
-      <button class="primary" @click="openCreateForm">プロファイルを登録する</button>
+      <button class="primary" @click="openCreateForm">{{ t('settings.firstRun.button') }}</button>
     </div>
 
     <template v-else>
       <!-- 接続先セレクタ -->
       <section v-if="profiles.length > 0" class="selector-row">
-        <label for="active-profile">接続先:</label>
+        <label for="active-profile">{{ t('settings.active.label') }}</label>
         <select id="active-profile" v-model="activeProfileId">
           <option v-for="p in profiles" :key="p.id" :value="p.id">
-            {{ p.name }}({{ p.spaceUrl }})
+            {{ t('settings.active.option', { name: p.name, url: p.spaceUrl }) }}
           </option>
         </select>
       </section>
 
       <!-- プロファイル一覧 -->
       <section v-if="profiles.length > 0" class="profile-list">
-        <h2>プロファイル一覧</h2>
+        <h2>{{ t('settings.list.title') }}</h2>
         <div class="table-wrap">
           <table>
             <thead>
               <tr>
-                <th>プロファイル名</th>
-                <th>スペース URL</th>
-                <th>接続ユーザ</th>
+                <th>{{ t('settings.list.colName') }}</th>
+                <th>{{ t('settings.list.colSpaceUrl') }}</th>
+                <th>{{ t('settings.list.colUser') }}</th>
                 <th></th>
               </tr>
             </thead>
@@ -324,33 +328,41 @@ async function confirmDelete() {
               <tr v-for="p in profiles" :key="p.id" :class="{ active: p.id === activeProfileId }">
                 <td>
                   {{ p.name }}
-                  <span v-if="p.id === activeProfileId" class="badge">接続中</span>
+                  <span v-if="p.id === activeProfileId" class="badge">
+                    {{ t('settings.list.activeBadge') }}
+                  </span>
                 </td>
                 <td>{{ p.spaceUrl }}</td>
-                <td>{{ p.lastUserName || '未接続' }}</td>
+                <td>{{ p.lastUserName || t('settings.list.notConnected') }}</td>
                 <td class="actions">
-                  <button @click="openEditForm(p)">変更</button>
-                  <button class="danger" @click="openDeleteDialog(p)">削除</button>
+                  <button @click="openEditForm(p)">{{ t('settings.action.edit') }}</button>
+                  <button class="danger" @click="openDeleteDialog(p)">
+                    {{ t('settings.action.delete') }}
+                  </button>
                 </td>
               </tr>
             </tbody>
           </table>
         </div>
         <div class="list-footer">
-          <button @click="openCreateForm">新規登録</button>
+          <button @click="openCreateForm">{{ t('settings.action.create') }}</button>
         </div>
       </section>
 
       <!-- 権限状態(保存後に GetPermissionStatus で確認した実権限) -->
       <section v-if="permLoading || permStatus" class="perm-status">
-        <h2>権限状態</h2>
-        <p v-if="permLoading">「{{ permStatusProfileName }}」の権限状態を確認中...</p>
+        <h2>{{ t('settings.perm.title') }}</h2>
+        <p v-if="permLoading">
+          {{ t('settings.perm.checking', { name: permStatusProfileName }) }}
+        </p>
         <div
           v-else-if="permStatus"
           class="test-result"
           :class="permStatus.adminAvailable ? 'ok' : 'ng'"
         >
-          <p class="result-title">{{ permStatusProfileName }}(実権限で確認済み)</p>
+          <p class="result-title">
+            {{ t('settings.perm.confirmed', { name: permStatusProfileName }) }}
+          </p>
           <p>{{ permStatus.message }}</p>
         </div>
       </section>
@@ -361,45 +373,53 @@ async function confirmDelete() {
       <h2>{{ formTitle }}</h2>
 
       <div class="field">
-        <label for="f-name">プロファイル名</label>
-        <input id="f-name" v-model="form.name" type="text" placeholder="例: 開発チーム用" />
+        <label for="f-name">{{ t('settings.form.name') }}</label>
+        <input
+          id="f-name"
+          v-model="form.name"
+          type="text"
+          :placeholder="t('settings.form.namePlaceholder')"
+        />
       </div>
 
       <div class="field">
-        <label for="f-url">スペース URL</label>
+        <label for="f-url">{{ t('settings.form.spaceUrl') }}</label>
         <input
           id="f-url"
           v-model="form.spaceUrl"
           type="text"
-          placeholder="https://example.backlog.jp"
+          :placeholder="t('settings.form.spaceUrlPlaceholder')"
         />
-        <p class="hint">
-          https:// で始まる *.backlog.jp / *.backlog.com の URL のみ使用できます。
-        </p>
+        <p class="hint">{{ t('settings.form.spaceUrlHint') }}</p>
       </div>
 
       <div class="field">
-        <label for="f-key">API キー</label>
+        <label for="f-key">{{ t('settings.form.apiKey') }}</label>
         <input
           id="f-key"
           v-model="form.apiKey"
           type="password"
           autocomplete="off"
-          :placeholder="formMode === 'edit' ? '(変更する場合のみ入力)' : 'API キーを入力'"
+          :placeholder="
+            formMode === 'edit'
+              ? t('settings.form.apiKeyPlaceholderEdit')
+              : t('settings.form.apiKeyPlaceholder')
+          "
         />
         <p class="hint">
-          保存後は再表示できません。<span v-if="formMode === 'edit'">空欄のまま保存すると現在のキーを維持します。</span>
+          {{ t('settings.form.apiKeyHint')
+          }}<span v-if="formMode === 'edit'">{{ t('settings.form.apiKeyHintEdit') }}</span>
         </p>
       </div>
 
       <div class="form-buttons">
         <button :disabled="testing || saving" @click="runTest">
-          {{ testing ? '接続テスト中...' : '接続テスト' }}
+          {{ testing ? t('settings.action.testing') : t('settings.action.test') }}
         </button>
         <button class="primary" :disabled="!canSave" @click="save">
-          {{ saving ? '保存中...' : '保存' }}
+          {{ saving ? t('settings.action.saving') : t('settings.action.save') }}
         </button>
-        <button :disabled="saving" @click="closeForm">キャンセル</button>
+        <button :disabled="saving" @click="closeForm">{{ t('common.action.cancel') }}</button>
       </div>
 
       <p v-if="formError" class="error">{{ formError }}</p>
@@ -407,28 +427,26 @@ async function confirmDelete() {
       <!-- 接続テスト結果 -->
       <div v-if="testResult" class="test-result" :class="testResult.ok ? 'ok' : 'ng'">
         <template v-if="testResult.ok">
-          <p class="result-title">接続テスト成功</p>
+          <p class="result-title">{{ t('settings.test.okTitle') }}</p>
           <ul>
-            <li>ユーザ名: {{ testResult.userName }}</li>
+            <li>{{ t('settings.test.userName', { name: testResult.userName }) }}</li>
             <li>
-              権限状態(暫定):
-              <template v-if="testResult.adminAvailable">管理者機能を利用できる見込みです</template>
-              <template v-else>管理者機能は利用不可の見込み(ユーザ・チーム取得はプロジェクト単位に縮退します)</template>
+              {{ t('settings.test.permProvisional') }}
+              <template v-if="testResult.adminAvailable">
+                {{ t('settings.test.adminAvailable') }}
+              </template>
+              <template v-else>{{ t('settings.test.adminUnavailable') }}</template>
             </li>
           </ul>
-          <p class="hint">
-            この権限状態はロール(roleType)による暫定判定です。確定した権限状態は保存後に実際の API 呼び出しで確認します。
-          </p>
-          <p class="hint">「保存」を押すとこのプロファイルを保存します。</p>
+          <p class="hint">{{ t('settings.test.provisionalNote') }}</p>
+          <p class="hint">{{ t('settings.test.saveNote') }}</p>
         </template>
         <template v-else>
-          <p class="result-title">接続テスト失敗</p>
+          <p class="result-title">{{ t('settings.test.ngTitle') }}</p>
           <p>{{ testResult.message }}</p>
         </template>
       </div>
-      <p v-else-if="!testing" class="hint">
-        「接続テスト」が成功すると「保存」できるようになります。
-      </p>
+      <p v-else-if="!testing" class="hint">{{ t('settings.test.beforeTestNote') }}</p>
     </section>
 
     <!-- 削除確認ダイアログ -->
@@ -440,24 +458,27 @@ async function confirmDelete() {
         aria-modal="true"
         aria-labelledby="del-title"
       >
-        <h2 id="del-title">プロファイルの削除</h2>
+        <h2 id="del-title">{{ t('settings.delete.title') }}</h2>
         <p>
-          プロファイル「{{ deleteTarget.name }}」({{ deleteTarget.spaceUrl }})を削除します。<br />
-          OS キーチェーンに保存された API キーも削除されます。よろしいですか?
+          {{ t('settings.delete.confirm', { name: deleteTarget.name, url: deleteTarget.spaceUrl })
+          }}<br />
+          {{ t('settings.delete.confirmNote') }}
         </p>
         <label class="checkbox">
           <input v-model="deleteLocalData" type="checkbox" />
-          ローカルデータ(DB)も削除する(推奨)
+          {{ t('settings.delete.alsoLocalData') }}
         </label>
         <p v-if="!deleteLocalData" class="hint warn">
-          チェックを外すと、取得済みデータ(個人情報を含む可能性があります)がローカルに残ります。
+          {{ t('settings.delete.keepLocalWarning') }}
         </p>
         <p v-if="deleteError" class="error">{{ deleteError }}</p>
         <div class="form-buttons">
           <button class="danger" :disabled="deleting" @click="confirmDelete">
-            {{ deleting ? '削除中...' : '削除する' }}
+            {{ deleting ? t('settings.delete.deleting') : t('settings.delete.button') }}
           </button>
-          <button :disabled="deleting" @click="closeDeleteDialog">キャンセル</button>
+          <button :disabled="deleting" @click="closeDeleteDialog">
+            {{ t('common.action.cancel') }}
+          </button>
         </div>
       </div>
     </div>

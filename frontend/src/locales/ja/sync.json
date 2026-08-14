@@ -1,0 +1,86 @@
+{
+  "title": "同期状態",
+  "mockNote": "Wails ランタイム外で動作中のため、モックデータを表示しています(実データではありません)。",
+  "noProfile": "接続先プロファイルが選択されていません。「接続設定」画面でプロファイルを登録・選択してください。",
+  "dataKind": {
+    "projects": "プロジェクト",
+    "issues": "課題",
+    "users": "ユーザ",
+    "teams": "チーム",
+    "projectUsers": "プロジェクト参加ユーザ"
+  },
+  "project": {
+    "whole": "(スペース全体)",
+    "named": "{name}({key})",
+    "byId": "プロジェクト ID {id}",
+    "otherProfile": "別の接続先のプロジェクト"
+  },
+  "state": {
+    "title": "データ種別ごとの最終同期時刻",
+    "empty": "同期の記録がありません。下の「手動同期」から同期を実行してください。",
+    "colDataKind": "データ種別",
+    "colLastSynced": "最終同期時刻",
+    "colElapsed": "経過"
+  },
+  "manual": {
+    "title": "手動同期",
+    "noProjects": "(プロジェクトがありません)",
+    "modeLabel": "同期モード",
+    "modeAuto": "自動(初回はフル同期)",
+    "syncIssues": "課題を同期",
+    "syncingIssues": "課題を同期中...",
+    "syncProjects": "プロジェクト一覧を同期",
+    "syncingProjects": "プロジェクト同期中...",
+    "otherSyncRunning": "他の画面で開始した課題同期({target})が実行中です。完了するまでプロジェクトの切り替えと同期は実行できません。",
+    "hint": "自動は同期状態から判定します(未同期・長期間未同期ならフル同期)。差分同期は前回同期以降の更新のみを取得します。不整合が疑われる場合はフル同期を選んでください。「プロジェクト一覧を同期」はプロジェクト一覧を最新化するだけで、課題は同期しません。"
+  },
+  "progress": {
+    "count": "総件数を確認中...",
+    "fetch": "取得中 {fetched} / {total} 件",
+    "fetchUnknownTotal": "取得中 {fetched} 件",
+    "deleteScan": "削除された課題を確認中({fetched} 件取得済み)",
+    "done": "取得完了 {fetched} 件(仕上げ中...)"
+  },
+  "elapsed": {
+    "justNow": "たった今",
+    "minutes": "{count} 分前",
+    "hours": "{count} 時間前",
+    "days": "{count} 日前"
+  },
+  "result": {
+    "title": "{project} の{mode}が完了しました",
+    "fetched": "取得: {count} 件",
+    "upserted": "登録・更新: {count} 件",
+    "deleted": "削除: {count} 件",
+    "duration": "所要時間: {seconds} 秒"
+  },
+  "rate": {
+    "title": "レート制限の残量",
+    "category": {
+      "read": "読み込み",
+      "update": "更新",
+      "search": "検索",
+      "icon": "アイコン"
+    },
+    "colCategory": "区分",
+    "colRemaining": "残量 / 上限(毎分)",
+    "colReset": "リセット時刻",
+    "notObserved": "未取得(API 利用後に表示されます)",
+    "unavailable": "残量情報を取得できませんでした。",
+    "hint": "サーバから観測した実測値を表示します(表示の更新に API は消費しません)。課題検索の同期は「検索」、一括更新の書き込みは「更新」の枠を使用します。"
+  },
+  "log": {
+    "label": "動作ログ:",
+    "disabled": "ログ出力は無効です"
+  },
+  "warning": {
+    "skippedDuringIssueSync": "課題の同期中のため、プロジェクト一覧の最新化は省略しました(表示はローカルキャッシュです)。",
+    "refreshFailed": "プロジェクト一覧を最新化できませんでした(オフライン等)。表示はローカルキャッシュです。"
+  },
+  "error": {
+    "loadState": "同期状態の取得に失敗しました: {message}",
+    "activeProfile": "接続先プロファイルの取得に失敗しました: {message}",
+    "syncIssues": "同期に失敗しました: {message}",
+    "syncProjects": "プロジェクトの同期に失敗しました: {message}"
+  }
+}

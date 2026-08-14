@@ -1,0 +1,86 @@
+{
+  "title": "Sync Status",
+  "mockNote": "Running outside the Wails runtime, so mock data is shown (this is not real data).",
+  "noProfile": "No connection profile is selected. Register and select a profile on the Connection Settings screen.",
+  "dataKind": {
+    "projects": "Projects",
+    "issues": "Issues",
+    "users": "Users",
+    "teams": "Teams",
+    "projectUsers": "Project members"
+  },
+  "project": {
+    "whole": "(Entire space)",
+    "named": "{name} ({key})",
+    "byId": "Project ID {id}",
+    "otherProfile": "a project of another connection"
+  },
+  "state": {
+    "title": "Last sync time per data type",
+    "empty": "There is no sync record yet. Run a sync from \"Manual sync\" below.",
+    "colDataKind": "Data type",
+    "colLastSynced": "Last synced",
+    "colElapsed": "Elapsed"
+  },
+  "manual": {
+    "title": "Manual sync",
+    "noProjects": "(No projects)",
+    "modeLabel": "Sync mode",
+    "modeAuto": "Auto (full sync on the first run)",
+    "syncIssues": "Sync issues",
+    "syncingIssues": "Syncing issues...",
+    "syncProjects": "Sync project list",
+    "syncingProjects": "Syncing projects...",
+    "otherSyncRunning": "An issue sync started on another screen ({target}) is running. You cannot switch projects or run a sync until it finishes.",
+    "hint": "Auto decides from the sync status (a full sync is used when the project has never been synced, or has not been synced for a long time). Incremental sync fetches only the updates since the last sync. Choose full sync if you suspect inconsistent data. \"Sync project list\" only refreshes the project list and does not sync issues."
+  },
+  "progress": {
+    "count": "Counting total...",
+    "fetch": "Fetching {fetched} / {total}",
+    "fetchUnknownTotal": "Fetching {fetched}",
+    "deleteScan": "Checking deleted issues ({fetched} fetched)",
+    "done": "Fetched {fetched} (finishing up...)"
+  },
+  "elapsed": {
+    "justNow": "just now",
+    "minutes": "{count} min ago",
+    "hours": "{count} hr ago",
+    "days": "{count} days ago"
+  },
+  "result": {
+    "title": "{mode} of {project} completed",
+    "fetched": "Fetched: {count}",
+    "upserted": "Added / updated: {count}",
+    "deleted": "Deleted: {count}",
+    "duration": "Duration: {seconds} s"
+  },
+  "rate": {
+    "title": "Rate limit remaining",
+    "category": {
+      "read": "Read",
+      "update": "Update",
+      "search": "Search",
+      "icon": "Icon"
+    },
+    "colCategory": "Category",
+    "colRemaining": "Remaining / limit (per minute)",
+    "colReset": "Reset time",
+    "notObserved": "Not observed yet (shown after the API is used)",
+    "unavailable": "Could not retrieve the remaining amount.",
+    "hint": "Shows the actual values observed from the server (refreshing this display does not consume the API). Issue search sync uses the \"Search\" quota, and bulk update writes use the \"Update\" quota."
+  },
+  "log": {
+    "label": "Log file:",
+    "disabled": "Log output is disabled"
+  },
+  "warning": {
+    "skippedDuringIssueSync": "Issues are being synced, so refreshing the project list was skipped (the local cache is shown).",
+    "refreshFailed": "Could not refresh the project list (offline, etc.). The local cache is shown."
+  },
+  "error": {
+    "loadState": "Failed to get the sync status: {message}",
+    "activeProfile": "Failed to get the active connection profile: {message}",
+    "syncIssues": "Sync failed: {message}",
+    "syncProjects": "Failed to sync projects: {message}"
+  }
+}

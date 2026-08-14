@@ -9,8 +9,8 @@
 // 「実行前に必ず dry-run プレビューを見せる」「競合は黙って上書きしない」
 // 「中断した sending 行は自動再送しない」を UI 上でも徹底する。
 import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 import {
-  actionLabel,
   getBackend,
   isMockBackend,
   onBulkProgress,
@@ -21,8 +21,10 @@ import {
   type MasterItem,
   type Project,
 } from '../lib/backend'
+import { translateAction, translateRowStatus, type TranslateFn } from '../lib/enumLabels'
 import { errorMessage, formatDateTime } from '../lib/format'
 import { buildIssueQuery, newIssueConditions, resetIssueConditions } from '../lib/issueQuery'
+import { useMessage } from '../lib/message'
 import { issueSyncRunning } from '../lib/syncState'
 import {
   resolveProjectSelection,
@@ -34,35 +36,29 @@ import {
 const backend = getBackend()
 const mock = isMockBackend()
 
+const { t } = useI18n()
+
+/**
+ * enumLabels の対応表へ渡す翻訳関数。vue-i18n の `t` は多数のオーバーロードを
+ * 持つため、対応表側が期待する単純な形(TranslateFn)へ包んで渡す。
+ */
+const translate: TranslateFn = (key, named) => (named ? t(key, named) : t(key))
+
 /**
  * 破棄済み・プロファイル切替後の画面が、後から届いた古い応答で
  * 共有のプロジェクト選択を書き換えてしまうのを防ぐガード(高 1)。
  */
 const selectionGuard = useProjectSelectionGuard()
 
-/**
- * 取り込み集計の見出しラベル(「新規追加 / 更新 / 変更なし」)。
- *
- * 行ごとの表示は Go が解決した actionLabel をそのまま使うが、集計には行が無い
- * (0 件でも見出しは出す)ため、行データからは取れない。ラベルのためだけに
- * 契約(BulkImportResult)を増やすのは過剰なので、backend.ts が持つ写しの
- * 対応表(Go 側 bulk.ActionLabel の写し)から引く。
- */
-const SUMMARY_LABELS = {
-  create: actionLabel('create'),
-  update: actionLabel('update'),
-  skip: actionLabel('skip'),
-}
-
 /** 実行時間の目安(設計書 5 節: 1,000 件で 8〜10 分) */
 const MINUTES_PER_1000 = 9
 
-/** 件数から実行時間の目安を日本語で返す */
+/** 件数から実行時間の目安を返す(0 件以下は目安を出さない) */
 function estimateDuration(count: number): string {
   if (count <= 0) return '-'
   const minutes = (count / 1000) * MINUTES_PER_1000
-  if (minutes < 1) return '1 分未満'
-  return `約 ${Math.ceil(minutes)} 分`
+  if (minutes < 1) return t('bulk.estimate.lessThanMinute')
+  return t('bulk.estimate.minutes', { minutes: Math.ceil(minutes) })
 }
 
 // ---------------------------------------------------------------------------
@@ -71,7 +67,7 @@ function estimateDuration(count: number): string {
 
 const profileId = ref('')
 const initializing = ref(true)
-const globalError = ref('')
+const [globalError, setGlobalError] = useMessage(t)
 
 const projects = ref<Project[]>([])
 // プロジェクト選択は画面をまたいで共有する(projectSelection モジュールが保持し、
@@ -82,7 +78,7 @@ async function loadProjects() {
   if (!profileId.value) return
   const token = selectionGuard.begin()
   projectsLoading.value = true
-  globalError.value = ''
+  setGlobalError(null)
   try {
     const list = await backend.listProjects(profileId.value)
     // 画面が破棄済み、またはプロファイルが切り替わっていたら反映しない
@@ -92,7 +88,7 @@ async function loadProjects() {
     // 復元した(または選択中の)プロジェクトが一覧に無ければ先頭へフォールバックする
     selectedProjectId.value = resolveProjectSelection(projects.value, selectedProjectId.value)
   } catch (e) {
-    globalError.value = `プロジェクト一覧の取得に失敗しました: ${errorMessage(e)}`
+    setGlobalError('bulk.error.loadProjects', { message: errorMessage(e) })
   } finally {
     projectsLoading.value = false
   }
@@ -164,7 +160,7 @@ watch(selectedProjectId, () => {
 
 const priorities = ref<MasterItem[]>([])
 const defaultPriorityId = ref(0)
-const masterError = ref('')
+const [masterError, setMasterError] = useMessage(t)
 
 /**
  * loadMaster の世代番号。ガードのトークンはプロファイル単位のため、
@@ -181,7 +177,7 @@ async function loadMaster() {
     defaultPriorityId.value = 0
     return
   }
-  masterError.value = ''
+  setMasterError(null)
   try {
     const m = await backend.getMasterData(profileId.value, selectedProjectId.value)
     // 破棄済み・プロファイル切替後、または後発の要求がある場合は反映しない
@@ -194,7 +190,7 @@ async function loadMaster() {
     if (!selectionGuard.isCurrent(token) || seq !== masterRequestSeq) return
     priorities.value = []
     defaultPriorityId.value = 0
-    masterError.value = `マスタデータの取得に失敗しました: ${errorMessage(e)}`
+    setMasterError('bulk.error.loadMaster', { message: errorMessage(e) })
   }
 }
 
@@ -215,7 +211,7 @@ const statusOptions = ref<string[]>([])
 const assigneeOptions = ref<string[]>([])
 const optionsLoading = ref(false)
 /** 絞り込み候補の取得に失敗した場合の説明(空 = 正常。出力自体は行える) */
-const optionsError = ref('')
+const [optionsError, setOptionsError] = useMessage(t)
 
 /**
  * loadFilterOptions の世代番号(loadMaster の masterRequestSeq と同じ理由)。
@@ -230,7 +226,7 @@ async function loadFilterOptions() {
   const token = selectionGuard.begin()
   statusOptions.value = []
   assigneeOptions.value = []
-  optionsError.value = '' // 前回の失敗表示を残さない(再取得のたびに出し直す)
+  setOptionsError(null) // 前回の失敗表示を残さない(再取得のたびに出し直す)
   if (!profileId.value || !selectedProjectId.value) {
     // 世代を進めた後の早期 return。最新要求であるこの経路で読込中表示を下ろす
     if (seq === filterOptionsRequestSeq) optionsLoading.value = false
@@ -248,7 +244,7 @@ async function loadFilterOptions() {
     if (cond.assigneeName && !opts.assignees.includes(cond.assigneeName)) cond.assigneeName = ''
   } catch (e) {
     if (!selectionGuard.isCurrent(token) || seq !== filterOptionsRequestSeq) return
-    optionsError.value = `絞り込み候補の取得に失敗しました: ${errorMessage(e)}`
+    setOptionsError('bulk.error.loadFilterOptions', { message: errorMessage(e) })
   } finally {
     // 読込中表示は最新の要求だけが下ろす(古い応答が新しい要求の表示を消さないため)
     if (seq === filterOptionsRequestSeq) optionsLoading.value = false
@@ -284,7 +280,7 @@ const exporting = ref(false)
 const exportPath = ref('')
 const exportRows = ref(0)
 const exportCanceled = ref(false)
-const exportError = ref('')
+const [exportError, setExportError] = useMessage(t)
 
 /**
  * 課題同期中はテンプレート出力・取り込み・実行を行わない(R10)。
@@ -306,7 +302,7 @@ async function exportTemplate() {
   if (!profileId.value || !selectedProjectId.value || exporting.value) return
   if (issueSyncRunning.value) return
   exporting.value = true
-  exportError.value = ''
+  setExportError(null)
   exportPath.value = ''
   exportCanceled.value = false
   try {
@@ -324,7 +320,7 @@ async function exportTemplate() {
       exportRows.value = res.rows
     }
   } catch (e) {
-    exportError.value = `テンプレートの出力に失敗しました: ${errorMessage(e)}`
+    setExportError('bulk.error.exportTemplate', { message: errorMessage(e) })
   } finally {
     exporting.value = false
   }
@@ -335,7 +331,7 @@ async function exportTemplate() {
 // ---------------------------------------------------------------------------
 
 const importing = ref(false)
-const importError = ref('')
+const [importError, setImportError] = useMessage(t)
 const importCanceled = ref(false)
 const importResult = ref<BulkImportResult | null>(null)
 
@@ -352,7 +348,7 @@ const canImport = computed(
 async function importFile() {
   if (!canImport.value) return
   importing.value = true
-  importError.value = ''
+  setImportError(null)
   importCanceled.value = false
   importResult.value = null
   runResult.value = null
@@ -370,7 +366,7 @@ async function importFile() {
     }
     await loadJobs()
   } catch (e) {
-    importError.value = `Excel の取り込みに失敗しました: ${errorMessage(e)}`
+    setImportError('bulk.error.import', { message: errorMessage(e) })
   } finally {
     importing.value = false
   }
@@ -386,6 +382,27 @@ const targetCount = computed(() => {
 const conflictWarningCount = computed(
   () => importResult.value?.previews.filter((p) => p.conflictWarning).length ?? 0,
 )
+
+/**
+ * 取り込み集計の 1 行(「取り込み N 行 / 新規追加 N 件 / …」)。
+ *
+ * 処理区分の表示名は行データからは取れない(0 件でも見出しは出す)ため、
+ * 生の機械値 'create' / 'update' / 'skip' を enumLabels で翻訳して組み立てる
+ * (Go が返す actionLabel は表示に使わない。設計 §3.1)。
+ */
+const summaryText = computed(() => {
+  const r = importResult.value
+  if (!r) return ''
+  return t('bulk.step3.summary', {
+    total: r.totalRows,
+    createLabel: translateAction(translate, 'create'),
+    creates: r.creates,
+    updateLabel: translateAction(translate, 'update'),
+    updates: r.updates,
+    skipLabel: translateAction(translate, 'skip'),
+    skips: r.skips,
+  })
+})
 
 // ---------------------------------------------------------------------------
 // ④ 実行
@@ -406,7 +423,7 @@ const selectionLocked = computed(
 )
 
 const canceling = ref(false)
-const runError = ref('')
+const [runError, setRunError] = useMessage(t)
 const runResult = ref<BulkRunResult | null>(null)
 const progress = ref({ processed: 0, total: 0 })
 
@@ -461,7 +478,7 @@ async function confirmRun() {
   if (!jobId || running.value || issueSyncRunning.value) return
   running.value = true
   canceling.value = false
-  runError.value = ''
+  setRunError(null)
   runResult.value = null
   progress.value = { processed: 0, total: confirmCount.value }
   try {
@@ -472,7 +489,7 @@ async function confirmRun() {
       confirmResendSending.value,
     )
   } catch (e) {
-    runError.value = `一括実行に失敗しました: ${errorMessage(e)}`
+    setRunError('bulk.error.run', { message: errorMessage(e) })
   } finally {
     running.value = false
     canceling.value = false
@@ -486,7 +503,7 @@ async function cancelRun() {
   try {
     await backend.cancelBulkRun(profileId.value, confirmJobId.value)
   } catch (e) {
-    runError.value = `中断の要求に失敗しました: ${errorMessage(e)}`
+    setRunError('bulk.error.cancel', { message: errorMessage(e) })
     canceling.value = false
   }
 }
@@ -503,15 +520,15 @@ function rerunWithForce() {
 // ---------------------------------------------------------------------------
 
 const jobs = ref<BulkJobRow[]>([])
-const jobsError = ref('')
+const [jobsError, setJobsError] = useMessage(t)
 
 async function loadJobs() {
   if (!profileId.value) return
-  jobsError.value = ''
+  setJobsError(null)
   try {
     jobs.value = await backend.listBulkJobs(profileId.value)
   } catch (e) {
-    jobsError.value = `ジョブ履歴の取得に失敗しました: ${errorMessage(e)}`
+    setJobsError('bulk.error.loadJobs', { message: errorMessage(e) })
   }
   // 展開中の明細は実行・再読込で変わるため、開いたまま最新化する
   if (expandedJobId.value) await loadJobRows(expandedJobId.value)
@@ -552,21 +569,37 @@ function forceResumeJob(job: BulkJobRow) {
 /** 明細を展開中のジョブ ID(0 なら折りたたみ。同時に 1 件だけ開く) */
 const expandedJobId = ref(0)
 const jobRowsLoading = ref(false)
-const jobRowsError = ref('')
+const [jobRowsError, setJobRowsError] = useMessage(t)
 const jobRowDetails = ref<BulkJobRowDetail[]>([])
 
 async function loadJobRows(jobId: number) {
   if (!profileId.value || !jobId) return
-  jobRowsError.value = ''
+  setJobRowsError(null)
   jobRowsLoading.value = true
   try {
     jobRowDetails.value = await backend.getBulkJobRows(profileId.value, jobId)
   } catch (e) {
     jobRowDetails.value = []
-    jobRowsError.value = `行明細の取得に失敗しました: ${errorMessage(e)}`
+    setJobRowsError('bulk.error.loadJobRows', { message: errorMessage(e) })
   } finally {
     jobRowsLoading.value = false
   }
+}
+
+/**
+ * 行明細の「課題キー」欄の表示。
+ *
+ * 作成済みの課題 ID が入るのは新規追加が成立した行だけ。その行には作成された
+ * 課題のキーも記録されるため、キーの有無より先に見て「(新規)」の目印を残す
+ * (キーだけを出すと更新行と区別が付かなくなる)。
+ */
+function jobRowIssueLabel(r: BulkJobRowDetail): string {
+  if (r.resultIssueId > 0) {
+    return r.issueKey
+      ? t('bulk.jobRows.newWithKey', { issueKey: r.issueKey })
+      : t('bulk.jobRows.newWithId', { issueId: r.resultIssueId })
+  }
+  return r.issueKey || t('bulk.newIssue')
 }
 
 /** 明細の表示・非表示を切り替える(表示時に毎回取得して最新状態を出す) */
@@ -574,7 +607,7 @@ async function toggleJobRows(job: BulkJobRow) {
   if (expandedJobId.value === job.jobId) {
     expandedJobId.value = 0
     jobRowDetails.value = []
-    jobRowsError.value = ''
+    setJobRowsError(null)
     return
   }
   expandedJobId.value = job.jobId
@@ -589,7 +622,7 @@ const resultExportingJobId = ref(0)
 const resultExportPath = ref('')
 const resultExportRows = ref(0)
 const resultExportCanceled = ref(false)
-const resultExportError = ref('')
+const [resultExportError, setResultExportError] = useMessage(t)
 /** 直近に結果レポートを出力したジョブ ID(結果表示の対象) */
 const resultExportJobId = ref(0)
 
@@ -597,7 +630,7 @@ async function exportResultExcel(jobId: number) {
   if (!profileId.value || !jobId || resultExportingJobId.value) return
   resultExportingJobId.value = jobId
   resultExportJobId.value = jobId
-  resultExportError.value = ''
+  setResultExportError(null)
   resultExportPath.value = ''
   resultExportCanceled.value = false
   try {
@@ -610,7 +643,7 @@ async function exportResultExcel(jobId: number) {
       resultExportRows.value = res.rows
     }
   } catch (e) {
-    resultExportError.value = `結果レポートの出力に失敗しました: ${errorMessage(e)}`
+    setResultExportError('bulk.error.exportResult', { message: errorMessage(e) })
   } finally {
     resultExportingJobId.value = 0
   }
@@ -631,7 +664,7 @@ onMounted(async () => {
   try {
     profileId.value = await backend.getActiveProfile()
   } catch (e) {
-    globalError.value = `接続先プロファイルの取得に失敗しました: ${errorMessage(e)}`
+    setGlobalError('bulk.error.loadProfile', { message: errorMessage(e) })
   } finally {
     initializing.value = false
   }
@@ -661,155 +694,137 @@ onUnmounted(() => {
 
 <template>
   <div class="bulk">
-    <h1>一括更新・追加</h1>
+    <h1>{{ t('bulk.title') }}</h1>
 
     <!-- 書き込み操作である旨の注意(この画面だけが Backlog を変更する) -->
-    <p class="danger-note">
-      この機能は Backlog のデータを変更します。まずテスト用プロジェクトでの試行を推奨します。
-    </p>
+    <p class="danger-note">{{ t('bulk.dangerNote') }}</p>
 
-    <p v-if="mock" class="mock-note">
-      Wails ランタイム外で動作中のため、モックデータを表示しています(実データではありません)。
-      実際の Backlog への書き込みは行われません。
-    </p>
+    <p v-if="mock" class="mock-note">{{ t('bulk.mockNote') }}</p>
 
     <section class="panel flow">
-      <h2>操作フロー</h2>
+      <h2>{{ t('bulk.flow.title') }}</h2>
       <ol>
-        <li>プロジェクトを選び、テンプレート Excel を出力する</li>
-        <li>Excel に記入し、「Excel を取り込む」で読み込む(この時点では書き込まれません)</li>
-        <li>検証エラーと dry-run プレビューで、変更内容を確認する</li>
-        <li>「実行」で Backlog へ書き込む(進捗表示・中断可)</li>
-        <li>結果サマリを確認する(競合した課題は上書きされません)</li>
-        <li>中断した場合はジョブ履歴から再開する</li>
+        <li>{{ t('bulk.flow.step1') }}</li>
+        <li>{{ t('bulk.flow.step2') }}</li>
+        <li>{{ t('bulk.flow.step3') }}</li>
+        <li>{{ t('bulk.flow.step4') }}</li>
+        <li>{{ t('bulk.flow.step5') }}</li>
+        <li>{{ t('bulk.flow.step6') }}</li>
       </ol>
-      <p class="hint">
-        Excel の記入ルール(空欄 = 変更しない、クリアは #CLEAR#、issueKey 空欄 = 新規追加)は、
-        テンプレートの「記入方法」シートに記載しています。
-      </p>
-      <p class="hint">
-        カスタム属性は「属性:定義名」列に記入します(日付は yyyy-MM-dd、複数リスト・チェックボックスは選択肢名をカンマ区切り)。
-        選択肢に無い値(「その他」の直接入力)は現在未対応です。
-      </p>
+      <!-- Excel の記法(#CLEAR#・「属性:定義名」列・シート名)は仕様のため翻訳しない -->
+      <p class="hint">{{ t('bulk.flow.excelNote') }}</p>
+      <p class="hint">{{ t('bulk.flow.customFieldNote') }}</p>
     </section>
 
     <p v-if="globalError" class="error">{{ globalError }}</p>
 
-    <p v-if="initializing">読み込み中...</p>
+    <p v-if="initializing">{{ t('common.state.loading') }}</p>
 
-    <p v-else-if="!profileId" class="notice">
-      接続先プロファイルが選択されていません。「接続設定」画面でプロファイルを登録・選択してください。
-    </p>
+    <p v-else-if="!profileId" class="notice">{{ t('bulk.noProfile') }}</p>
 
     <template v-else>
       <!-- ① プロジェクト選択・テンプレート出力 -->
       <section class="panel">
-        <h2>① テンプレート出力</h2>
+        <h2>{{ t('bulk.step1.title') }}</h2>
         <div class="row">
-          <label for="b-project">プロジェクト</label>
+          <label for="b-project">{{ t('common.label.project') }}</label>
           <!-- 選択の変化は watch(selectedProjectId) で拾う(@change では
                一覧から消えたプロジェクトの自動フォールバックを検出できないため) -->
           <select id="b-project" v-model.number="selectedProjectId" :disabled="selectionLocked">
-            <option v-if="projects.length === 0" :value="0">(プロジェクトがありません)</option>
+            <option v-if="projects.length === 0" :value="0">{{ t('bulk.project.empty') }}</option>
             <option v-for="p in projects" :key="p.id" :value="p.id">
-              {{ p.name }}({{ p.projectKey }})
+              {{ t('bulk.project.option', { name: p.name, key: p.projectKey }) }}
             </option>
           </select>
-          <button :disabled="selectionLocked" @click="reloadProjects">再読込</button>
+          <button :disabled="selectionLocked" @click="reloadProjects">
+            {{ t('common.action.reload') }}
+          </button>
         </div>
         <!-- 課題同期中に止まる操作をまとめて案内する(R10。exportTemplate のコメント参照)。
              この画面は同期を開始しないため、実行中の同期は必ず他画面が始めたもの -->
-        <p v-if="issueSyncRunning" class="hint warn">
-          他の画面で開始した課題同期が実行中です。完了するまで、プロジェクトの切り替え・
-          テンプレート出力・Excel の取り込み・一括実行はできません
-          (ジョブ履歴の確認と結果の Excel 出力は行えます)。
-        </p>
-        <p class="hint">
-          テンプレートにはプロジェクトが固定で埋め込まれるため、行ごとにプロジェクトは変えられません。
-          種別・状態・優先度・担当者は、名前列のドロップダウンで編集できます(名前列が空の行は ID 列の値を使います)。
-          名前列に値がある行は常に名前列が優先され、食い違う ID 列は無視して警告を表示します。
-        </p>
+        <p v-if="issueSyncRunning" class="hint warn">{{ t('bulk.syncRunningNote') }}</p>
+        <p class="hint">{{ t('bulk.step1.projectNote') }}</p>
 
         <!-- テンプレートに載せる課題の絞り込み(空欄なら全件)。
              課題抽出の検索条件と同じ項目・同じ流儀で指定する。
              キーワード欄の Enter では出力しない(保存ダイアログが不意に開く
              誤操作を避けるため、出力は必ずボタン操作で行う) -->
-        <h3>出力する課題の条件</h3>
+        <h3>{{ t('bulk.filter.title') }}</h3>
         <div class="row">
-          <label for="b-keyword">キーワード</label>
+          <label for="b-keyword">{{ t('bulk.filter.keyword') }}</label>
           <input
             id="b-keyword"
             v-model="cond.keyword"
             type="text"
             class="wide"
-            placeholder="課題キー + 件名 + 詳細の部分一致(スペース区切りで複数指定)"
+            :placeholder="t('bulk.filter.keywordPlaceholder')"
             :disabled="conditionsLocked"
           />
         </div>
         <div class="row">
-          <label>複数キーワード</label>
+          <label>{{ t('bulk.filter.keywordMode') }}</label>
           <label class="radio">
             <input v-model="cond.keywordMode" type="radio" value="and" :disabled="conditionsLocked" />
-            すべて含む(AND)
+            {{ t('bulk.filter.keywordModeAnd') }}
           </label>
           <label class="radio">
             <input v-model="cond.keywordMode" type="radio" value="or" :disabled="conditionsLocked" />
-            いずれかを含む(OR)
+            {{ t('bulk.filter.keywordModeOr') }}
           </label>
         </div>
 
         <div class="row">
-          <label for="b-updated-from">更新日</label>
+          <label for="b-updated-from">{{ t('bulk.filter.updated') }}</label>
           <input
             id="b-updated-from"
             v-model="cond.updatedFrom"
             type="date"
             :disabled="conditionsLocked"
           />
-          <span>〜</span>
+          <span>{{ t('bulk.filter.rangeSeparator') }}</span>
           <input v-model="cond.updatedTo" type="date" :disabled="conditionsLocked" />
         </div>
 
         <div class="row">
-          <label for="b-created-from">作成日</label>
+          <label for="b-created-from">{{ t('bulk.filter.created') }}</label>
           <input
             id="b-created-from"
             v-model="cond.createdFrom"
             type="date"
             :disabled="conditionsLocked"
           />
-          <span>〜</span>
+          <span>{{ t('bulk.filter.rangeSeparator') }}</span>
           <input v-model="cond.createdTo" type="date" :disabled="conditionsLocked" />
         </div>
 
         <div class="row">
-          <label for="b-status">状態</label>
+          <label for="b-status">{{ t('common.label.status') }}</label>
           <select id="b-status" v-model="cond.statusName" :disabled="conditionsLocked || optionsLoading">
-            <option value="">すべて</option>
+            <option value="">{{ t('common.state.all') }}</option>
             <option v-for="s in statusOptions" :key="s" :value="s">{{ s }}</option>
           </select>
-          <label for="b-assignee" class="inline-label">担当者</label>
+          <label for="b-assignee" class="inline-label">{{ t('bulk.filter.assignee') }}</label>
           <select
             id="b-assignee"
             v-model="cond.assigneeName"
             :disabled="conditionsLocked || optionsLoading"
           >
-            <option value="">すべて</option>
+            <option value="">{{ t('common.state.all') }}</option>
             <option v-for="a in assigneeOptions" :key="a" :value="a">{{ a }}</option>
           </select>
           <button :disabled="conditionsLocked || !hasConditions" @click="clearConditions">
-            条件をクリア
+            {{ t('common.action.clearConditions') }}
           </button>
         </div>
         <p v-if="!optionsLoading && statusOptions.length === 0 && assigneeOptions.length === 0" class="hint">
-          状態・担当者の候補は同期済みの課題から作成されます(「課題抽出」画面で同期すると選択できるようになります)。
+          {{ t('bulk.filter.optionsEmptyNote') }}
         </p>
         <p v-if="optionsError" class="hint warn">{{ optionsError }}</p>
         <p class="hint">
-          条件に一致した課題だけがテンプレートに載ります(すべて空欄なら全件)。
-          <template v-if="hasConditions">現在は条件を指定しています。</template>
-          <template v-else>現在は条件を指定していないため、全件が出力されます。</template>
-          検索対象は同期済みのローカルデータです(カスタム属性での絞り込みは未対応)。
+          {{ t('bulk.filter.matchNote') }}
+          <template v-if="hasConditions">{{ t('bulk.filter.conditionsSet') }}</template>
+          <template v-else>{{ t('bulk.filter.conditionsNone') }}</template>
+          {{ t('bulk.filter.localDataNote') }}
         </p>
 
         <div class="row buttons">
@@ -818,105 +833,106 @@ onUnmounted(() => {
             :disabled="!selectedProjectId || exporting || running || issueSyncRunning"
             @click="exportTemplate"
           >
-            {{ exporting ? '出力中...' : 'テンプレート出力' }}
+            {{ exporting ? t('common.state.exporting') : t('bulk.step1.exportButton') }}
           </button>
           <span v-if="exporting" class="spinner" aria-hidden="true"></span>
         </div>
         <p v-if="exportError" class="error">{{ exportError }}</p>
-        <p v-if="exportCanceled" class="notice">テンプレート出力はキャンセルされました。</p>
+        <p v-if="exportCanceled" class="notice">{{ t('bulk.step1.canceled') }}</p>
         <div v-if="exportPath" class="result ok">
-          <p class="result-title">テンプレートを出力しました({{ exportRows }} 件)</p>
+          <p class="result-title">{{ t('bulk.step1.exported', { count: exportRows }) }}</p>
           <p class="path">{{ exportPath }}</p>
         </div>
       </section>
 
       <!-- ② Excel の取り込み -->
       <section class="panel">
-        <h2>② Excel を取り込む</h2>
+        <h2>{{ t('bulk.step2.title') }}</h2>
         <div class="row">
-          <label for="b-priority">既定の優先度</label>
+          <label for="b-priority">{{ t('bulk.step2.defaultPriority') }}</label>
           <select id="b-priority" v-model.number="defaultPriorityId" :disabled="importing || running">
-            <option v-if="priorities.length === 0" :value="0">(取得できていません)</option>
+            <option v-if="priorities.length === 0" :value="0">
+              {{ t('bulk.step2.priorityUnavailable') }}
+            </option>
             <option v-for="p in priorities" :key="p.id" :value="p.id">{{ p.name }}</option>
           </select>
         </div>
-        <p class="hint">
-          優先度が未入力の新規追加行に適用します(このプロジェクトの取り込みでのみ有効です)。
-        </p>
+        <p class="hint">{{ t('bulk.step2.priorityNote') }}</p>
         <p v-if="masterError" class="error">{{ masterError }}</p>
 
         <div class="row buttons">
           <button class="primary" :disabled="!canImport" @click="importFile">
-            {{ importing ? '取り込み中...' : 'Excel を取り込む' }}
+            {{ importing ? t('bulk.step2.importing') : t('bulk.step2.importButton') }}
           </button>
           <span v-if="importing" class="spinner" aria-hidden="true"></span>
         </div>
-        <p class="hint">
-          ファイル選択ダイアログで記入済みの Excel を選びます。取り込みは検証と dry-run のみで、
-          この操作では Backlog に書き込みません。
-        </p>
+        <p class="hint">{{ t('bulk.step2.note') }}</p>
         <p v-if="importError" class="error">{{ importError }}</p>
-        <p v-if="importCanceled" class="notice">Excel の取り込みはキャンセルされました。</p>
+        <p v-if="importCanceled" class="notice">{{ t('bulk.step2.canceled') }}</p>
       </section>
 
       <!-- ③ 検証結果・dry-run プレビュー -->
       <section v-if="importResult" class="panel">
-        <h2>③ 検証結果・変更プレビュー(dry-run)</h2>
-        <p class="summary">
-          取り込み {{ importResult.totalRows }} 行 /
-          {{ SUMMARY_LABELS.create }} {{ importResult.creates }} 件 /
-          {{ SUMMARY_LABELS.update }} {{ importResult.updates }} 件 /
-          {{ SUMMARY_LABELS.skip }} {{ importResult.skips }} 件
-        </p>
+        <h2>{{ t('bulk.step3.title') }}</h2>
+        <p class="summary">{{ summaryText }}</p>
 
         <div v-if="importResult.warnings.length > 0" class="notice warn">
-          <p class="result-title">取り込み時の警告</p>
+          <p class="result-title">{{ t('bulk.step3.importWarnings') }}</p>
           <ul>
+            <!-- 警告の本文は Go 生成の自由文(フェーズ 1 では日本語のまま。設計 §3.1) -->
             <li v-for="(w, i) in importResult.warnings" :key="i">{{ w }}</li>
           </ul>
         </div>
         <div v-if="importResult.errors.length > 0" class="result ng">
-          <p class="result-title">検証エラー {{ importResult.errors.length }} 件(修正して取り込み直してください)</p>
+          <p class="result-title">
+            {{ t('bulk.step3.validationErrors', { count: importResult.errors.length }) }}
+          </p>
           <ul>
-            <li v-for="(e, i) in importResult.errors" :key="i">{{ e.rowNo }} 行目: {{ e.message }}</li>
+            <!-- 検証エラーの本文も Go 生成の自由文のためそのまま表示する -->
+            <li v-for="(e, i) in importResult.errors" :key="i">
+              {{ t('bulk.step3.errorLine', { rowNo: e.rowNo, message: e.message }) }}
+            </li>
           </ul>
         </div>
-        <p v-else class="notice ok-note">検証エラーはありません。内容を確認して実行してください。</p>
+        <p v-else class="notice ok-note">{{ t('bulk.step3.noErrors') }}</p>
 
         <p v-if="conflictWarningCount > 0" class="notice warn">
-          {{ conflictWarningCount }} 件の課題は、テンプレート出力後にリモートで更新されています。
-          実行時に競合として除外される可能性があります。
+          {{ t('bulk.step3.conflictWarning', { count: conflictWarningCount }) }}
         </p>
 
         <div v-if="importResult.previews.length > 0" class="table-wrap">
           <table>
             <thead>
               <tr>
-                <th>行</th>
-                <th>区分</th>
-                <th>課題キー</th>
-                <th>件名</th>
-                <th>変更内容</th>
-                <th>競合</th>
+                <th>{{ t('bulk.col.row') }}</th>
+                <th>{{ t('bulk.col.action') }}</th>
+                <th>{{ t('bulk.col.issueKey') }}</th>
+                <th>{{ t('bulk.col.summary') }}</th>
+                <th>{{ t('bulk.col.changes') }}</th>
+                <th>{{ t('bulk.col.conflict') }}</th>
               </tr>
             </thead>
             <tbody>
               <tr v-for="p in importResult.previews" :key="p.rowNo" :class="{ skip: p.action === 'skip' }">
                 <td class="nowrap">{{ p.rowNo }}</td>
                 <td class="nowrap">
-                  <!-- 表示名は Go 側で解決済み(画面と結果 Excel で同じ文言。R14) -->
-                  <span class="badge" :class="p.action">{{ p.actionLabel }}</span>
+                  <!-- 表示は生の機械値(action)をフロントで翻訳する。Go が返す
+                       actionLabel(日本語)は契約として残るが表示には使わない -->
+                  <span class="badge" :class="p.action">{{ translateAction(translate, p.action) }}</span>
                 </td>
-                <td class="nowrap">{{ p.issueKey || '(新規)' }}</td>
+                <td class="nowrap">{{ p.issueKey || t('bulk.newIssue') }}</td>
                 <td>{{ p.summary }}</td>
                 <td>
+                  <!-- 変更内容は Go 生成の自由文のためそのまま表示する -->
                   <ul v-if="p.changes.length > 0" class="changes">
                     <li v-for="(c, i) in p.changes" :key="i">{{ c }}</li>
                   </ul>
                   <span v-else>-</span>
                 </td>
                 <td class="nowrap">
-                  <span v-if="p.conflictWarning" class="badge warn">要確認</span>
+                  <span v-if="p.conflictWarning" class="badge warn">
+                    {{ t('bulk.step3.needsCheck') }}
+                  </span>
                   <span v-else>-</span>
                 </td>
               </tr>
@@ -927,39 +943,37 @@ onUnmounted(() => {
 
       <!-- ④ 実行 -->
       <section v-if="importResult" class="panel">
-        <h2>④ 実行</h2>
+        <h2>{{ t('bulk.step4.title') }}</h2>
         <p class="hint">
-          1 件ずつ Backlog へ書き込みます(バルク API が無いため)。
-          目安: 1,000 件で 8〜10 分。今回の対象 {{ targetCount }} 件は {{ estimateDuration(targetCount) }}です。
+          {{
+            t('bulk.step4.note', {
+              count: targetCount,
+              estimate: estimateDuration(targetCount),
+            })
+          }}
         </p>
 
         <div class="row buttons">
           <button class="primary" :disabled="!canRun" @click="askRun(importResult.jobId, targetCount, false, false)">
-            {{ running ? '実行中...' : '実行' }}
+            {{ running ? t('bulk.step4.running') : t('common.action.run') }}
           </button>
           <button v-if="running" :disabled="canceling" @click="cancelRun">
-            {{ canceling ? '中断要求中...' : 'キャンセル' }}
+            {{ canceling ? t('bulk.step4.canceling') : t('common.action.cancel') }}
           </button>
         </div>
-        <p v-if="!importResult.valid" class="hint warn">
-          検証エラーがあるため実行できません。Excel を修正して取り込み直してください。
-        </p>
+        <p v-if="!importResult.valid" class="hint warn">{{ t('bulk.step4.invalidNote') }}</p>
 
         <!-- 実行確認 -->
         <div v-if="confirming" class="confirm">
-          <p class="result-title">
-            {{ confirmCount }} 件を Backlog に書き込みます。よろしいですか?
+          <p class="result-title">{{ t('bulk.confirm.title', { count: confirmCount }) }}</p>
+          <p v-if="confirmForce" class="warn-text">{{ t('bulk.confirm.force') }}</p>
+          <p v-if="confirmResendSending" class="warn-text">{{ t('bulk.confirm.resend') }}</p>
+          <p class="hint">
+            {{ t('bulk.confirm.estimate', { estimate: estimateDuration(confirmCount) }) }}
           </p>
-          <p v-if="confirmForce" class="warn-text">
-            リモートの変更を上書きします。競合した課題に対してリモートで行われた変更は失われます。
-          </p>
-          <p v-if="confirmResendSending" class="warn-text">
-            作成済みの課題を確認してから再送します(二重作成は自動で防止されます)。
-          </p>
-          <p class="hint">所要時間の目安: {{ estimateDuration(confirmCount) }}</p>
           <div class="row buttons">
-            <button class="primary" @click="confirmRun">書き込む</button>
-            <button @click="cancelConfirm">やめる</button>
+            <button class="primary" @click="confirmRun">{{ t('bulk.confirm.ok') }}</button>
+            <button @click="cancelConfirm">{{ t('bulk.confirm.cancel') }}</button>
           </div>
         </div>
 
@@ -969,8 +983,14 @@ onUnmounted(() => {
             <div class="progress-bar" :style="{ width: progressPercent + '%' }"></div>
           </div>
           <p class="hint">
-            {{ progress.processed }} / {{ progress.total }} 件({{ progressPercent }}%)
-            <span v-if="canceling">— 中断要求済み。送信中の 1 件を終えてから停止します。</span>
+            {{
+              t('bulk.progress.count', {
+                processed: progress.processed,
+                total: progress.total,
+                percent: progressPercent,
+              })
+            }}
+            <span v-if="canceling">{{ t('bulk.progress.canceling') }}</span>
           </p>
         </div>
 
@@ -979,37 +999,33 @@ onUnmounted(() => {
 
       <!-- ⑤ 結果サマリ -->
       <section v-if="runResult" class="panel">
-        <h2>⑤ 実行結果</h2>
+        <h2>{{ t('bulk.step5.title') }}</h2>
         <div class="result" :class="runResult.failed > 0 || runResult.conflict > 0 ? 'ng' : 'ok'">
-          <p class="result-title">一括実行が終了しました</p>
+          <p class="result-title">{{ t('bulk.step5.finished') }}</p>
           <ul>
-            <li>成功: {{ runResult.done }} 件</li>
-            <li>失敗: {{ runResult.failed }} 件</li>
-            <li>競合: {{ runResult.conflict }} 件</li>
-            <li>スキップ: {{ runResult.skipped }} 件(取り込み時の変更なし行)</li>
-            <li>所要時間: {{ (runResult.durationMs / 1000).toFixed(1) }} 秒</li>
+            <li>{{ t('bulk.step5.done', { count: runResult.done }) }}</li>
+            <li>{{ t('bulk.step5.failed', { count: runResult.failed }) }}</li>
+            <li>{{ t('bulk.step5.conflict', { count: runResult.conflict }) }}</li>
+            <li>{{ t('bulk.step5.skipped', { count: runResult.skipped }) }}</li>
+            <li>
+              {{ t('bulk.step5.duration', { seconds: (runResult.durationMs / 1000).toFixed(1) }) }}
+            </li>
           </ul>
-          <p class="hint">
-            スキップは「取り込み時に変更なしと判定した行」の件数です。
-            キャンセル・中断で処理しなかった行はここには含まれません。
-            未処理の件数は下の警告と、ジョブ履歴の「未処理」「送信中」で確認してください。
-          </p>
+          <p class="hint">{{ t('bulk.step5.skippedNote') }}</p>
           <div v-if="runResult.warnings.length > 0" class="warnings">
-            <p class="result-title">警告</p>
+            <p class="result-title">{{ t('common.label.warning') }}</p>
             <ul>
+              <!-- 警告の本文は Go 生成の自由文のためそのまま表示する -->
               <li v-for="(w, i) in runResult.warnings" :key="i">{{ w }}</li>
             </ul>
           </div>
         </div>
 
         <div v-if="runResult.conflict > 0" class="notice warn conflict">
-          <p>
-            競合 {{ runResult.conflict }} 件: リモートが更新されています。
-            最新を確認のうえ、強制上書きは再実行で「競合を上書き」を選択してください。
-          </p>
+          <p>{{ t('bulk.step5.conflictNote', { count: runResult.conflict }) }}</p>
           <div class="row buttons">
             <button :disabled="running || issueSyncRunning" @click="rerunWithForce">
-              競合を上書きして再実行
+              {{ t('bulk.action.forceRerun') }}
             </button>
           </div>
         </div>
@@ -1020,13 +1036,15 @@ onUnmounted(() => {
             :disabled="running || resultExportingJobId !== 0"
             @click="exportResultExcel(runResult.jobId)"
           >
-            {{ resultExportingJobId === runResult.jobId ? '出力中...' : '結果を Excel 出力' }}
+            {{
+              resultExportingJobId === runResult.jobId
+                ? t('common.state.exporting')
+                : t('bulk.action.exportResult')
+            }}
           </button>
           <span v-if="resultExportingJobId === runResult.jobId" class="spinner" aria-hidden="true"></span>
         </div>
-        <p class="hint">
-          行ごとの処理結果(完了・失敗・競合・エラー内容)を Excel に出力します。
-        </p>
+        <p class="hint">{{ t('bulk.step5.exportNote') }}</p>
       </section>
 
       <!-- 結果レポート出力の状態(実行結果・ジョブ履歴の双方の出力で共用する) -->
@@ -1034,12 +1052,17 @@ onUnmounted(() => {
         v-if="resultExportError || resultExportCanceled || resultExportPath"
         class="panel"
       >
-        <h2>結果レポートの出力</h2>
+        <h2>{{ t('bulk.resultExport.title') }}</h2>
         <p v-if="resultExportError" class="error">{{ resultExportError }}</p>
-        <p v-if="resultExportCanceled" class="notice">結果レポートの出力はキャンセルされました。</p>
+        <p v-if="resultExportCanceled" class="notice">{{ t('bulk.resultExport.canceled') }}</p>
         <div v-if="resultExportPath" class="result ok">
           <p class="result-title">
-            ジョブ #{{ resultExportJobId }} の結果レポートを出力しました({{ resultExportRows }} 行)
+            {{
+              t('bulk.resultExport.done', {
+                jobId: resultExportJobId,
+                rows: resultExportRows,
+              })
+            }}
           </p>
           <p class="path">{{ resultExportPath }}</p>
         </div>
@@ -1047,29 +1070,29 @@ onUnmounted(() => {
 
       <!-- ⑥ ジョブ履歴 -->
       <section class="panel">
-        <h2>⑥ ジョブ履歴</h2>
+        <h2>{{ t('bulk.step6.title') }}</h2>
         <div class="row buttons">
-          <button :disabled="running" @click="loadJobs">履歴を更新</button>
+          <button :disabled="running" @click="loadJobs">{{ t('bulk.step6.refresh') }}</button>
         </div>
         <p v-if="jobsError" class="error">{{ jobsError }}</p>
-        <p v-if="jobs.length === 0" class="notice">実行履歴はまだありません。</p>
+        <p v-if="jobs.length === 0" class="notice">{{ t('bulk.step6.empty') }}</p>
 
         <div v-else class="table-wrap">
           <table>
             <thead>
               <tr>
-                <th>ジョブ</th>
-                <th>作成日時</th>
-                <th>種別</th>
-                <th>状態</th>
-                <th>対象</th>
-                <th>完了</th>
-                <th>失敗</th>
-                <th>競合</th>
-                <th>未処理</th>
-                <th>送信中</th>
-                <th>スキップ</th>
-                <th>操作</th>
+                <th>{{ t('bulk.col.job') }}</th>
+                <th>{{ t('bulk.col.createdAt') }}</th>
+                <th>{{ t('bulk.col.kind') }}</th>
+                <th>{{ t('common.label.status') }}</th>
+                <th>{{ t('bulk.col.total') }}</th>
+                <th>{{ t('bulk.col.done') }}</th>
+                <th>{{ t('bulk.col.failed') }}</th>
+                <th>{{ t('bulk.col.conflict') }}</th>
+                <th>{{ t('bulk.col.pending') }}</th>
+                <th>{{ t('bulk.col.sending') }}</th>
+                <th>{{ t('bulk.col.skipped') }}</th>
+                <th>{{ t('bulk.col.actions') }}</th>
               </tr>
             </thead>
             <tbody>
@@ -1077,6 +1100,9 @@ onUnmounted(() => {
                 <tr>
                   <td class="nowrap">#{{ j.jobId }}</td>
                   <td class="nowrap">{{ formatDateTime(j.createdAt) }}</td>
+                  <!-- ジョブ種別・ジョブ状態は Go の生値(bulk_update / done 等)を
+                       そのまま出す。翻訳対象の機械値はフェーズ 1 では
+                       処理区分・行状態に限る(設計 §3.1) -->
                   <td class="nowrap">{{ j.kind }}</td>
                   <td class="nowrap">{{ j.status }}</td>
                   <td class="num">{{ j.total }}</td>
@@ -1093,23 +1119,31 @@ onUnmounted(() => {
                       :disabled="running || issueSyncRunning"
                       @click="resumeJob(j, false)"
                     >
-                      再開
+                      {{ t('bulk.action.resume') }}
                     </button>
                     <button
                       v-if="j.conflict > 0"
                       :disabled="running || issueSyncRunning"
                       @click="forceResumeJob(j)"
                     >
-                      競合を上書きして再実行
+                      {{ t('bulk.action.forceRerun') }}
                     </button>
                     <button :disabled="running" @click="toggleJobRows(j)">
-                      {{ expandedJobId === j.jobId ? '明細を閉じる' : '明細を表示' }}
+                      {{
+                        expandedJobId === j.jobId
+                          ? t('bulk.action.hideRows')
+                          : t('bulk.action.showRows')
+                      }}
                     </button>
                     <button
                       :disabled="running || resultExportingJobId !== 0"
                       @click="exportResultExcel(j.jobId)"
                     >
-                      {{ resultExportingJobId === j.jobId ? '出力中...' : '結果を Excel 出力' }}
+                      {{
+                        resultExportingJobId === j.jobId
+                          ? t('common.state.exporting')
+                          : t('bulk.action.exportResult')
+                      }}
                     </button>
                   </td>
                 </tr>
@@ -1117,14 +1151,13 @@ onUnmounted(() => {
                 <!-- 成否不明(sending が残った)行の説明と再送の導線 -->
                 <tr v-if="hasSending(j)">
                   <td colspan="12" class="sending-note">
-                    送信結果を確認できなかった行があります({{ j.sending }} 件)。
-                    再開すると確認のうえ処理されます(作成済みの課題と突合するため、二重作成は自動で防止されます)。
+                    {{ t('bulk.step6.sendingNote', { count: j.sending }) }}
                     <button
                       class="inline"
                       :disabled="running || issueSyncRunning"
                       @click="resumeJob(j, true)"
                     >
-                      送信中の行も再送して再開
+                      {{ t('bulk.action.resumeResend') }}
                     </button>
                   </td>
                 </tr>
@@ -1132,40 +1165,32 @@ onUnmounted(() => {
                 <!-- 行明細(展開表示) -->
                 <tr v-if="expandedJobId === j.jobId">
                   <td colspan="12" class="detail-cell">
-                    <p v-if="jobRowsLoading" class="hint">行明細を読み込み中...</p>
+                    <p v-if="jobRowsLoading" class="hint">{{ t('bulk.step6.rowsLoading') }}</p>
                     <p v-else-if="jobRowsError" class="error">{{ jobRowsError }}</p>
                     <p v-else-if="jobRowDetails.length === 0" class="hint">
-                      このジョブの行明細はありません。
+                      {{ t('bulk.step6.rowsEmpty') }}
                     </p>
                     <table v-else class="detail-table">
                       <thead>
                         <tr>
-                          <th>行</th>
-                          <th>課題キー</th>
-                          <th>状態</th>
-                          <th>エラー</th>
+                          <th>{{ t('bulk.col.row') }}</th>
+                          <th>{{ t('bulk.col.issueKey') }}</th>
+                          <th>{{ t('common.label.status') }}</th>
+                          <th>{{ t('common.label.error') }}</th>
                         </tr>
                       </thead>
                       <tbody>
                         <tr v-for="r in jobRowDetails" :key="r.rowNo">
                           <td class="nowrap">{{ r.rowNo }}</td>
-                          <!-- 作成済みの課題 ID が入るのは新規追加が成立した行だけ。
-                               その行には作成された課題のキーも記録されるため、
-                               キーの有無より先に見て「(新規)」の目印を残す
-                               (キーだけを出すと更新行と区別が付かなくなる) -->
+                          <td class="nowrap">{{ jobRowIssueLabel(r) }}</td>
                           <td class="nowrap">
-                            <template v-if="r.resultIssueId > 0">
-                              (新規){{ r.issueKey || `作成済み ID: ${r.resultIssueId}` }}
-                            </template>
-                            <template v-else-if="r.issueKey">{{ r.issueKey }}</template>
-                            <template v-else>(新規)</template>
-                          </td>
-                          <td class="nowrap">
-                            <!-- 表示名は Go 側で解決済み(画面と結果 Excel で同じ文言。R14) -->
+                            <!-- 表示は生の機械値(status)をフロントで翻訳する。
+                                 Go が返す statusLabel(日本語)は表示に使わない -->
                             <span class="badge" :class="r.status">
-                              {{ r.statusLabel }}
+                              {{ translateRowStatus(translate, r.status) }}
                             </span>
                           </td>
+                          <!-- エラー本文は Go 生成の自由文のためそのまま表示する -->
                           <td>{{ r.error || '-' }}</td>
                         </tr>
                       </tbody>

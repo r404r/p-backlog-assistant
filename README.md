@@ -1,5 +1,7 @@
 # backlog-assistant
 
+日本語 | [English](README.en.md)
+
 Nulab [Backlog](https://backlog.com/ja/) の課題とユーザ情報を、ローカルにキャッシュしながら安全に抽出・一括更新するデスクトップアプリです。MIT License のオープンソースソフトウェアです。
 
 - 技術スタック: [Wails v2](https://wails.io/) + Vue 3 + TypeScript / Go
@@ -54,6 +56,8 @@ Nulab [Backlog](https://backlog.com/ja/) の課題とユーザ情報を、ロー
 - バージョン・作者・リポジトリ(不具合報告先)・ドキュメント(README / ユーザガイド)・連絡先・ライセンスの表示
 - 保存データの所在: 設定フォルダ、プロファイルごとのローカル DB(パスとサイズ)、動作ログ
 - **表示テーマ**の切り替え: システムに合わせる(既定)/ ライト / **ダーク**。選択は即時反映され次回起動時も維持(タイトルバーは Windows のみ追従。macOS は OS の外観設定に従う)
+- **言語 / Language** の切り替え: システムに合わせる(既定)/ 日本語 / English。選択は即時反映され次回起動時も維持(「システムに合わせる」は OS・ブラウザ(実行環境)の言語設定に追従します)
+  - **現時点の制限**: バックエンド(Go)が生成する一部のメッセージ(検証エラーや処理結果の詳細文)と、Excel 出力・一括更新テンプレートの見出し・記入方法シートは現時点では日本語のみです
 
 ## データの保存場所
 
@@ -104,6 +108,7 @@ wails build
 - TDD(Red → Green → Refactor)で進める
 - コミット前に Codex Review を 2 回実施する
 - 課題データ・実スペース情報などの実データをリポジトリ・ログに含めない
+- ユーザ向けドキュメント(README / USER GUIDE)を更新する際は、英語版([README.en.md](README.en.md) / [docs/USER_GUIDE.en.md](docs/USER_GUIDE.en.md))も同一の変更で更新する
 
 ## ライセンス
 

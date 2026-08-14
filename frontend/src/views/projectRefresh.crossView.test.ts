@@ -11,7 +11,8 @@
  * SyncStatusView.projectRefresh.test.ts が見るため、ここは画面間の合流だけを見る。
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { createApp, nextTick, type App, type Component } from 'vue'
+import { nextTick, type App, type Component } from 'vue'
+import { mountWithI18n } from '../lib/testing/mountWithI18n'
 import type { Backend, IssueSearchResult, Project } from '../lib/backend'
 import { projectsRefreshedAt, resetProjectRefreshState } from '../lib/projectRefresh'
 import { selectedProjectId } from '../lib/projectSelection'
@@ -91,10 +92,7 @@ interface Screen {
 /** 画面を 1 つマウントする(サイドバーの切替と同じく、同時に 1 画面だけ表示する想定) */
 async function mountView(component: Component, backend: Backend): Promise<Screen> {
   holder.backend = backend
-  const host = document.createElement('div')
-  document.body.appendChild(host)
-  const app = createApp(component)
-  app.mount(host)
+  const { app, host } = mountWithI18n(component)
   await flush()
   return { app, host }
 }

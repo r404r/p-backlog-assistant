@@ -9,7 +9,8 @@
  * 移動されても、移動先が古い記録で突合を省略しないようにするため)。
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { createApp, nextTick, type App } from 'vue'
+import { nextTick, type App } from 'vue'
+import { mountWithI18n } from '../lib/testing/mountWithI18n'
 import type { Backend, Profile, ProfileInput } from '../lib/backend'
 import {
   markProjectsRefreshed,
@@ -88,10 +89,7 @@ interface Screen {
 
 async function mountSettingsView(backend: Backend): Promise<Screen> {
   holder.backend = backend
-  const host = document.createElement('div')
-  document.body.appendChild(host)
-  const app = createApp(SettingsView)
-  app.mount(host)
+  const { app, host } = mountWithI18n(SettingsView)
   await flush()
   return {
     app,

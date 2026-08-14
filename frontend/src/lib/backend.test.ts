@@ -5,10 +5,10 @@
  * window へ触れる処理は無く(ランタイム探索はすべて関数の内側)、他モジュールへの
  * import も持たないため、純ヘルパだけを取り出すリファクタをせずそのまま import する。
  *
- * 数値の桁区切り(toLocaleString)は実行環境のロケールに依存するため、
- * 4 桁以上の値を含む期待値はテスト側でも toLocaleString を通して比較する。
+ * 数値の桁区切り(toLocaleString)は**表示言語**で行う(設計 §3.2)。
+ * 実行環境のロケールに依存しないよう、期待値も言語を明示して組み立てる。
  */
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   CUSTOM_COLUMN_PREFIX,
   actionLabel,
@@ -21,6 +21,7 @@ import {
   type SyncPhase,
   type SyncProgress,
 } from './backend'
+import { i18n } from './i18n'
 
 /** 進捗イベントを組み立てる(既定値は「取得中・総件数不明」) */
 function progress(over: Partial<SyncProgress> & { phase: SyncPhase }): SyncProgress {
@@ -28,6 +29,15 @@ function progress(over: Partial<SyncProgress> & { phase: SyncPhase }): SyncProgr
 }
 
 describe('formatSyncProgress', () => {
+  // 進捗文言はグローバル Composer の表示言語で組み立てる。
+  // 既定(日本語)へ必ず戻し、テスト間で言語が持ち越されないようにする。
+  beforeEach(() => {
+    i18n.global.locale.value = 'ja'
+  })
+  afterEach(() => {
+    i18n.global.locale.value = 'ja'
+  })
+
   it('総件数の確認中', () => {
     expect(formatSyncProgress(progress({ phase: 'count' }))).toBe('総件数を確認中...')
   })
@@ -44,11 +54,11 @@ describe('formatSyncProgress', () => {
     )
   })
 
-  it('4 桁以上は桁区切りを入れる', () => {
+  it('4 桁以上は桁区切りを入れる(区切りは表示言語で決める)', () => {
     const fetched = 12345
     const total = 67890
     expect(formatSyncProgress(progress({ phase: 'fetch', fetched, total }))).toBe(
-      `取得中 ${fetched.toLocaleString()} / ${total.toLocaleString()} 件`,
+      `取得中 ${fetched.toLocaleString('ja')} / ${total.toLocaleString('ja')} 件`,
     )
   })
 
@@ -67,6 +77,30 @@ describe('formatSyncProgress', () => {
   it('未知のフェーズは空文字(表示しない)', () => {
     const unknown = progress({ phase: 'unknown' as SyncPhase })
     expect(formatSyncProgress(unknown)).toBe('')
+  })
+
+  it('表示言語が英語なら英語で組み立てる(設計 §3.1)', () => {
+    i18n.global.locale.value = 'en'
+    expect(formatSyncProgress(progress({ phase: 'count' }))).toBe('Counting total...')
+    expect(formatSyncProgress(progress({ phase: 'fetch', fetched: 30, total: 120 }))).toBe(
+      'Fetching 30 / 120',
+    )
+    expect(formatSyncProgress(progress({ phase: 'fetch', fetched: 30, total: 0 }))).toBe(
+      'Fetching 30',
+    )
+    expect(formatSyncProgress(progress({ phase: 'deleteScan', fetched: 120 }))).toBe(
+      'Checking deleted issues (120 fetched)',
+    )
+    expect(formatSyncProgress(progress({ phase: 'done', fetched: 120 }))).toBe(
+      'Fetched 120 (finishing up...)',
+    )
+  })
+
+  it('桁区切りは実行環境ではなく表示言語で決める(設計 §3.2)', () => {
+    i18n.global.locale.value = 'en'
+    expect(formatSyncProgress(progress({ phase: 'fetch', fetched: 12345, total: 0 }))).toBe(
+      `Fetching ${(12345).toLocaleString('en')}`,
+    )
   })
 })
 

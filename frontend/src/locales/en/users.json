@@ -1,0 +1,54 @@
+{
+  "title": "User Export",
+  "mockNote": "Running outside the Wails runtime, so mock data is shown (this is not real data).",
+  "noProfile": "No connection profile is selected. Register and select a profile on the Connection Settings screen.",
+  "perm": {
+    "title": "Permission status",
+    "checking": "Checking the permission status...",
+    "degradedHint": "Items that fall back to per-project fetching can only be retrieved within the projects you belong to.",
+    "degradedFallback": "Some administrator features are unavailable (the details could not be retrieved).",
+    "okFallback": "Administrator features are available."
+  },
+  "sync": {
+    "title": "Sync",
+    "freshnessLabel": "Data freshness:",
+    "freshnessUnknown": "Could not determine the freshness (please check the log)",
+    "lastSynced": "Last synced {datetime} ({elapsed})",
+    "neverSynced": "Users have not been synced yet. Please run \"Sync users\".",
+    "button": "Sync users",
+    "hint": "Fetches the user list, teams, and project membership/administrator information from Backlog and updates the local DB. Extraction runs against the local DB, so sync first to see the latest state.",
+    "resultTitle": "User sync completed"
+  },
+  "cond": {
+    "title": "Search conditions",
+    "keyword": "Keyword",
+    "keywordPlaceholder": "Partial match on name, user ID, or email address",
+    "role": "Role",
+    "roleHint": "The role is the space-wide permission (roleType). Check the per-project permissions in the \"Projects\" and \"Admin Projects\" columns.",
+    "search": "Search",
+    "searching": "Searching..."
+  },
+  "result": {
+    "title": "Results",
+    "total": "{count} matched",
+    "truncated": "(only the first {count} are shown)",
+    "truncatedHint": "Up to {limit} rows are shown on screen. All {total} matching rows are written to Excel.",
+    "empty": "No user matched the conditions."
+  },
+  "export": {
+    "title": "Excel export",
+    "hint": "Select the columns to export (all rows matching the current conditions are exported).",
+    "button": "Export to Excel",
+    "noColumns": "Please select at least one column to export.",
+    "canceled": "The Excel export was canceled.",
+    "doneTitle": "Excel export completed ({count} rows)"
+  },
+  "error": {
+    "activeProfile": "Failed to get the active connection profile: {message}",
+    "permission": "Failed to get the permission status: {message}",
+    "sync": "Failed to sync users: {message}",
+    "search": "Failed to search users: {message}",
+    "exportColumns": "Could not get the information about the exportable columns: {message}",
+    "export": "The Excel export failed: {message}"
+  }
+}

@@ -6,7 +6,14 @@
  * (どのタイムゾーンで実行しても同じ結果になる)。
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { errorMessage, formatDateTime, formatElapsed, syncModeLabel } from './format'
+import { errorMessage, formatDateTime, formatElapsed } from './format'
+import { createAppI18n } from './i18n'
+
+/** 指定言語の翻訳関数(グローバル Composer を汚さない独立インスタンス) */
+function translatorFor(locale: 'ja' | 'en') {
+  const t = createAppI18n(locale).global.t
+  return (key: string, named?: Record<string, unknown>) => (named ? t(key, named) : t(key))
+}
 
 describe('errorMessage', () => {
   it('Error のメッセージを返す', () => {
@@ -87,16 +94,17 @@ describe('formatElapsed', () => {
     expect(formatElapsed(isoMinutesAgo(60 * 24))).toBe('1 日前')
     expect(formatElapsed(isoMinutesAgo(60 * 24 * 30))).toBe('30 日前')
   })
-})
 
-describe('syncModeLabel', () => {
-  it('full はフル同期', () => {
-    expect(syncModeLabel('full')).toBe('フル同期')
+  it('翻訳関数を渡すとその言語で表す(画面は useI18n の t を渡す)', () => {
+    const en = translatorFor('en')
+    expect(formatElapsed(isoMinutesAgo(0), en)).toBe('just now')
+    expect(formatElapsed(isoMinutesAgo(5), en)).toBe('5 min ago')
+    expect(formatElapsed(isoMinutesAgo(60 * 3), en)).toBe('3 hr ago')
+    expect(formatElapsed(isoMinutesAgo(60 * 24 * 2), en)).toBe('2 days ago')
   })
 
-  it('full 以外は差分同期として扱う(Go 側が auto を解決済みのため)', () => {
-    expect(syncModeLabel('incremental')).toBe('差分同期')
-    expect(syncModeLabel('auto')).toBe('差分同期')
-    expect(syncModeLabel('')).toBe('差分同期')
+  it('省略時は日本語(グローバル Composer の既定)', () => {
+    expect(formatElapsed(isoMinutesAgo(5), translatorFor('ja'))).toBe('5 分前')
+    expect(formatElapsed(isoMinutesAgo(5))).toBe('5 分前')
   })
 })

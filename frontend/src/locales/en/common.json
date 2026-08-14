@@ -1,0 +1,81 @@
+{
+  "action": {
+    "cancel": "Cancel",
+    "close": "Close",
+    "retry": "Retry",
+    "reload": "Reload",
+    "search": "Search",
+    "clearConditions": "Clear conditions",
+    "run": "Run"
+  },
+  "state": {
+    "loading": "Loading...",
+    "exporting": "Exporting...",
+    "syncing": "Syncing...",
+    "notSynced": "Not synced",
+    "all": "All",
+    "unknown": "Unknown"
+  },
+  "label": {
+    "project": "Project",
+    "status": "Status",
+    "warning": "Warning",
+    "error": "Error",
+    "page": "Page"
+  },
+  "enum": {
+    "action": {
+      "create": "Add new",
+      "update": "Update",
+      "skip": "No change"
+    },
+    "rowStatus": {
+      "pending": "Pending",
+      "sending": "Sending (result unconfirmed)",
+      "done": "Done",
+      "error": "Failed",
+      "conflict": "Conflict",
+      "skip": "No change"
+    },
+    "roleType": {
+      "role1": "Administrator",
+      "role2": "Normal User",
+      "role3": "Reporter",
+      "role4": "Viewer",
+      "role5": "Guest Reporter",
+      "role6": "Guest Viewer",
+      "unknown": "Unknown ({value})"
+    },
+    "syncMode": {
+      "auto": "Auto",
+      "full": "Full sync",
+      "incremental": "Incremental sync"
+    }
+  },
+  "column": {
+    "_comment": "common.column.* は Excel の列名・列選択に出すラベルで、短さを優先する。画面の結果表の見出しなど、短いと曖昧になる場所では各画面のカタログ側で明確な語を使う(例: issueKey は列選択では『Key』、課題一覧の見出しでは issues.* の『Issue key』)。意図的な使い分けのため統一しないこと。JSON にコメントが書けないための注記キーで、表示には使わない(先頭が _ のキーは localeCatalog.test.ts が注記として扱う)。",
+    "issue": {
+      "issueKey": "Key",
+      "summary": "Summary",
+      "statusName": "Status",
+      "assigneeName": "Assignee",
+      "issueTypeName": "Issue Type",
+      "priorityName": "Priority",
+      "created": "Created",
+      "updated": "Updated",
+      "dueDate": "Due Date",
+      "description": "Description",
+      "parentIssueKey": "Parent Issue Key"
+    },
+    "user": {
+      "userCode": "User ID",
+      "name": "Name",
+      "mailAddress": "Email Address",
+      "roleName": "Role",
+      "roleType": "Role Value",
+      "teamNames": "Teams",
+      "projectKeys": "Projects",
+      "adminProjectKeys": "Admin Projects"
+    }
+  }
+}

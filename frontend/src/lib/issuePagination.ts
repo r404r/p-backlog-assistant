@@ -18,7 +18,9 @@
  */
 import { computed, shallowRef, type ComputedRef, type Ref, type ShallowRef } from 'vue'
 import type { IssueQuery, IssueRow, IssueSearchResult } from './backend'
-import { errorMessage } from './format'
+import type { TranslateFn } from './columnLabels'
+import { errorMessage, globalTranslate } from './format'
+import { useMessage } from './message'
 
 // ---------------------------------------------------------------------------
 // ページ計算(純粋関数)
@@ -104,6 +106,11 @@ export interface IssuePaginationOptions<C> {
   pageSize: number
   /** 検索を実行する(limit / offset を載せた条件で呼ばれる) */
   fetch: (query: IssueQuery, columns: C[]) => Promise<IssueSearchResult>
+  /**
+   * 翻訳関数(失敗メッセージの組み立てに使う)。画面からは `useI18n()` の `t` を
+   * 渡すこと。省略時はグローバル Composer(lib/i18n.ts のシングルトン)を使う。
+   */
+  t?: TranslateFn
 }
 
 export interface IssuePagination<C> {
@@ -119,8 +126,12 @@ export interface IssuePagination<C> {
   searching: Ref<boolean>
   /** 一度でも検索を確定したか(結果セクションの表示条件) */
   searched: Ref<boolean>
-  /** 直近の失敗の説明(空 = 正常) */
-  error: Ref<string>
+  /**
+   * 直近の失敗の説明(空 = 正常)。
+   * 文言は**表示時に翻訳**するため、言語を切り替えると既存のメッセージも
+   * 新しい言語で表示される(保持しているのは翻訳キーと補間値)。
+   */
+  error: ComputedRef<string>
   /**
    * 表示中の結果が古くなった可能性があるか。
    * 検索集合を変え得る書き込みの後に立ち、再検索の成功でのみ下りる。
@@ -161,7 +172,9 @@ export function useIssuePagination<C>(options: IssuePaginationOptions<C>): Issue
   const page = shallowRef(1)
   const searching = shallowRef(false)
   const searched = shallowRef(false)
-  const error = shallowRef('')
+  // 失敗メッセージは「翻訳キー + 補間値」で保持し、表示のたびに翻訳する
+  // (t() の結果を持つと、言語切替後も旧言語のまま残るため)
+  const [error, setError] = useMessage(options.t ?? globalTranslate)
   const stale = shallowRef(false)
   const snapshot = shallowRef<IssueSearchSnapshot<C> | null>(null)
 
@@ -192,7 +205,7 @@ export function useIssuePagination<C>(options: IssuePaginationOptions<C>): Issue
     page.value = confirmedPage
     snapshot.value = snap
     searched.value = true
-    error.value = ''
+    setError(null)
     // stale の解除は再検索の成功時のみ(ページ移動では解除しない)
     if (clearStale) stale.value = false
   }
@@ -211,7 +224,7 @@ export function useIssuePagination<C>(options: IssuePaginationOptions<C>): Issue
   ): Promise<void> {
     const seq = ++requestSeq
     searching.value = true
-    error.value = ''
+    setError(null)
     try {
       let target = requestedPage
       let res = await options.fetch(buildPagedQuery(snap.query, target, pageSize), snap.columns)
@@ -226,9 +239,12 @@ export function useIssuePagination<C>(options: IssuePaginationOptions<C>): Issue
       confirm(res, res.total > 0 ? target : 1, snap, isSearch)
     } catch (e) {
       if (seq !== requestSeq) return
-      error.value = isSearch
-        ? `検索に失敗しました: ${errorMessage(e)}`
-        : `ページの取得に失敗しました: ${errorMessage(e)}`
+      const params = { message: errorMessage(e) }
+      if (isSearch) {
+        setError('issues.error.search', params)
+      } else {
+        setError('issues.error.page', params)
+      }
     } finally {
       // 実行中フラグは失効済みの応答でも必ず下ろす(多重起動は下の guard で防いでいる
       // ため、ここで下ろさないと次の検索を始められなくなる)
@@ -278,7 +294,7 @@ export function useIssuePagination<C>(options: IssuePaginationOptions<C>): Issue
     unverifiable.value = 0
     page.value = 1
     searched.value = false
-    error.value = ''
+    setError(null)
     stale.value = false
     snapshot.value = null
   }

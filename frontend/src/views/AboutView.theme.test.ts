@@ -3,15 +3,17 @@
  *
  * theme.ts 単体のテスト(lib/theme.test.ts)では、画面のラジオが実際に
  * setMode へ配線されているかまでは分からない。ここでは IssuesView.stale.test.ts と
- * 同じ流儀(@vue/test-utils を入れず createApp でマウントする)で、
- * ラジオ操作 → data-theme の変化・localStorage への保存を確認する。
+ * 同じ流儀(@vue/test-utils を入れず createApp でマウントする。i18n の登録は
+ * lib/testing/mountWithI18n.ts が行う)で、ラジオ操作 → data-theme の変化・
+ * localStorage への保存を確認する。
  *
  * あわせて「AboutView は OS 設定の購読を所有しない」(設計 §3.2)ことを、
  * 再マウントでリスナーが増えないという形で固定する。App.vue は KeepAlive 無しの
  * 動的コンポーネントなので、画面を行き来するたびに AboutView は破棄・再生成される。
  */
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
-import { createApp, nextTick, type App } from 'vue'
+import { nextTick, type App } from 'vue'
+import { mountWithI18n } from '../lib/testing/mountWithI18n'
 import { initTheme, setMode, THEME_MODE_KEY } from '../lib/theme'
 import AboutView from './AboutView.vue'
 
@@ -66,10 +68,7 @@ interface Screen {
 }
 
 async function mountAboutView(): Promise<Screen> {
-  const host = document.createElement('div')
-  document.body.appendChild(host)
-  const app = createApp(AboutView)
-  app.mount(host)
+  const { app, host } = mountWithI18n(AboutView)
   await flush()
 
   const screen: Screen = {
@@ -77,7 +76,11 @@ async function mountAboutView(): Promise<Screen> {
     host,
     text: () => host.textContent ?? '',
     radio(mode) {
-      const el = host.querySelector<HTMLInputElement>(`input[type="radio"][value="${mode}"]`)
+      // 表示言語のラジオ(name="language-mode")と value が一部重なるため、
+      // name で表示テーマのラジオに絞り込む
+      const el = host.querySelector<HTMLInputElement>(
+        `input[name="theme-mode"][value="${mode}"]`,
+      )
       if (!el) throw new Error(`ラジオが見つかりません: ${mode}`)
       return el
     },

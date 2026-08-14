@@ -1,0 +1,28 @@
+{
+  "title": "Backlog Assistant",
+  "titleShort": "BA",
+  "versionTitle": "バージョン {version}",
+  "sidebar": {
+    "expand": "メニューを展開する",
+    "collapse": "メニューを折りたたむ",
+    "resizeHandle": "ドラッグで幅を調整(ダブルクリックで既定幅に戻す)"
+  },
+  "nav": {
+    "settings": "接続設定",
+    "settingsShort": "接",
+    "issues": "課題抽出",
+    "issuesShort": "課",
+    "bulkUpdate": "一括更新・追加",
+    "bulkUpdateShort": "一",
+    "users": "ユーザ抽出",
+    "usersShort": "ユ",
+    "syncStatus": "同期状態",
+    "syncStatusShort": "同",
+    "about": "アプリ情報",
+    "aboutShort": "情"
+  },
+  "fatalError": {
+    "title": "画面の表示中にエラーが発生しました",
+    "hint": "他の画面に切り替えるか、アプリを再起動してください。解決しない場合はこのメッセージを開発者に連絡してください。"
+  }
+}

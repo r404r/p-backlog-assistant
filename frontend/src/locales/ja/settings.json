@@ -1,0 +1,81 @@
+{
+  "title": "接続設定",
+  "mockNote": "Wails ランタイム外で動作中のため、モックデータを表示しています(保存内容はリロードで消えます)。",
+  "firstRun": {
+    "title": "ようこそ",
+    "line1": "Backlog に接続するための設定がまだありません。",
+    "line2": "最初の接続プロファイルを登録してください。",
+    "button": "プロファイルを登録する"
+  },
+  "active": {
+    "label": "接続先:",
+    "option": "{name}({url})"
+  },
+  "list": {
+    "title": "プロファイル一覧",
+    "colName": "プロファイル名",
+    "colSpaceUrl": "スペース URL",
+    "colUser": "接続ユーザ",
+    "activeBadge": "接続中",
+    "notConnected": "未接続"
+  },
+  "action": {
+    "edit": "変更",
+    "delete": "削除",
+    "create": "新規登録",
+    "test": "接続テスト",
+    "testing": "接続テスト中...",
+    "save": "保存",
+    "saving": "保存中..."
+  },
+  "perm": {
+    "title": "権限状態",
+    "checking": "「{name}」の権限状態を確認中...",
+    "confirmed": "{name}(実権限で確認済み)"
+  },
+  "form": {
+    "titleCreate": "プロファイルの新規登録",
+    "titleEdit": "プロファイルの変更",
+    "name": "プロファイル名",
+    "namePlaceholder": "例: 開発チーム用",
+    "spaceUrl": "スペース URL",
+    "spaceUrlPlaceholder": "https://example.backlog.jp",
+    "spaceUrlHint": "https:// で始まる *.backlog.jp / *.backlog.com の URL のみ使用できます。",
+    "apiKey": "API キー",
+    "apiKeyPlaceholder": "API キーを入力",
+    "apiKeyPlaceholderEdit": "(変更する場合のみ入力)",
+    "apiKeyHint": "保存後は再表示できません。",
+    "apiKeyHintEdit": "空欄のまま保存すると現在のキーを維持します。"
+  },
+  "test": {
+    "okTitle": "接続テスト成功",
+    "ngTitle": "接続テスト失敗",
+    "userName": "ユーザ名: {name}",
+    "permProvisional": "権限状態(暫定):",
+    "adminAvailable": "管理者機能を利用できる見込みです",
+    "adminUnavailable": "管理者機能は利用不可の見込み(ユーザ・チーム取得はプロジェクト単位に縮退します)",
+    "provisionalNote": "この権限状態はロール(roleType)による暫定判定です。確定した権限状態は保存後に実際の API 呼び出しで確認します。",
+    "saveNote": "「保存」を押すとこのプロファイルを保存します。",
+    "beforeTestNote": "「接続テスト」が成功すると「保存」できるようになります。"
+  },
+  "delete": {
+    "title": "プロファイルの削除",
+    "confirm": "プロファイル「{name}」({url})を削除します。",
+    "confirmNote": "OS キーチェーンに保存された API キーも削除されます。よろしいですか?",
+    "alsoLocalData": "ローカルデータ(DB)も削除する(推奨)",
+    "keepLocalWarning": "チェックを外すと、取得済みデータ(個人情報を含む可能性があります)がローカルに残ります。",
+    "button": "削除する",
+    "deleting": "削除中..."
+  },
+  "error": {
+    "loadProfiles": "プロファイル一覧の取得に失敗しました: {message}",
+    "saveActiveProfile": "接続先の保存に失敗しました: {message}",
+    "spaceUrlRequired": "スペース URL を入力してください",
+    "apiKeyRequired": "API キーを入力してください",
+    "nameRequired": "プロファイル名を入力してください",
+    "test": "接続テストに失敗しました: {message}",
+    "permission": "権限状態の確認に失敗しました: {message}",
+    "save": "保存に失敗しました: {message}",
+    "delete": "削除に失敗しました: {message}"
+  }
+}

@@ -1,0 +1,81 @@
+{
+  "title": "Connection Settings",
+  "mockNote": "Running outside the Wails runtime, so mock data is shown (anything you save is lost on reload).",
+  "firstRun": {
+    "title": "Welcome",
+    "line1": "There is no setting to connect to Backlog yet.",
+    "line2": "Please register your first connection profile.",
+    "button": "Register a profile"
+  },
+  "active": {
+    "label": "Connection:",
+    "option": "{name} ({url})"
+  },
+  "list": {
+    "title": "Profiles",
+    "colName": "Profile name",
+    "colSpaceUrl": "Space URL",
+    "colUser": "Connected user",
+    "activeBadge": "In use",
+    "notConnected": "Not connected"
+  },
+  "action": {
+    "edit": "Edit",
+    "delete": "Delete",
+    "create": "Add new",
+    "test": "Test connection",
+    "testing": "Testing connection...",
+    "save": "Save",
+    "saving": "Saving..."
+  },
+  "perm": {
+    "title": "Permission status",
+    "checking": "Checking the permission status of \"{name}\"...",
+    "confirmed": "{name} (verified with actual permissions)"
+  },
+  "form": {
+    "titleCreate": "Register a new profile",
+    "titleEdit": "Edit the profile",
+    "name": "Profile name",
+    "namePlaceholder": "e.g. For the dev team",
+    "spaceUrl": "Space URL",
+    "spaceUrlPlaceholder": "https://example.backlog.jp",
+    "spaceUrlHint": "Only *.backlog.jp / *.backlog.com URLs starting with https:// can be used.",
+    "apiKey": "API key",
+    "apiKeyPlaceholder": "Enter the API key",
+    "apiKeyPlaceholderEdit": "(Enter only to change it)",
+    "apiKeyHint": "The key cannot be shown again after it is saved.",
+    "apiKeyHintEdit": "Leave it blank to keep the current key."
+  },
+  "test": {
+    "okTitle": "Connection test succeeded",
+    "ngTitle": "Connection test failed",
+    "userName": "User name: {name}",
+    "permProvisional": "Permission status (provisional):",
+    "adminAvailable": "Administrator features are expected to be available",
+    "adminUnavailable": "Administrator features are expected to be unavailable (fetching users and teams falls back to per-project)",
+    "provisionalNote": "This permission status is a provisional judgement based on the role (roleType). The confirmed status is checked with an actual API call after saving.",
+    "saveNote": "Press \"Save\" to save this profile.",
+    "beforeTestNote": "\"Save\" becomes available once \"Test connection\" succeeds."
+  },
+  "delete": {
+    "title": "Delete the profile",
+    "confirm": "The profile \"{name}\" ({url}) will be deleted.",
+    "confirmNote": "The API key stored in the OS keychain is deleted as well. Are you sure?",
+    "alsoLocalData": "Also delete the local data (DB) (recommended)",
+    "keepLocalWarning": "If you clear this checkbox, the fetched data (which may contain personal information) stays on this computer.",
+    "button": "Delete",
+    "deleting": "Deleting..."
+  },
+  "error": {
+    "loadProfiles": "Failed to get the profile list: {message}",
+    "saveActiveProfile": "Failed to save the active connection: {message}",
+    "spaceUrlRequired": "Please enter the Space URL",
+    "apiKeyRequired": "Please enter the API key",
+    "nameRequired": "Please enter the profile name",
+    "test": "The connection test failed: {message}",
+    "permission": "Failed to check the permission status: {message}",
+    "save": "Failed to save: {message}",
+    "delete": "Failed to delete: {message}"
+  }
+}

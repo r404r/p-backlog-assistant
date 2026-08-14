@@ -1,0 +1,158 @@
+{
+  "title": "一括更新・追加",
+  "dangerNote": "この機能は Backlog のデータを変更します。まずテスト用プロジェクトでの試行を推奨します。",
+  "mockNote": "Wails ランタイム外で動作中のため、モックデータを表示しています(実データではありません)。実際の Backlog への書き込みは行われません。",
+  "noProfile": "接続先プロファイルが選択されていません。「接続設定」画面でプロファイルを登録・選択してください。",
+  "syncRunningNote": "他の画面で開始した課題同期が実行中です。完了するまで、プロジェクトの切り替え・テンプレート出力・Excel の取り込み・一括実行はできません(ジョブ履歴の確認と結果の Excel 出力は行えます)。",
+  "newIssue": "(新規)",
+  "flow": {
+    "title": "操作フロー",
+    "step1": "プロジェクトを選び、テンプレート Excel を出力する",
+    "step2": "Excel に記入し、「Excel を取り込む」で読み込む(この時点では書き込まれません)",
+    "step3": "検証エラーと dry-run プレビューで、変更内容を確認する",
+    "step4": "「実行」で Backlog へ書き込む(進捗表示・中断可)",
+    "step5": "結果サマリを確認する(競合した課題は上書きされません)",
+    "step6": "中断した場合はジョブ履歴から再開する",
+    "excelNote": "Excel の記入ルール(空欄 = 変更しない、クリアは #CLEAR#、issueKey 空欄 = 新規追加)は、テンプレートの「記入方法」シートに記載しています。",
+    "customFieldNote": "カスタム属性は「属性:定義名」列に記入します(日付は yyyy-MM-dd、複数リスト・チェックボックスは選択肢名をカンマ区切り)。選択肢に無い値(「その他」の直接入力)は現在未対応です。"
+  },
+  "project": {
+    "empty": "(プロジェクトがありません)",
+    "option": "{name}({key})"
+  },
+  "estimate": {
+    "lessThanMinute": "1 分未満",
+    "minutes": "約 {minutes} 分"
+  },
+  "filter": {
+    "title": "出力する課題の条件",
+    "keyword": "キーワード",
+    "keywordPlaceholder": "課題キー + 件名 + 詳細の部分一致(スペース区切りで複数指定)",
+    "keywordMode": "複数キーワード",
+    "keywordModeAnd": "すべて含む(AND)",
+    "keywordModeOr": "いずれかを含む(OR)",
+    "updated": "更新日",
+    "created": "作成日",
+    "rangeSeparator": "〜",
+    "assignee": "担当者",
+    "optionsEmptyNote": "状態・担当者の候補は同期済みの課題から作成されます(「課題抽出」画面で同期すると選択できるようになります)。",
+    "matchNote": "条件に一致した課題だけがテンプレートに載ります(すべて空欄なら全件)。",
+    "conditionsSet": "現在は条件を指定しています。",
+    "conditionsNone": "現在は条件を指定していないため、全件が出力されます。",
+    "localDataNote": "検索対象は同期済みのローカルデータです(カスタム属性での絞り込みは未対応)。"
+  },
+  "step1": {
+    "title": "① テンプレート出力",
+    "projectNote": "テンプレートにはプロジェクトが固定で埋め込まれるため、行ごとにプロジェクトは変えられません。種別・状態・優先度・担当者は、名前列のドロップダウンで編集できます(名前列が空の行は ID 列の値を使います)。名前列に値がある行は常に名前列が優先され、食い違う ID 列は無視して警告を表示します。",
+    "exportButton": "テンプレート出力",
+    "canceled": "テンプレート出力はキャンセルされました。",
+    "exported": "テンプレートを出力しました({count} 件)"
+  },
+  "step2": {
+    "title": "② Excel を取り込む",
+    "defaultPriority": "既定の優先度",
+    "priorityUnavailable": "(取得できていません)",
+    "priorityNote": "優先度が未入力の新規追加行に適用します(このプロジェクトの取り込みでのみ有効です)。",
+    "importing": "取り込み中...",
+    "importButton": "Excel を取り込む",
+    "note": "ファイル選択ダイアログで記入済みの Excel を選びます。取り込みは検証と dry-run のみで、この操作では Backlog に書き込みません。",
+    "canceled": "Excel の取り込みはキャンセルされました。"
+  },
+  "step3": {
+    "title": "③ 検証結果・変更プレビュー(dry-run)",
+    "summary": "取り込み {total} 行 / {createLabel} {creates} 件 / {updateLabel} {updates} 件 / {skipLabel} {skips} 件",
+    "importWarnings": "取り込み時の警告",
+    "validationErrors": "検証エラー {count} 件(修正して取り込み直してください)",
+    "errorLine": "{rowNo} 行目: {message}",
+    "noErrors": "検証エラーはありません。内容を確認して実行してください。",
+    "conflictWarning": "{count} 件の課題は、テンプレート出力後にリモートで更新されています。実行時に競合として除外される可能性があります。",
+    "needsCheck": "要確認"
+  },
+  "step4": {
+    "title": "④ 実行",
+    "note": "1 件ずつ Backlog へ書き込みます(バルク API が無いため)。目安: 1,000 件で 8〜10 分。今回の対象 {count} 件は {estimate}です。",
+    "running": "実行中...",
+    "canceling": "中断要求中...",
+    "invalidNote": "検証エラーがあるため実行できません。Excel を修正して取り込み直してください。"
+  },
+  "confirm": {
+    "title": "{count} 件を Backlog に書き込みます。よろしいですか?",
+    "force": "リモートの変更を上書きします。競合した課題に対してリモートで行われた変更は失われます。",
+    "resend": "作成済みの課題を確認してから再送します(二重作成は自動で防止されます)。",
+    "estimate": "所要時間の目安: {estimate}",
+    "ok": "書き込む",
+    "cancel": "やめる"
+  },
+  "progress": {
+    "count": "{processed} / {total} 件({percent}%)",
+    "canceling": "— 中断要求済み。送信中の 1 件を終えてから停止します。"
+  },
+  "step5": {
+    "title": "⑤ 実行結果",
+    "finished": "一括実行が終了しました",
+    "done": "成功: {count} 件",
+    "failed": "失敗: {count} 件",
+    "conflict": "競合: {count} 件",
+    "skipped": "スキップ: {count} 件(取り込み時の変更なし行)",
+    "duration": "所要時間: {seconds} 秒",
+    "skippedNote": "スキップは「取り込み時に変更なしと判定した行」の件数です。キャンセル・中断で処理しなかった行はここには含まれません。未処理の件数は下の警告と、ジョブ履歴の「未処理」「送信中」で確認してください。",
+    "conflictNote": "競合 {count} 件: リモートが更新されています。最新を確認のうえ、強制上書きは再実行で「競合を上書き」を選択してください。",
+    "exportNote": "行ごとの処理結果(完了・失敗・競合・エラー内容)を Excel に出力します。"
+  },
+  "resultExport": {
+    "title": "結果レポートの出力",
+    "canceled": "結果レポートの出力はキャンセルされました。",
+    "done": "ジョブ #{jobId} の結果レポートを出力しました({rows} 行)"
+  },
+  "step6": {
+    "title": "⑥ ジョブ履歴",
+    "refresh": "履歴を更新",
+    "empty": "実行履歴はまだありません。",
+    "sendingNote": "送信結果を確認できなかった行があります({count} 件)。再開すると確認のうえ処理されます(作成済みの課題と突合するため、二重作成は自動で防止されます)。",
+    "rowsLoading": "行明細を読み込み中...",
+    "rowsEmpty": "このジョブの行明細はありません。"
+  },
+  "jobRows": {
+    "newWithKey": "(新規){issueKey}",
+    "newWithId": "(新規)作成済み ID: {issueId}"
+  },
+  "action": {
+    "resume": "再開",
+    "resumeResend": "送信中の行も再送して再開",
+    "forceRerun": "競合を上書きして再実行",
+    "showRows": "明細を表示",
+    "hideRows": "明細を閉じる",
+    "exportResult": "結果を Excel 出力"
+  },
+  "col": {
+    "row": "行",
+    "action": "区分",
+    "issueKey": "課題キー",
+    "summary": "件名",
+    "changes": "変更内容",
+    "conflict": "競合",
+    "job": "ジョブ",
+    "createdAt": "作成日時",
+    "kind": "種別",
+    "total": "対象",
+    "done": "完了",
+    "failed": "失敗",
+    "pending": "未処理",
+    "sending": "送信中",
+    "skipped": "スキップ",
+    "actions": "操作"
+  },
+  "error": {
+    "loadProfile": "接続先プロファイルの取得に失敗しました: {message}",
+    "loadProjects": "プロジェクト一覧の取得に失敗しました: {message}",
+    "loadMaster": "マスタデータの取得に失敗しました: {message}",
+    "loadFilterOptions": "絞り込み候補の取得に失敗しました: {message}",
+    "exportTemplate": "テンプレートの出力に失敗しました: {message}",
+    "import": "Excel の取り込みに失敗しました: {message}",
+    "run": "一括実行に失敗しました: {message}",
+    "cancel": "中断の要求に失敗しました: {message}",
+    "loadJobs": "ジョブ履歴の取得に失敗しました: {message}",
+    "loadJobRows": "行明細の取得に失敗しました: {message}",
+    "exportResult": "結果レポートの出力に失敗しました: {message}"
+  }
+}

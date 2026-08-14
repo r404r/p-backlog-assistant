@@ -1,6 +1,7 @@
 <script lang="ts" setup>
 // ユーザ抽出画面。TDD 例外(GUI): フロントエンドにテスト基盤が無いため手動確認で担保する。
 import { computed, onMounted, reactive, ref } from 'vue'
+import { useI18n } from 'vue-i18n'
 import {
   getBackend,
   isMockBackend,
@@ -10,26 +11,25 @@ import {
   type UserQuery,
   type UserRow,
 } from '../lib/backend'
+import { columnLabel } from '../lib/columnLabels'
+import { translateRoleType } from '../lib/enumLabels'
 import { errorMessage, formatDateTime, formatElapsed } from '../lib/format'
+import { useMessage } from '../lib/message'
 
 const backend = getBackend()
 const mock = isMockBackend()
+
+const { t } = useI18n()
 
 /** 画面に表示する最大件数(Excel 出力は条件に一致する全件が対象) */
 const PREVIEW_LIMIT = 200
 
 /**
  * ロール種別(Backlog の roleType)の選択肢。
- * 値・表示名は Go 側 store.RoleName(backlogclient.RoleType)の既知値に合わせる。
+ * 値は Go 側 store.RoleName(backlogclient.RoleType)の既知値に合わせる。
+ * 表示名は機械値からフロントで翻訳する(設計 §3.1。lib/enumLabels.ts)。
  */
-const ROLE_OPTIONS: { value: number; label: string }[] = [
-  { value: 1, label: '管理者' },
-  { value: 2, label: '一般ユーザ' },
-  { value: 3, label: 'レポーター' },
-  { value: 4, label: '閲覧者' },
-  { value: 5, label: 'ゲストレポーター' },
-  { value: 6, label: 'ゲスト閲覧者' },
-]
+const ROLE_VALUES = [1, 2, 3, 4, 5, 6]
 
 /** 複数値を 1 セル相当の表示にまとめる(Excel 出力と同じ区切り) */
 function joinValues(values: string[]): string {
@@ -37,11 +37,13 @@ function joinValues(values: string[]): string {
 }
 
 /**
- * ロールの表示名。Go 側は未知の roleType を「不明(N)」で返すが、
- * 旧バージョンのバインディング等で空の場合も数値を落とさない。
+ * ロールの表示名。
+ * Go も解決済みの `roleName`(日本語)を返すが、**表示には使わない**
+ * (英語 UI で日本語が混ざるため。設計 §3.1)。生の roleType から翻訳し、
+ * 未知の値は「不明(N)」形式へ縮退する(translateRoleType の責務)。
  */
 function roleLabel(u: UserRow): string {
-  return u.roleName || `不明(${u.roleType})`
+  return translateRoleType(t, u.roleType)
 }
 
 // ---------------------------------------------------------------------------
@@ -50,10 +52,10 @@ function roleLabel(u: UserRow): string {
 
 const profileId = ref('')
 const initializing = ref(true)
-const globalError = ref('')
+const [globalError, setGlobalError] = useMessage(t)
 
 const permission = ref<PermissionStatus | null>(null)
-const permissionError = ref('')
+const [permissionError, setPermissionError] = useMessage(t)
 
 /** ユーザデータの最終同期時刻(sync_state の dataKind='users' 行。未同期なら空文字) */
 const lastSyncedAt = ref('')
@@ -62,12 +64,12 @@ const syncStateUnknown = ref(false)
 
 async function loadPermission() {
   if (!profileId.value) return
-  permissionError.value = ''
+  setPermissionError(null)
   try {
     permission.value = await backend.getPermissionStatus(profileId.value)
   } catch (e) {
     permission.value = null
-    permissionError.value = `権限状態の取得に失敗しました: ${errorMessage(e)}`
+    setPermissionError('users.error.permission', { message: errorMessage(e) })
   }
 }
 
@@ -90,7 +92,7 @@ onMounted(async () => {
   try {
     profileId.value = await backend.getActiveProfile()
   } catch (e) {
-    globalError.value = `接続先プロファイルの取得に失敗しました: ${errorMessage(e)}`
+    setGlobalError('users.error.activeProfile', { message: errorMessage(e) })
   } finally {
     initializing.value = false
   }
@@ -112,9 +114,7 @@ const permissionMessage = computed(() => {
   const p = permission.value
   if (!p) return ''
   if (p.message) return p.message
-  return p.degraded
-    ? '一部の管理者機能が利用できません(内容を取得できませんでした)。'
-    : '管理者機能を利用できます。'
+  return p.degraded ? t('users.perm.degradedFallback') : t('users.perm.okFallback')
 })
 
 /** 一度も同期されていないか(鮮度が不明な場合は断定しない) */
@@ -126,12 +126,12 @@ const neverSynced = computed(() => !syncStateUnknown.value && !lastSyncedAt.valu
 
 const syncing = ref(false)
 const syncResult = ref<SyncResult | null>(null)
-const syncError = ref('')
+const [syncError, setSyncError] = useMessage(t)
 
 async function runSync() {
   if (!profileId.value || syncing.value) return
   syncing.value = true
-  syncError.value = ''
+  setSyncError(null)
   syncResult.value = null
   try {
     syncResult.value = await backend.syncUsers(profileId.value)
@@ -139,7 +139,7 @@ async function runSync() {
     await loadSyncState() // 鮮度表示を更新
     await search()
   } catch (e) {
-    syncError.value = `ユーザの同期に失敗しました: ${errorMessage(e)}`
+    setSyncError('users.error.sync', { message: errorMessage(e) })
   } finally {
     syncing.value = false
   }
@@ -176,7 +176,7 @@ const rows = ref<UserRow[]>([])
 const total = ref(0)
 const searching = ref(false)
 const searched = ref(false)
-const searchError = ref('')
+const [searchError, setSearchError] = useMessage(t)
 
 /** 表示件数が上限で切り詰められているか */
 const truncated = computed(() => total.value > rows.value.length)
@@ -184,14 +184,14 @@ const truncated = computed(() => total.value > rows.value.length)
 async function search() {
   if (!profileId.value || searching.value) return
   searching.value = true
-  searchError.value = ''
+  setSearchError(null)
   try {
     const res = await backend.listUsers(profileId.value, buildQuery(true))
     rows.value = res.rows
     total.value = res.total
     searched.value = true
   } catch (e) {
-    searchError.value = `ユーザの抽出に失敗しました: ${errorMessage(e)}`
+    setSearchError('users.error.search', { message: errorMessage(e) })
   } finally {
     searching.value = false
   }
@@ -208,7 +208,7 @@ async function search() {
 const exportColumns = ref<ExportColumn[]>([])
 
 /** 列の取得に失敗した場合の説明(空 = 正常) */
-const exportColumnsError = ref('')
+const [exportColumnsError, setExportColumnsError] = useMessage(t)
 
 // 初期値は空。列の取得(loadExportColumns)で既定列が入る
 const selectedColumns = ref<string[]>([])
@@ -224,13 +224,13 @@ async function loadExportColumns() {
   try {
     const cols = await backend.getUserExportColumns()
     exportColumns.value = cols
-    exportColumnsError.value = ''
+    setExportColumnsError(null)
     if (!exportColumnsInitialized) {
       selectedColumns.value = cols.filter((c) => c.byDefault).map((c) => c.key)
       exportColumnsInitialized = true
     }
   } catch (e) {
-    exportColumnsError.value = `出力する列の情報を取得できませんでした: ${errorMessage(e)}`
+    setExportColumnsError('users.error.exportColumns', { message: errorMessage(e) })
   }
 }
 
@@ -238,7 +238,7 @@ const exporting = ref(false)
 const exportPath = ref('')
 const exportRows = ref(0)
 const exportCanceled = ref(false)
-const exportError = ref('')
+const [exportError, setExportError] = useMessage(t)
 
 const canExport = computed(
   () => !!profileId.value && selectedColumns.value.length > 0 && !exporting.value,
@@ -247,7 +247,7 @@ const canExport = computed(
 async function exportExcel() {
   if (!canExport.value) return
   exporting.value = true
-  exportError.value = ''
+  setExportError(null)
   exportPath.value = ''
   exportCanceled.value = false
   try {
@@ -263,7 +263,7 @@ async function exportExcel() {
       exportRows.value = res.rows
     }
   } catch (e) {
-    exportError.value = `Excel 出力に失敗しました: ${errorMessage(e)}`
+    setExportError('users.error.export', { message: errorMessage(e) })
   } finally {
     exporting.value = false
   }
@@ -272,73 +272,71 @@ async function exportExcel() {
 
 <template>
   <div class="users">
-    <h1>ユーザ抽出</h1>
+    <h1>{{ t('users.title') }}</h1>
 
-    <p v-if="mock" class="mock-note">
-      Wails ランタイム外で動作中のため、モックデータを表示しています(実データではありません)。
-    </p>
+    <p v-if="mock" class="mock-note">{{ t('users.mockNote') }}</p>
 
     <p v-if="globalError" class="error">{{ globalError }}</p>
 
-    <p v-if="initializing">読み込み中...</p>
+    <p v-if="initializing">{{ t('common.state.loading') }}</p>
 
-    <p v-else-if="!profileId" class="notice">
-      接続先プロファイルが選択されていません。「接続設定」画面でプロファイルを登録・選択してください。
-    </p>
+    <p v-else-if="!profileId" class="notice">{{ t('users.noProfile') }}</p>
 
     <template v-else>
       <!-- 権限状態 -->
       <section class="panel">
-        <h2>権限状態</h2>
+        <h2>{{ t('users.perm.title') }}</h2>
         <p v-if="permissionError" class="error">{{ permissionError }}</p>
         <template v-else-if="permission">
           <!-- 何が利用不可かはバックエンドの message が持つ(画面では決め打ちしない。中 2) -->
           <p class="notice" :class="{ warn: permission.degraded }">{{ permissionMessage }}</p>
-          <p v-if="permission.degraded" class="hint">
-            プロジェクト単位の取得に縮退している項目は、参加しているプロジェクトの範囲でしか取得できません。
-          </p>
+          <p v-if="permission.degraded" class="hint">{{ t('users.perm.degradedHint') }}</p>
         </template>
-        <p v-else class="hint">権限状態を確認中です...</p>
+        <p v-else class="hint">{{ t('users.perm.checking') }}</p>
       </section>
 
       <!-- 同期 -->
       <section class="panel">
-        <h2>同期</h2>
+        <h2>{{ t('users.sync.title') }}</h2>
         <p class="freshness">
-          データ鮮度:
-          <template v-if="syncStateUnknown">鮮度を取得できませんでした(ログを確認してください)</template>
+          {{ t('users.sync.freshnessLabel') }}
+          <template v-if="syncStateUnknown">{{ t('users.sync.freshnessUnknown') }}</template>
           <template v-else-if="lastSyncedAt">
-            最終同期 {{ formatDateTime(lastSyncedAt) }}({{ formatElapsed(lastSyncedAt) }})
+            {{
+              t('users.sync.lastSynced', {
+                datetime: formatDateTime(lastSyncedAt),
+                elapsed: formatElapsed(lastSyncedAt, t),
+              })
+            }}
           </template>
-          <template v-else>未同期</template>
+          <template v-else>{{ t('common.state.notSynced') }}</template>
         </p>
-        <p v-if="neverSynced" class="notice warn">
-          ユーザはまだ同期されていません。「ユーザを同期」を実行してください。
-        </p>
+        <p v-if="neverSynced" class="notice warn">{{ t('users.sync.neverSynced') }}</p>
 
         <div class="row buttons">
           <button class="primary" :disabled="syncing" @click="runSync">
-            {{ syncing ? '同期中...' : 'ユーザを同期' }}
+            {{ syncing ? t('common.state.syncing') : t('users.sync.button') }}
           </button>
           <span v-if="syncing" class="spinner" aria-hidden="true"></span>
         </div>
-        <p class="hint">
-          ユーザ一覧・所属チーム・プロジェクト参加/管理者情報を Backlog から取得してローカル DB を更新します。
-          抽出はローカル DB に対して行うため、最新の状態を見るには先に同期してください。
-        </p>
+        <p class="hint">{{ t('users.sync.hint') }}</p>
 
         <p v-if="syncError" class="error">{{ syncError }}</p>
 
         <div v-if="syncResult" class="result ok">
-          <p class="result-title">ユーザの同期が完了しました</p>
+          <p class="result-title">{{ t('users.sync.resultTitle') }}</p>
           <ul>
-            <li>取得: {{ syncResult.fetched }} 件</li>
-            <li>登録・更新: {{ syncResult.upserted }} 件</li>
-            <li>削除: {{ syncResult.deleted }} 件</li>
-            <li>所要時間: {{ (syncResult.durationMs / 1000).toFixed(1) }} 秒</li>
+            <li>{{ t('sync.result.fetched', { count: syncResult.fetched }) }}</li>
+            <li>{{ t('sync.result.upserted', { count: syncResult.upserted }) }}</li>
+            <li>{{ t('sync.result.deleted', { count: syncResult.deleted }) }}</li>
+            <li>
+              {{
+                t('sync.result.duration', { seconds: (syncResult.durationMs / 1000).toFixed(1) })
+              }}
+            </li>
           </ul>
           <div v-if="syncResult.warnings.length > 0" class="warnings">
-            <p class="result-title">警告</p>
+            <p class="result-title">{{ t('common.label.warning') }}</p>
             <ul>
               <li v-for="(w, i) in syncResult.warnings" :key="i">{{ w }}</li>
             </ul>
@@ -348,35 +346,36 @@ async function exportExcel() {
 
       <!-- 抽出条件 -->
       <section class="panel">
-        <h2>抽出条件</h2>
+        <h2>{{ t('users.cond.title') }}</h2>
         <div class="row">
-          <label for="u-keyword">キーワード</label>
+          <label for="u-keyword">{{ t('users.cond.keyword') }}</label>
           <input
             id="u-keyword"
             v-model="cond.keyword"
             type="text"
             class="wide"
-            placeholder="名前・ユーザID・メールアドレスの部分一致"
+            :placeholder="t('users.cond.keywordPlaceholder')"
           />
         </div>
 
         <div class="row">
-          <label for="u-role">ロール</label>
+          <label for="u-role">{{ t('users.cond.role') }}</label>
           <select id="u-role" v-model.number="cond.roleType">
-            <option :value="0">すべて</option>
-            <option v-for="r in ROLE_OPTIONS" :key="r.value" :value="r.value">{{ r.label }}</option>
+            <option :value="0">{{ t('common.state.all') }}</option>
+            <option v-for="r in ROLE_VALUES" :key="r" :value="r">
+              {{ translateRoleType(t, r) }}
+            </option>
           </select>
         </div>
-        <p class="hint">
-          ロールはスペース全体の権限(roleType)です。プロジェクトごとの権限は
-          「参加プロジェクト」「管理者プロジェクト」列で確認してください。
-        </p>
+        <p class="hint">{{ t('users.cond.roleHint') }}</p>
 
         <div class="row buttons">
           <button class="primary" :disabled="searching" @click="search">
-            {{ searching ? '抽出中...' : '抽出' }}
+            {{ searching ? t('users.cond.searching') : t('users.cond.search') }}
           </button>
-          <button :disabled="searching" @click="clearConditions">条件をクリア</button>
+          <button :disabled="searching" @click="clearConditions">
+            {{ t('common.action.clearConditions') }}
+          </button>
           <span v-if="searching" class="spinner" aria-hidden="true"></span>
         </div>
         <p v-if="searchError" class="error">{{ searchError }}</p>
@@ -384,28 +383,28 @@ async function exportExcel() {
 
       <!-- 抽出結果 -->
       <section v-if="searched" class="panel">
-        <h2>抽出結果</h2>
+        <h2>{{ t('users.result.title') }}</h2>
         <p class="summary">
-          該当 {{ total }} 件
-          <span v-if="truncated">(画面には先頭 {{ rows.length }} 件のみ表示)</span>
+          {{ t('users.result.total', { count: total }) }}
+          <span v-if="truncated">{{ t('users.result.truncated', { count: rows.length }) }}</span>
         </p>
         <p v-if="truncated" class="hint">
-          画面表示は {{ PREVIEW_LIMIT }} 件までです。Excel には条件に一致する全 {{ total }} 件が出力されます。
+          {{ t('users.result.truncatedHint', { limit: PREVIEW_LIMIT, total }) }}
         </p>
 
-        <p v-if="rows.length === 0" class="notice">条件に一致するユーザはありませんでした。</p>
+        <p v-if="rows.length === 0" class="notice">{{ t('users.result.empty') }}</p>
 
         <div v-else class="table-wrap">
           <table>
             <thead>
               <tr>
-                <th>名前</th>
-                <th>ユーザID</th>
-                <th>メールアドレス</th>
-                <th>ロール</th>
-                <th>所属チーム</th>
-                <th>参加プロジェクト</th>
-                <th>管理者プロジェクト</th>
+                <th>{{ t('common.column.user.name') }}</th>
+                <th>{{ t('common.column.user.userCode') }}</th>
+                <th>{{ t('common.column.user.mailAddress') }}</th>
+                <th>{{ t('common.column.user.roleName') }}</th>
+                <th>{{ t('common.column.user.teamNames') }}</th>
+                <th>{{ t('common.column.user.projectKeys') }}</th>
+                <th>{{ t('common.column.user.adminProjectKeys') }}</th>
               </tr>
             </thead>
             <tbody>
@@ -425,29 +424,33 @@ async function exportExcel() {
 
       <!-- Excel 出力 -->
       <section class="panel">
-        <h2>Excel 出力</h2>
-        <p class="hint">出力する列を選択してください(現在の抽出条件に一致する全件が出力されます)。</p>
+        <h2>{{ t('users.export.title') }}</h2>
+        <p class="hint">{{ t('users.export.hint') }}</p>
         <div class="columns">
           <label v-for="c in exportColumns" :key="c.key" class="checkbox">
             <input v-model="selectedColumns" type="checkbox" :value="c.key" />
-            {{ c.label }}
+            {{ columnLabel(t, 'user', c.key, c.label) }}
           </label>
         </div>
         <p v-if="exportColumnsError" class="hint warn">
           {{ exportColumnsError }}
-          <button type="button" class="link" @click="loadExportColumns">再試行</button>
+          <button type="button" class="link" @click="loadExportColumns">
+            {{ t('common.action.retry') }}
+          </button>
         </p>
         <div class="row buttons">
           <button class="primary" :disabled="!canExport" @click="exportExcel">
-            {{ exporting ? '出力中...' : 'Excel 出力' }}
+            {{ exporting ? t('common.state.exporting') : t('users.export.button') }}
           </button>
           <span v-if="exporting" class="spinner" aria-hidden="true"></span>
         </div>
-        <p v-if="selectedColumns.length === 0" class="hint warn">出力する列を 1 つ以上選択してください。</p>
+        <p v-if="selectedColumns.length === 0" class="hint warn">
+          {{ t('users.export.noColumns') }}
+        </p>
         <p v-if="exportError" class="error">{{ exportError }}</p>
-        <p v-if="exportCanceled" class="notice">Excel 出力はキャンセルされました。</p>
+        <p v-if="exportCanceled" class="notice">{{ t('users.export.canceled') }}</p>
         <div v-if="exportPath" class="result ok">
-          <p class="result-title">Excel 出力が完了しました({{ exportRows }} 件)</p>
+          <p class="result-title">{{ t('users.export.doneTitle', { count: exportRows }) }}</p>
           <p class="path">{{ exportPath }}</p>
         </div>
       </section>
