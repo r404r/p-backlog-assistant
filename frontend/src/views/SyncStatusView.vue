@@ -16,6 +16,7 @@ import {
   type SyncStateRow,
 } from '../lib/backend'
 import { errorMessage, formatDateTime, formatElapsed, syncModeLabel } from '../lib/format'
+import { runSharedProjectRefresh, shouldSkipProjectRefreshFor } from '../lib/projectRefresh'
 import {
   resolveProjectSelection,
   restoreProjectSelection,
@@ -113,6 +114,11 @@ async function reload() {
  * 直列化されている(service の syncMu)ため、ここで待つと画面の初期表示が
  * 課題同期の完了(数分)までブロックされてしまう。ローカルキャッシュの
  * 読み込み(reload)は省略せず、一覧が空のままにならないようにする。
+ *
+ * 直近(10 分以内)に突合できている場合も API による最新化を省略する
+ * (projectRefresh)。画面を行き来するたびに通信すると体感が重く、
+ * レート制限も消費するため。省略は正常動作なので警告等は出さない。
+ * 他画面が始めた突合が実行中なら、新たに始めずそれへ合流する。
  */
 async function refreshProjects() {
   if (!profileId.value || syncingProjects.value) return
@@ -122,10 +128,15 @@ async function refreshProjects() {
     await reload()
     return
   }
+  if (shouldSkipProjectRefreshFor(profileId.value)) {
+    await reload()
+    return
+  }
   syncingProjects.value = true
   projectsWarning.value = ''
   try {
-    await backend.syncProjects(profileId.value)
+    // 成功時だけ起点が記録される(失敗時は記録されず、次の画面表示で再試行する)
+    await runSharedProjectRefresh(profileId.value, () => backend.syncProjects(profileId.value))
   } catch {
     projectsWarning.value =
       'プロジェクト一覧を最新化できませんでした(オフライン等)。表示はローカルキャッシュです。'
@@ -328,13 +339,21 @@ async function runIssueSync() {
   }
 }
 
+/**
+ * 手動の「プロジェクト一覧を同期」。
+ * 利用者が明示的に求めた操作のため、画面表示時のスロットリング
+ * (10 分以内なら省略)は適用せず、常に API と突合する。
+ * ただし他画面が始めた突合が実行中の場合はそれへ合流する
+ * (同じ突合を二重に走らせないため。projectRefresh.ts 参照)。
+ */
 async function runProjectSync() {
   if (busy.value) return
   syncingProjects.value = true
   syncError.value = ''
   projectsWarning.value = ''
   try {
-    await backend.syncProjects(profileId.value)
+    // 成功すると自動突合の起点も更新される(手動同期でも突合は済んでいるため)
+    await runSharedProjectRefresh(profileId.value, () => backend.syncProjects(profileId.value))
     await reload()
   } catch (e) {
     syncError.value = `プロジェクトの同期に失敗しました: ${errorMessage(e)}`

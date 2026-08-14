@@ -25,6 +25,7 @@ import { errorMessage, formatDateTime, formatElapsed, syncModeLabel } from '../l
 import { useIssuePagination } from '../lib/issuePagination'
 import { buildIssueQuery, newIssueConditions, resetIssueConditions } from '../lib/issueQuery'
 import { useModalFocus } from '../lib/modalFocus'
+import { runSharedProjectRefresh, shouldSkipProjectRefreshFor } from '../lib/projectRefresh'
 import {
   resolveProjectSelection,
   restoreProjectSelection,
@@ -145,6 +146,13 @@ async function loadProjects() {
   }
 }
 
+/**
+ * 手動の「プロジェクト一覧を同期」。
+ * 利用者が明示的に求めた操作のため、画面表示時のスロットリング
+ * (10 分以内なら省略)は適用せず、常に API と突合する。
+ * ただし他画面が始めた突合が実行中の場合はそれへ合流する
+ * (同じ突合を二重に走らせないため。projectRefresh.ts 参照)。
+ */
 async function syncProjects() {
   // busy 中(課題同期中を含む)は実行しない。ボタンは disabled だが、
   // 判定を UI だけに任せない(SyncStatusView と同じ流儀)
@@ -153,7 +161,8 @@ async function syncProjects() {
   globalError.value = ''
   projectsWarning.value = ''
   try {
-    await backend.syncProjects(profileId.value)
+    // 成功すると自動突合の起点も更新される(手動同期でも突合は済んでいるため)
+    await runSharedProjectRefresh(profileId.value, () => backend.syncProjects(profileId.value))
     await loadProjects()
   } catch (e) {
     globalError.value = `プロジェクトの同期に失敗しました: ${errorMessage(e)}`
@@ -174,6 +183,11 @@ async function syncProjects() {
  * 直列化されている(service の syncMu)ため、ここで待つと画面の初期表示が
  * 課題同期の完了(数分)までブロックされてしまう。ローカル一覧の読み込み
  * (loadProjects)は省略せず、セレクタが空のままにならないようにする。
+ *
+ * 直近(10 分以内)に突合できている場合も API による最新化を省略する
+ * (projectRefresh)。画面を行き来するたびに通信すると体感が重く、
+ * レート制限も消費するため。省略は正常動作なので警告等は出さない。
+ * 他画面が始めた突合が実行中なら、新たに始めずそれへ合流する。
  */
 async function refreshProjects() {
   if (!profileId.value || projectsSyncing.value) return
@@ -183,10 +197,15 @@ async function refreshProjects() {
     await loadProjects()
     return
   }
+  if (shouldSkipProjectRefreshFor(profileId.value)) {
+    await loadProjects()
+    return
+  }
   projectsSyncing.value = true
   projectsWarning.value = ''
   try {
-    await backend.syncProjects(profileId.value)
+    // 成功時だけ起点が記録される(失敗時は記録されず、次の画面表示で再試行する)
+    await runSharedProjectRefresh(profileId.value, () => backend.syncProjects(profileId.value))
   } catch {
     projectsWarning.value =
       'プロジェクト一覧を最新化できませんでした(オフライン等)。表示はローカルキャッシュです。'

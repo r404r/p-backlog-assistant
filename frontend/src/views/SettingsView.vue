@@ -9,6 +9,7 @@ import {
 } from '../lib/backend'
 import { errorMessage } from '../lib/format'
 import { useModalFocus } from '../lib/modalFocus'
+import { invalidateProjectRefresh } from '../lib/projectRefresh'
 
 const backend = getBackend()
 const mock = isMockBackend()
@@ -191,6 +192,17 @@ async function save() {
   }
   saving.value = true
   try {
+    // 変更保存では ID が変わらないため、プロジェクト一覧の突合記録を捨てる。
+    // 残したままだと、接続先 URL・API キーを変えても 10 分間は初回の突合が
+    // 省略され、前の接続先の一覧を表示し続けてしまう。
+    //
+    // 捨てるのは保存の**開始前**。完了後にすると、保存の待機中に課題抽出・
+    // 同期状態へ移動した画面が古い記録を見て突合を省略してしまい、記録の
+    // 無効化はリアクティブでないため、その画面は表示したまま再突合しない。
+    // 保存が失敗しても無効化したままになるが、次の画面表示で余分に 1 回
+    // 突合するだけなので安全側に倒す。新規登録は ID が未確定(空文字)で
+    // 記録も無いため、対象外(invalidateProjectRefresh は空 ID を無視する)。
+    invalidateProjectRefresh(form.id)
     const saved = await backend.saveProfile({
       id: form.id,
       name: form.name.trim(),
