@@ -37,13 +37,21 @@ type IssueFilter struct {
 	// この条件は SQL 実行後に Go 側で適用される(SearchIssues の 2 段階検索)。
 	CustomFieldFilters []customfield.Filter `json:"customFieldFilters"`
 	Limit              int                  `json:"limit"` // 0 なら DefaultSearchLimit
+	// Offset は条件に一致した行の先頭から読み飛ばす件数(画面のページング用)。
+	// 0 なら先頭から。負値は 0 として扱う(呼び出し側のバグで検索全体を
+	// 失敗させない)。カスタム属性経路では「SQL の行」ではなく
+	// 「カスタム属性条件にも一致した行」を基準に数える。
+	Offset int `json:"offset"`
 }
 
 // IssueSearchResult は検索結果(上限で切っても総件数を返す)。
 type IssueSearchResult struct {
-	Issues    []Issue `json:"issues"`
-	Total     int     `json:"total"`     // 条件に一致した総件数
-	Truncated bool    `json:"truncated"` // 上限で切り詰めたか
+	Issues []Issue `json:"issues"`
+	Total  int     `json:"total"` // 条件に一致した総件数(Offset の影響を受けない)
+	// Truncated は「この応答より後ろに一致行が残っているか」
+	// (= Total > Offset + len(Issues))。Offset を使わない検索では
+	// 従来どおり「上限で切り詰めたか」と同じ意味になる。
+	Truncated bool `json:"truncated"`
 	// Unverifiable はカスタム属性条件を判定できなかった課題の件数
 	// (生 JSON が空・壊れている行)。0 でなければ結果は「条件に合う全件」では
 	// ないため、呼び出し側は利用者へその旨を伝えること。
@@ -289,19 +297,26 @@ func iterateIssueRows(ctx context.Context, q dbtx, query string,
 // matchAll は絞り込みを行わない match 関数(SQL だけで条件が完結する場合)。
 func matchAll(*Issue) issueMatch { return matchYes }
 
-// scanIssuesMatching は SQL で絞った行を走査し、match が真の行だけを最大 limit 件
-// 返す。返却は上限で打ち切っても一致件数は数え続け、total として返す
-// (UI の「N 件中 M 件を表示」を SQL 側の COUNT(*) と同じ意味に保つため)。
-// 判定できなかった行は結果に含めず、件数だけを unverifiable として返す。
+// scanIssuesMatching は SQL で絞った行を走査し、match が真の行のうち先頭 offset 件を
+// 読み飛ばした続きを最大 limit 件返す。読み飛ばし・上限に関わらず一致件数は
+// 数え続け、total として返す(UI の「N 件中 M 件を表示」を SQL 側の COUNT(*) と
+// 同じ意味に保つため)。判定できなかった行は結果に含めず、件数だけを
+// unverifiable として返す。
+//
+// offset は「SQL の行」ではなく「match が真だった行」を基準に数える。
+// SQL 側で LIMIT / OFFSET を使うとカスタム属性条件の適用前の行を飛ばすことになり、
+// ページごとに件数が食い違うため(SearchIssues のコメント参照)。
 //
 // 保持するのは limit 件までなので、一致件数が多くてもメモリは上限で頭打ちになる。
 // ただし SQL 側で LIMIT できない(絞り込みが Go 側でしか行えない)ため、
 // 条件に合う行の判定自体は SQL 一致行の全件に対して行われる。
 func scanIssuesMatching(ctx context.Context, q dbtx, query string,
-	match func(*Issue) issueMatch, limit int, args ...any) (issues []Issue, total, unverifiable int, err error) {
+	match func(*Issue) issueMatch, offset, limit int, args ...any) (issues []Issue, total, unverifiable int, err error) {
 	out := []Issue{}
+	matched := 0
 	total, unverifiable, err = iterateIssueRows(ctx, q, query, match, func(i *Issue) error {
-		if len(out) < limit {
+		matched++
+		if matched > offset && len(out) < limit {
 			out = append(out, *i)
 		}
 		return nil
@@ -346,7 +361,11 @@ func customFieldMatcher(filters []customfield.Filter) func(*Issue) issueMatch {
 }
 
 // SearchIssues はローカル DB を検索する(設計書 4 節)。
-// 総件数は上限に関わらず返し、UI が「N 件中 M 件を表示」と示せるようにする。
+// 総件数は上限・読み飛ばし(Offset)に関わらず返し、UI が
+// 「N 件中 x〜y 件目を表示」と示せるようにする。
+//
+// Offset は一致行の先頭からの読み飛ばし件数で、画面のページングに使う
+// (1 ページ目は 0、2 ページ目はページサイズ、…)。
 //
 // 件数と行の 2 クエリを発行するため、呼び出し側は同一トランザクションを
 // 渡すこと(Store.SearchIssues は WithReadTx で包む)。別々の接続で実行すると
@@ -361,8 +380,8 @@ func customFieldMatcher(filters []customfield.Filter) func(*Issue) issueMatch {
 // SQL で JSON を解析しない(json_extract 等を使わない)のは、値の形が型ごとに
 // 異なり選択肢 ID の照合まで SQL で書くと条件が読めなくなること、表示・出力と
 // 判定規約がずれること(customfield パッケージに集約している)を避けるため。
-// この経路では SQL 側で LIMIT / COUNT(*) を使えない(絞り込み前の件数になる)ため、
-// 上限と総件数は Go 側の走査で決める。
+// この経路では SQL 側で LIMIT / OFFSET / COUNT(*) を使えない(絞り込み前の
+// 件数・行になる)ため、上限・読み飛ばし・総件数は Go 側の走査で決める。
 func SearchIssues(ctx context.Context, q dbtx, f IssueFilter) (*IssueSearchResult, error) {
 	spec, err := f.buildFilter()
 	if err != nil {
@@ -372,6 +391,11 @@ func SearchIssues(ctx context.Context, q dbtx, f IssueFilter) (*IssueSearchResul
 	if limit <= 0 {
 		limit = DefaultSearchLimit
 	}
+	// 負の Offset は 0 に丸める(SQL へ渡すとエラーになるため入口で潰す)
+	offset := f.Offset
+	if offset < 0 {
+		offset = 0
+	}
 	// 条件が空のカスタム属性は最初に落とし、条件が実質無いときは
 	// 従来どおり SQL だけで完結させる(生 JSON の解析コストを掛けない)。
 	cfFilters := customfield.ActiveFilters(f.CustomFieldFilters)
@@ -380,14 +404,14 @@ func SearchIssues(ctx context.Context, q dbtx, f IssueFilter) (*IssueSearchResul
 	}
 	if len(cfFilters) > 0 {
 		issues, total, unverifiable, err := scanIssuesMatching(ctx, q,
-			spec.selectQuery(), customFieldMatcher(cfFilters), limit, spec.args...)
+			spec.selectQuery(), customFieldMatcher(cfFilters), offset, limit, spec.args...)
 		if err != nil {
 			return nil, err
 		}
 		return &IssueSearchResult{
 			Issues:       issues,
 			Total:        total,
-			Truncated:    total > len(issues),
+			Truncated:    total > offset+len(issues),
 			Unverifiable: unverifiable,
 		}, nil
 	}
@@ -397,11 +421,11 @@ func SearchIssues(ctx context.Context, q dbtx, f IssueFilter) (*IssueSearchResul
 		return nil, err
 	}
 	issues, err := scanIssues(ctx, q,
-		spec.selectQuery()+` LIMIT `+strconv.Itoa(limit), spec.args...)
+		spec.selectQuery()+` LIMIT `+strconv.Itoa(limit)+` OFFSET `+strconv.Itoa(offset), spec.args...)
 	if err != nil {
 		return nil, err
 	}
-	return &IssueSearchResult{Issues: issues, Total: total, Truncated: total > len(issues)}, nil
+	return &IssueSearchResult{Issues: issues, Total: total, Truncated: total > offset+len(issues)}, nil
 }
 
 // SearchIssues は Store 直接実行版。件数と行を単一の読み取りトランザクションで

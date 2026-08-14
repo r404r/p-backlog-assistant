@@ -66,6 +66,19 @@ describe('buildIssueQuery', () => {
       assigneeName: '山田 太郎',
     })
   })
+
+  it('ページング(limit / offset)は載せない', () => {
+    // 画面プレビューのページングは検索経路だけの都合なので、共通の変換では扱わない。
+    // Excel 出力・一括更新テンプレートはこの条件をそのまま使い、全件を出力する
+    // (offset が混ざると出力が欠ける)
+    const cond = newIssueConditions()
+    cond.keyword = 'ログイン'
+
+    const q = buildIssueQuery(7, cond)
+
+    expect(q.limit).toBeUndefined()
+    expect(q.offset).toBeUndefined()
+  })
 })
 
 describe('resetIssueConditions', () => {

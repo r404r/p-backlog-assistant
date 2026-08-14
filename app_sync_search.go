@@ -233,6 +233,9 @@ func (a *App) SearchIssues(profileID string, query store.IssueFilter, columns []
 			return &IssueSearchDTO{Rows: rows, Total: res.Total, Unverifiable: res.Unverifiable},
 				[]slog.Attr{
 					slog.Int("rows", len(rows)),
+					// offset はページングの位置。rows / total / truncated と
+					// 並べて残し、「何ページ目で何件返したか」を追えるようにする。
+					slog.Int("offset", query.Offset),
 					slog.Int("total", res.Total),
 					slog.Bool("truncated", res.Truncated),
 					slog.Int("unverifiable", res.Unverifiable),

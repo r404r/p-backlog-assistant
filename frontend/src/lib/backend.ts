@@ -280,6 +280,14 @@ export interface IssueQuery {
   customFieldFilters?: CustomFieldFilter[]
   /** 画面プレビューの取得上限。未指定ならバックエンドの既定値。Excel 出力時は無視される */
   limit?: number
+  /**
+   * 画面プレビューの取得開始位置(0 始まり)。検索結果の改ページに使い、
+   * 一致した全件のうち先頭 offset 件を読み飛ばして limit 件を返す
+   * (total は読み飛ばす前の一致件数のまま)。
+   * 未指定・負値は 0(先頭)として扱われる。Excel 出力・一括更新テンプレートの
+   * 全件走査では limit と同様に無視される
+   */
+  offset?: number
 }
 
 /** 課題 1 件(検索結果の表示用) */
@@ -2043,7 +2051,10 @@ function createMockBackend(): Backend {
       const all = issuesByProject.get(query.projectId) ?? []
       const { rows: matched, unverifiable } = filterMockIssues(all, query)
       const limit = query.limit && query.limit > 0 ? query.limit : matched.length
-      const rows = matched.slice(0, limit).map((r) => ({
+      // Go 側と同じページングの意味論(offset 件を読み飛ばして limit 件・
+      // total は切り出し前の一致件数)。負値は 0(先頭)へ丸める
+      const offset = query.offset && query.offset > 0 ? query.offset : 0
+      const rows = matched.slice(offset, offset + limit).map((r) => ({
         ...r,
         // Go 側と同じく、要求された列のカスタム属性だけを返す
         customFields: pickMockCustomFields(r.customFields, columns),

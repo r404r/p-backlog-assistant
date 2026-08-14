@@ -15,7 +15,6 @@ import {
   type ExportColumn,
   type IssueDetail,
   type IssueQuery,
-  type IssueRow,
   type Project,
   type SyncMode,
   type SyncProgress,
@@ -23,6 +22,7 @@ import {
 } from '../lib/backend'
 import { issueUrl } from '../lib/backlogUrl'
 import { errorMessage, formatDateTime, formatElapsed, syncModeLabel } from '../lib/format'
+import { useIssuePagination } from '../lib/issuePagination'
 import { buildIssueQuery, newIssueConditions, resetIssueConditions } from '../lib/issueQuery'
 import { useModalFocus } from '../lib/modalFocus'
 import {
@@ -42,8 +42,11 @@ const mock = isMockBackend()
  */
 const selectionGuard = useProjectSelectionGuard()
 
-/** 画面に表示する最大件数(Excel 出力は条件に一致する全件が対象) */
-const PREVIEW_LIMIT = 200
+/**
+ * 検索結果 1 ページの件数(Excel 出力は条件に一致する全件が対象)。
+ * 画面はこの件数ずつ取得し、ページャで改ページする(lib/issuePagination)。
+ */
+const PAGE_SIZE = 200
 
 /**
  * カスタム属性の型 ID(Go 側 customfield の定数と対)。
@@ -404,13 +407,9 @@ watch(selectedProjectId, () => {
   // 実行中の検索・同期・出力を失効させてから片付ける。そうしないと、後から届いた
   // 前のプロジェクトの応答が、ここで消した結果を書き戻してしまう(高 1)
   invalidatePendingRequests()
-  rows.value = []
-  total.value = 0
-  unverifiable.value = 0
-  // 表示中のカスタム属性列は前のプロジェクトの定義なので一緒に片付ける
-  shownCustomColumns.value = []
-  searched.value = false
-  searchError.value = ''
+  // 結果・ページ・検索スナップショット(表示中のカスタム属性列を含む)・stale を
+  // まとめて片付ける。表示列は前のプロジェクトの定義なので残さない
+  pagination.reset()
   // 消した一覧に対する「コピーしました」・コピー失敗の表示を残さない
   clearCopiedFeedback()
   copyError.value = ''
@@ -426,14 +425,18 @@ watch(selectedProjectId, () => {
   void loadCustomFields()
 })
 
-/** 現在の条件を IssueQuery に変換する(空文字の条件は送らない) */
-function buildQuery(withLimit: boolean): IssueQuery {
+/**
+ * 現在の条件を IssueQuery に変換する(空文字の条件は送らない)。
+ *
+ * ページング(limit / offset)は載せない。検索経路では useIssuePagination が
+ * ページごとに付け足し、Excel 出力・テンプレート出力はこの条件のまま全件を出力する。
+ */
+function buildQuery(): IssueQuery {
   const q: IssueQuery = buildIssueQuery(selectedProjectId.value, cond)
   // 未入力のカスタム属性は送らない(空の条件を送っても Go 側で無視されるが、
   // 送らない方が「カスタム属性条件あり」の 2 段階検索を無駄に起動させない)
   const customFieldFilters = buildCustomFieldFilters()
   if (customFieldFilters.length > 0) q.customFieldFilters = customFieldFilters
-  if (withLimit) q.limit = PREVIEW_LIMIT
   return q
 }
 
@@ -443,28 +446,44 @@ function clearConditions() {
 }
 
 // ---------------------------------------------------------------------------
-// 検索(ローカル DB)
+// 検索(ローカル DB)・ページネーション
 // ---------------------------------------------------------------------------
 
-const rows = ref<IssueRow[]>([])
-const total = ref(0)
-const searching = ref(false)
-const searched = ref(false)
-const searchError = ref('')
-/** カスタム属性条件を判定できなかった課題の件数(0 なら警告を出さない) */
-const unverifiable = ref(0)
-
 /**
- * search の世代番号(loadFilterOptions / loadCustomFields と同じ流儀。高 1)。
+ * 検索結果のページング状態(lib/issuePagination)。
  *
- * プロジェクト A の検索中に B へ切り替えると、watch が結果を片付けた後に
- * A の応答が届き、rows・カスタム属性列・件数を書き戻してしまう。
- * 「最後に開始した要求」の応答だけを反映し、切替時は invalidateSearch で失効させる。
+ * 1 ページ(PAGE_SIZE 件)ぶんだけを取得し、ページ移動のたびに offset を
+ * 付け替えて取り直す。検索した時点の条件と表示列をスナップショットとして持ち、
+ * 成功時にだけ結果一式を確定する(状態遷移の規則は issuePagination.ts を参照)。
  */
-let searchRequestSeq = 0
+const pagination = useIssuePagination<ExportColumn>({
+  pageSize: PAGE_SIZE,
+  fetch: (query, columns) =>
+    backend.searchIssues(
+      profileId.value,
+      query,
+      columns.map((c) => c.key),
+    ),
+})
 
-/** 表示件数が上限で切り詰められているか */
-const truncated = computed(() => total.value > rows.value.length)
+// テンプレートからは従来と同じ名前で参照する(ページング導入前の表示条件を保つ)
+const {
+  rows,
+  total,
+  /** カスタム属性条件を判定できなかった課題の件数(0 なら警告を出さない) */
+  unverifiable,
+  searching,
+  searched,
+  error: searchError,
+  page: currentPage,
+  totalPages,
+  rangeStart,
+  rangeEnd,
+  hasPrev,
+  hasNext,
+  /** 表示中の結果が古くなった可能性があるか(再検索を促す) */
+  stale: resultsStale,
+} = pagination
 
 /** 選択中のカスタム属性列(Excel 出力の列選択と共用) */
 const selectedCustomColumns = computed<ExportColumn[]>(() =>
@@ -472,13 +491,14 @@ const selectedCustomColumns = computed<ExportColumn[]>(() =>
 )
 
 /**
- * 結果テーブルに表示中のカスタム属性列。
+ * 結果テーブルに表示中のカスタム属性列(検索スナップショットに固定された列)。
  *
  * 検索した時点の選択を固定する。列選択を変えるたびに見出しだけ増減すると、
  * 取得済みの行に値が無い(空欄の)列が並び、データが無いのか列が増えただけなのか
- * 区別できなくなるため、次の検索まで見出しと値を揃えておく。
+ * 区別できなくなるため、次の検索まで見出しと値を揃えておく
+ * (ページ移動も同じスナップショットの列で取得する)。
  */
-const shownCustomColumns = ref<ExportColumn[]>([])
+const shownCustomColumns = computed<ExportColumn[]>(() => pagination.snapshot.value?.columns ?? [])
 
 /** 表示中の列と選択中の列がずれているか(再検索を促す案内に使う) */
 const customColumnsOutOfDate = computed(() => {
@@ -498,7 +518,7 @@ const customColumnsOutOfDate = computed(() => {
  *  そちらは「最新の要求だけが読込中表示を下ろす」方式を採っている)
  */
 function invalidatePendingRequests() {
-  searchRequestSeq++
+  pagination.invalidate()
   syncRequestSeq++
   exportRequestSeq++
   // 失効した実行の進捗を表示し続けないよう、表示と受理対象を消す
@@ -512,34 +532,68 @@ async function search() {
   // ボタンは disabled にしてあるが、キーワード欄の Enter からも入るのでここでも見る。
   // 判定は共有状態込みの issueSyncing(他画面で開始した同期も対象)。
   if (!selectedProjectId.value || searching.value || issueSyncing.value) return
-  const seq = ++searchRequestSeq
-  searching.value = true
-  searchError.value = ''
   // 前の一覧に対するコピーの表示は、結果が入れ替わる前に消す
   clearCopiedFeedback()
   copyError.value = ''
-  // 値を取得する列は「この検索の時点で選ばれている列」に固定する
-  const requestedColumns = selectedCustomColumns.value
-  try {
-    const res = await backend.searchIssues(
-      profileId.value,
-      buildQuery(true),
-      requestedColumns.map((c) => c.key),
-    )
-    // より新しい要求が開始済み、またはプロジェクトが切り替わっていたら反映しない
-    if (seq !== searchRequestSeq) return
-    rows.value = res.rows
-    total.value = res.total
-    unverifiable.value = res.unverifiable
-    shownCustomColumns.value = requestedColumns
-    searched.value = true
-  } catch (e) {
-    if (seq !== searchRequestSeq) return
-    searchError.value = `検索に失敗しました: ${errorMessage(e)}`
-  } finally {
-    // 検索は多重起動しないため、失効済みの応答でもここで必ず下ろす
-    searching.value = false
+  // 検索条件と値を取得する列は「この検索の時点」のものをスナップショットとして渡す
+  // (以降のページ移動はこのスナップショットで取得する。フォーム・列選択を
+  //  後から変えても表示中の結果には影響しない)
+  await pagination.search({ query: buildQuery(), columns: selectedCustomColumns.value })
+  syncPageInput()
+}
+
+/**
+ * ページャの操作を受け付けられるか。
+ *
+ * 同期中は検索と同じ理由で不可(R10)。stale 中(表示中の結果より DB が
+ * 新しくなっている)は、ページを跨いだ行のずれを避けるため再検索を促す。
+ */
+const canPage = computed(
+  () => searched.value && !searching.value && !issueSyncing.value && !resultsStale.value,
+)
+
+/** ページャ: 指定ページへ移動する(範囲外は composable がクランプする) */
+async function goToPage(n: number) {
+  if (!canPage.value) return
+  // 前の一覧に対するコピーの表示は、結果が入れ替わる前に消す
+  clearCopiedFeedback()
+  copyError.value = ''
+  await pagination.goToPage(n)
+  // クランプ・取得失敗で要求どおりのページにならないことがあるため、
+  // 入力欄は確定済みのページへ必ず戻す
+  syncPageInput()
+}
+
+/**
+ * ページ番号の直接入力欄(表示は文字列。確定済みページに追従させる)。
+ * 任意ページへのジャンプはこの欄で行う。
+ */
+const pageInput = ref('1')
+
+/** 入力欄の表示を確定済みのページ番号へ戻す */
+function syncPageInput() {
+  pageInput.value = String(currentPage.value)
+}
+
+// 確定済みページが画面外の要因で変わったとき(プロジェクト切替のリセット等)も
+// 入力欄の表示を合わせる
+watch(currentPage, syncPageInput)
+
+/**
+ * ページ番号欄で Enter が押されたときにそのページへ移動する。
+ * IME の変換確定 Enter を無視する判定は onKeywordEnter と同じ。
+ */
+function onPageInputEnter(e: KeyboardEvent) {
+  if (e.isComposing || e.keyCode === 229) return
+  const raw = pageInput.value.trim()
+  const n = Number(raw)
+  // 空欄・数値として読めない入力(全角数字等)では移動せず、
+  // 表示を確定済みのページへ戻す(Number('') が 0 になるため空欄も弾く)
+  if (!raw || !Number.isFinite(n)) {
+    syncPageInput()
+    return
   }
+  void goToPage(n)
 }
 
 /**
@@ -786,10 +840,12 @@ async function refreshIssueDetail() {
   // 閉じた・別の課題を開いた後に届いた応答を反映しないためのガード
   // (開いた時点の要求番号と照合する。openIssueDetail と同じ流儀)
   const seq = detailRequestSeq
+  // 検索結果の stale 判定に使う起点プロジェクト(非同期の前に控える)
+  const originProjectId = selectedProjectId.value
   detailRefreshing.value = true
   detailRefreshError.value = ''
   try {
-    const res = await backend.refreshIssueDetail(profileId.value, selectedProjectId.value, issueKey)
+    const res = await backend.refreshIssueDetail(profileId.value, originProjectId, issueKey)
     if (seq !== detailRequestSeq) return
     detail.value = res
     // 取得に成功したので、開いたときの取得失敗(未同期等)の表示は消す
@@ -799,6 +855,12 @@ async function refreshIssueDetail() {
     detailRefreshError.value = `最新の状態を取得できませんでした: ${errorMessage(err)}`
   } finally {
     if (seq === detailRequestSeq) detailRefreshing.value = false
+    // 試行が終わった時点で、成功・失敗を問わずローカル DB は変わり得る
+    // (課題本体だけ先に upsert して後段で失敗する経路がある)。
+    // 判定はモーダルの世代(detailRequestSeq)に依存させず、起点プロジェクトと
+    // 表示中の結果のプロジェクトの一致だけで行う(モーダルを閉じた後の完了でも
+    // stale にし、プロジェクト切替後の新しい結果は stale にしないため)
+    pagination.markStaleForProject(originProjectId)
   }
 }
 
@@ -885,8 +947,14 @@ const issueSyncing = computed(() => syncing.value || issueSyncRunning.value)
 // 表示中の内容は同期の進行とともに古くなり、同期途中の DB を読み直すこともできない。
 // 他画面で開始された同期(issueSyncRunning)も対象にするため、この画面の
 // runSync ではなく issueSyncing の変化で判定する。
-watch(issueSyncing, (running) => {
-  if (running) closeIssueDetail()
+watch(issueSyncing, (running, wasRunning) => {
+  if (running) {
+    closeIssueDetail()
+    return
+  }
+  // 同期の完了で課題の集合が変わり得るため、表示中の検索結果は stale にする。
+  // ページを跨いだ行のずれ(飛び・重複)を避けるため、以降は再検索を促す
+  if (wasRunning) pagination.markStale()
 })
 
 /**
@@ -1050,7 +1118,7 @@ async function exportExcel() {
     const columns = exportColumns.value
       .filter((c) => selectedColumns.value.includes(c.key))
       .map((c) => c.key)
-    const res = await backend.exportIssuesExcel(profileId.value, buildQuery(false), columns)
+    const res = await backend.exportIssuesExcel(profileId.value, buildQuery(), columns)
     // プロジェクト切替後(または再実行後)なら、古い結果は表示しない
     if (seq !== exportRequestSeq) return
     if (!res.path) {
@@ -1350,10 +1418,16 @@ async function exportExcel() {
         <h2>検索結果</h2>
         <p class="summary">
           該当 {{ total }} 件
-          <span v-if="truncated">(画面には先頭 {{ rows.length }} 件のみ表示)</span>
+          <span v-if="rows.length > 0">({{ rangeStart }}〜{{ rangeEnd }} 件目を表示)</span>
         </p>
-        <p v-if="truncated" class="hint">
-          画面表示は {{ PREVIEW_LIMIT }} 件までです。Excel には条件に一致する全 {{ total }} 件が出力されます。
+        <p v-if="totalPages > 1" class="hint">
+          Excel には条件に一致する全 {{ total }} 件が出力されます。
+        </p>
+
+        <!-- 表示中の結果より後にローカル DB が変わった(同期・詳細の再取得)。
+             ページを跨いだ行のずれを避けるため、ページャを止めて再検索を促す -->
+        <p v-if="resultsStale" class="notice warn">
+          データが更新されました。最新の結果を見るには再検索してください。
         </p>
 
         <p v-if="unverifiable > 0" class="notice warn">
@@ -1439,6 +1513,38 @@ async function exportExcel() {
               </tr>
             </tbody>
           </table>
+        </div>
+
+        <!-- ページャ(総ページ数が 1 以下なら出さない)。
+             ページ番号の入力欄で任意のページへ直接移動できる(範囲外はクランプ)。
+             検索中・同期中・stale 中は操作できない -->
+        <div v-if="totalPages > 1" class="row pager">
+          <button type="button" :disabled="!canPage || !hasPrev" @click="goToPage(1)">
+            « 最初
+          </button>
+          <button type="button" :disabled="!canPage || !hasPrev" @click="goToPage(currentPage - 1)">
+            ‹ 前へ
+          </button>
+          <label for="i-page" class="pager-label">ページ</label>
+          <input
+            id="i-page"
+            v-model="pageInput"
+            type="text"
+            inputmode="numeric"
+            class="page-input"
+            :disabled="!canPage"
+            aria-label="ページ番号(Enter で移動)"
+            @keydown.enter="onPageInputEnter"
+            @blur="syncPageInput"
+          />
+          <span class="pager-total">/ {{ totalPages }} ページ</span>
+          <button type="button" :disabled="!canPage || !hasNext" @click="goToPage(currentPage + 1)">
+            次へ ›
+          </button>
+          <button type="button" :disabled="!canPage || !hasNext" @click="goToPage(totalPages)">
+            最後 »
+          </button>
+          <span v-if="searching" class="spinner" aria-hidden="true"></span>
         </div>
 
         <p v-if="copyError" class="error">{{ copyError }}</p>
@@ -1933,6 +2039,32 @@ th {
 
 .nowrap {
   white-space: nowrap;
+}
+
+/* ページャ(結果テーブルの下)。ボタン・入力欄の見た目は既存のものを流用する */
+.pager {
+  margin-top: 0.5rem;
+  margin-bottom: 0.5rem;
+  gap: 0.35rem;
+}
+
+/* .row > label の幅指定(6rem)を打ち消して、ページ番号欄の左に詰める */
+.pager > label.pager-label {
+  min-width: auto;
+  margin-left: 0.5rem;
+}
+
+.page-input {
+  width: 4rem;
+  text-align: right;
+  /* 桁数が変わっても幅がぶれないようにする */
+  font-variant-numeric: tabular-nums;
+}
+
+.pager-total {
+  font-size: 0.85rem;
+  color: #57606a;
+  margin-right: 0.5rem;
 }
 
 /* 課題キー(クリックで URL をコピー)。button.link と同じ「文中のアクション」の見た目 */

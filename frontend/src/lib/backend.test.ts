@@ -335,6 +335,74 @@ describe('モックバックエンドのコメント', () => {
 })
 
 /**
+ * モックバックエンドの searchIssues のページング(limit / offset)。
+ *
+ * 画面(IssuesView)は 1 ページぶんだけを取得して改ページするため、
+ * Wails 外の画面確認でもページ移動が同じ意味論で動く必要がある。
+ * Go 側(store.IssueFilter の Limit / Offset)と同じく
+ * 「一致した全件のうち offset 件を読み飛ばして limit 件を返す・
+ *  total は切り出し前の一致件数」を固定する。
+ */
+describe('モックバックエンドの searchIssues のページング', () => {
+  /** モックの初期データはプロジェクト 101(SAMPLE)に投入されている */
+  const projectId = 101
+
+  it('offset 無し・limit 指定は先頭から切り出す', async () => {
+    const res = await getBackend().searchIssues('p1', { projectId, limit: 5 })
+
+    expect(res.rows).toHaveLength(5)
+    // total は切り出し前の一致件数(Excel 出力の全件性の案内に使う)
+    expect(res.total).toBeGreaterThan(5)
+  })
+
+  it('offset のぶんだけ読み飛ばす(ページ移動)', async () => {
+    const backend = getBackend()
+    const head = await backend.searchIssues('p1', { projectId, limit: 10 })
+    const second = await backend.searchIssues('p1', { projectId, limit: 5, offset: 5 })
+
+    expect(second.rows.map((r) => r.issueKey)).toEqual(
+      head.rows.slice(5, 10).map((r) => r.issueKey),
+    )
+    expect(second.total).toBe(head.total)
+  })
+
+  it('総件数を超える offset は空になる(total は維持する)', async () => {
+    const backend = getBackend()
+    const all = await backend.searchIssues('p1', { projectId })
+    const over = await backend.searchIssues('p1', {
+      projectId,
+      limit: 10,
+      offset: all.total + 10,
+    })
+
+    expect(over.rows).toEqual([])
+    expect(over.total).toBe(all.total)
+  })
+
+  it('最終ページは残りの件数だけ返す', async () => {
+    const backend = getBackend()
+    const all = await backend.searchIssues('p1', { projectId })
+    const pageSize = 10
+    const lastOffset = Math.floor((all.total - 1) / pageSize) * pageSize
+
+    const last = await backend.searchIssues('p1', {
+      projectId,
+      limit: pageSize,
+      offset: lastOffset,
+    })
+
+    expect(last.rows).toHaveLength(all.total - lastOffset)
+  })
+
+  it('負の offset は先頭として扱う(Go 側の 0 丸めと同じ)', async () => {
+    const res = await getBackend().searchIssues('p1', { projectId, limit: 3, offset: -5 })
+    const head = await getBackend().searchIssues('p1', { projectId, limit: 3 })
+
+    expect(res.rows.map((r) => r.issueKey)).toEqual(head.rows.map((r) => r.issueKey))
+  })
+})
+
+/**
  * モックバックエンドのテンプレート出力(一括更新・追加の①)。
  *
  * テンプレートは検索条件で絞り込めるため(条件なし = 全件)、

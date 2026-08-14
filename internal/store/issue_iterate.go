@@ -49,6 +49,9 @@ type IssueIterateResult struct {
 // SearchIssues との違い:
 //   - IssueFilter.Limit は無視する(常に全件を走査する)。件数上限の判定は
 //     visit の中で行い、エラーを返して打ち切ること。
+//   - IssueFilter.Offset も同様に無視する(常に先頭から走査する)。画面の
+//     ページングで付いた Offset が出力条件に紛れ込んでも、出力の全件性を
+//     フロントの呼び方だけに依存させないため。
 //   - Truncated に相当する概念は無い。
 //
 // カスタム属性条件の 2 段階判定(SQL → Go)と Unverifiable の数え方は

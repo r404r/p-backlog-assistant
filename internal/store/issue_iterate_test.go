@@ -84,6 +84,25 @@ func TestIterateIssues_IgnoresLimit(t *testing.T) {
 	}
 }
 
+// TestIterateIssues_IgnoresOffset は Offset が走査の開始位置を動かさないことを
+// 確認する(Limit 無視と同じ契約)。Excel 出力・一括更新テンプレートは
+// 「条件一致全件」を書き出すため、画面のページングで付く Offset が
+// 出力に漏れても先頭から全件が出る。
+func TestIterateIssues_IgnoresOffset(t *testing.T) {
+	s := openTempStore(t)
+	seedIssues(t, s)
+
+	var keys []string
+	res, err := s.IterateIssues(context.Background(),
+		IssueFilter{ProjectID: 1, Offset: 2, Limit: 1}, visitKeys(&keys))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !equalKeys(keys, []string{"EXA-1", "EXA-2", "EXA-3"}) || res.Total != 3 {
+		t.Errorf("渡された課題 = %v / total = %d, want [EXA-1 EXA-2 EXA-3] / 3", keys, res.Total)
+	}
+}
+
 // TestIterateIssues_VisitorErrorStopsIteration は visit が返したエラーで
 // 走査が直ちに打ち切られ、そのエラーがそのまま返ることを確認する
 // (件数上限の打ち切りがこの経路で行われるため、errors.Is で判定できること)。
