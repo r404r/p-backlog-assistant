@@ -1,14 +1,21 @@
-# backlog-assistant v1.1.0
+# backlog-assistant v1.2.0
 
-ダークモードを追加するリリースです。
+英語 UI(マルチ言語対応)を追加するリリースです。
+
+**English summary**: The app UI is now available in English. Open **About → 言語 / Language** and choose **English** (or **Match system**, the default: Japanese on Japanese-language environments, English otherwise). English editions of the [README](https://github.com/r404r/p-backlog-assistant/blob/main/README.en.md) and the [User Guide](https://github.com/r404r/p-backlog-assistant/blob/main/docs/USER_GUIDE.en.md) are also available. Known limitation: some backend-generated messages (validation details, etc.), the Excel output/template headers, and the template's instruction sheet are Japanese-only for now.
 
 ## 新機能
 
-- **表示テーマ(ダークモード)**: 「アプリ情報」画面で「システムに合わせる(既定)/ ライト / ダーク」を切り替えられるようになりました
-  - 選んだ時点で即座に切り替わり、次回起動時も維持されます
-  - 「システムに合わせる」は OS の外観設定(ダークモード設定)に追従し、OS 側を切り替えるとアプリも自動で切り替わります
-  - ウィンドウ枠(タイトルバー)の配色は、Windows では選んだテーマに追従します。macOS では OS の外観設定に従うため、アプリ内でライト / ダークを明示指定した場合にタイトルバーだけ OS 側の配色のまま残ることがあります(macOS の制限です)
-  - ライトテーマは従来の配色を基本的に踏襲しています(ほぼ同一のエラー文字色 1 色を統合したのみ)
+- **マルチ言語対応(日本語 / English)**: 「アプリ情報」画面で「システムに合わせる(既定)/ 日本語 / English」を切り替えられるようになりました
+  - 選んだ時点で即座に切り替わり、次回起動時も維持されます。「システムに合わせる」は、日本語環境では日本語、それ以外の環境では英語になります
+  - エラーメッセージなど表示済みの文言も、切り替えた時点で新しい言語になります
+  - 日本語の表示文言はこれまでと同一です
+  - **現時点の制限**: バックエンドが生成する一部のメッセージ(検証エラーや処理結果の詳細文)と、Excel 出力・一括更新テンプレートの見出し・記入方法シートは日本語のみです
+- **英語ドキュメント**: [README (English)](https://github.com/r404r/p-backlog-assistant/blob/main/README.en.md) と [User Guide (English)](https://github.com/r404r/p-backlog-assistant/blob/main/docs/USER_GUIDE.en.md) を追加しました(アプリ情報の「ドキュメント」リンクも表示言語に応じて開き分けます)
+
+## 改善
+
+- **プロジェクト一覧同期の抑制**: 課題抽出・同期状態画面を表示するたびに実行していたプロジェクト一覧の API 突合を、前回成功から 10 分未満の間は省略するようにしました(画面切替が軽くなります)。手動の「プロジェクト一覧を同期」はこの省略の対象外です(実行中の同期がある場合はそれに合流します)
 
 ## 動作環境
 
@@ -17,7 +24,7 @@
 
 ## インストール
 
-zip を展開し、`backlog-assistant.exe`(Windows)または `Backlog Assistant.app`(macOS)を起動してください。詳細は [ユーザガイド](https://github.com/r404r/p-backlog-assistant/blob/main/docs/USER_GUIDE.md) を参照してください。
+zip を展開し、`backlog-assistant.exe`(Windows)または `Backlog Assistant.app`(macOS)を起動してください。詳細は [ユーザガイド](https://github.com/r404r/p-backlog-assistant/blob/main/docs/USER_GUIDE.md) / [User Guide](https://github.com/r404r/p-backlog-assistant/blob/main/docs/USER_GUIDE.en.md) を参照してください。
 
 **注意: 現時点では Windows / macOS とも配布バイナリはコード署名されていません。** 必ず本リポジトリの Releases からダウンロードしたものだけを利用してください。
 
