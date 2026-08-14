@@ -1,21 +1,17 @@
-# backlog-assistant v1.2.0
+# backlog-assistant v1.2.1
 
-英語 UI(マルチ言語対応)を追加するリリースです。
+データの保存先を変更できるようにするリリースです。
 
-**English summary**: The app UI is now available in English. Open **About → 言語 / Language** and choose **English** (or **Match system**, the default: Japanese on Japanese-language environments, English otherwise). English editions of the [README](https://github.com/r404r/p-backlog-assistant/blob/main/README.en.md) and the [User Guide](https://github.com/r404r/p-backlog-assistant/blob/main/docs/USER_GUIDE.en.md) are also available. Known limitation: some backend-generated messages (validation details, etc.), the Excel output/template headers, and the template's instruction sheet are Japanese-only for now.
+**English summary**: You can now customize where the app stores its data (config and local DB). Put a `portable.txt` file next to the executable (next to the `.app` bundle on macOS) to keep the config and local DB in a `userdata` folder alongside the app, or set the `BACKLOG_ASSISTANT_HOME` environment variable to an absolute path (no `~`/`%VAR%` expansion, paths containing `?` are rejected). Portable mode keeps the config and local DB alongside the app — handy for USB drives or moving between PCs, though API keys stay in the OS keychain and must be re-entered on a new PC, and switching locations never migrates existing data automatically. If an explicitly chosen location becomes unavailable, the app stops at startup instead of silently creating a new data set elsewhere. See the [User Guide](https://github.com/r404r/p-backlog-assistant/blob/main/docs/USER_GUIDE.en.md) for details.
 
 ## 新機能
 
-- **マルチ言語対応(日本語 / English)**: 「アプリ情報」画面で「システムに合わせる(既定)/ 日本語 / English」を切り替えられるようになりました
-  - 選んだ時点で即座に切り替わり、次回起動時も維持されます。「システムに合わせる」は、日本語環境では日本語、それ以外の環境では英語になります
-  - エラーメッセージなど表示済みの文言も、切り替えた時点で新しい言語になります
-  - 日本語の表示文言はこれまでと同一です
-  - **現時点の制限**: バックエンドが生成する一部のメッセージ(検証エラーや処理結果の詳細文)と、Excel 出力・一括更新テンプレートの見出し・記入方法シートは日本語のみです
-- **英語ドキュメント**: [README (English)](https://github.com/r404r/p-backlog-assistant/blob/main/README.en.md) と [User Guide (English)](https://github.com/r404r/p-backlog-assistant/blob/main/docs/USER_GUIDE.en.md) を追加しました(アプリ情報の「ドキュメント」リンクも表示言語に応じて開き分けます)
-
-## 改善
-
-- **プロジェクト一覧同期の抑制**: 課題抽出・同期状態画面を表示するたびに実行していたプロジェクト一覧の API 突合を、前回成功から 10 分未満の間は省略するようにしました(画面切替が軽くなります)。手動の「プロジェクト一覧を同期」はこの省略の対象外です(実行中の同期がある場合はそれに合流します)
+- **データ保存先のカスタマイズ**: 設定(config.json)とローカル DB の保存先を 2 つの方法で変更できるようになりました(優先順位: ポータブル > 環境変数 > 既定)
+  - **ポータブルモード**: 実行ファイル(macOS は `.app` バンドル)の**隣**に `portable.txt` を置くと、同じ場所の `userdata` フォルダにデータを保存します。フォルダごとコピーするだけで別のパソコンへ移行できます(API キーのみ再入力が必要です)
+  - **環境変数**: `BACKLOG_ASSISTANT_HOME` に絶対パスを設定すると、そのフォルダを保存先にします(`~` や `%VAR%` は展開されません。`?` を含むパスは使用できません)
+  - 指定した保存先が使えない場合は、別の場所へ黙ってデータを新規作成せず**起動を中止**してお知らせします(保存先の分断防止)
+  - 保存先を切り替えてもデータは自動移行されません。継続利用するには、アプリ終了後に保存先フォルダ全体をコピーしてください
+  - 現在の保存先とモードは「アプリ情報」画面で確認できます。詳細は [ユーザガイド](https://github.com/r404r/p-backlog-assistant/blob/main/docs/USER_GUIDE.md) の「保存先の変更」を参照してください
 
 ## 動作環境
 
