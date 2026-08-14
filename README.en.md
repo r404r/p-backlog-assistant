@@ -74,6 +74,21 @@ See the [User Guide](docs/USER_GUIDE.en.md) for installation steps, how to use e
 | Local DB (fetched data, SQLite) | Same location, `data\<space host>_<user ID>.db` (Windows: `%AppData%\backlog-assistant\data\`, usually `C:\Users\<user name>\AppData\Roaming\backlog-assistant\data\`. Permissions are 0600 on Unix-like systems; on Windows the ACL of the user directory applies) |
 | Operation log | `logs\` in the same folder as the executable (falls back to the user config directory automatically if it is not writable) |
 
+### Changing the storage location
+
+The folder that holds the configuration and the local DB (the **base folder**) can be changed in two ways. The API keys (OS keychain) and the operation log (`logs\` in the same folder as the executable, falling back to the user config directory automatically if it is not writable) stay where they are.
+
+| Method | Setup | Base folder |
+|---|---|---|
+| Portable | Put a `portable.txt` file next to the executable (its contents may be empty). **On macOS, put it next to the `.app` bundle** (not inside it) | `userdata\` in the same folder as `portable.txt` (on macOS, `userdata/` next to the `.app` bundle) |
+| Environment variable | Set `BACKLOG_ASSISTANT_HOME` to a folder | The folder you specified |
+
+- **The priority is portable > environment variable > default** (if both are set, the portable location wins).
+- The environment variable accepts **absolute paths only**. `~` and `%AppData%` are not expanded, and paths containing `?` cannot be used.
+- If the location you specified cannot be used (a disconnected USB drive, no write permission, and so on), the app **does not silently fall back to the default location; it stops with a startup error** instead. Falling back would create empty data somewhere else and make it look as if your data had disappeared. The reason is recorded in the operation log, or in `crash.txt` next to the executable (or in the user config directory if that is not writable; that destination is not affected by this customization).
+- Switching the location **does not move your data automatically**. To keep using it, quit the app and copy the whole base folder (see ["5.4 Changing the storage location"](docs/USER_GUIDE.en.md#54-changing-the-storage-location) in the User Guide).
+- The current location is shown under "Stored Data" on the About screen (the storage location mode and the actual paths).
+
 ## Security policy
 
 - Only HTTPS connections to `*.backlog.jp` / `*.backlog.com` are allowed, and redirects are not followed

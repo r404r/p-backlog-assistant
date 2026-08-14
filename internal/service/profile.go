@@ -21,6 +21,7 @@ import (
 	"backlog-assistant/internal/bulk"
 	"backlog-assistant/internal/config"
 	"backlog-assistant/internal/secret"
+	"backlog-assistant/internal/storagepath"
 	"backlog-assistant/internal/store"
 	syncpkg "backlog-assistant/internal/sync"
 )
@@ -67,6 +68,8 @@ type ProfileService struct {
 	dbPathFor func(host string, userID int) (string, error)
 	// openStore はローカル DB のオープン(テスト差し替え用)。
 	openStore func(path string) (*store.Store, error)
+	// storageMode は保存先の決定方法の取得(テスト差し替え用)。
+	storageMode func() string
 	// now は現在時刻の取得(テスト差し替え用)。
 	now func() time.Time
 
@@ -143,9 +146,12 @@ func NewProfileService(cfg *config.Manager) *ProfileService {
 		newClient: func(spaceURL, apiKey string) (connector, error) {
 			return backlogclient.New(spaceURL, apiKey)
 		},
-		removeDB:    store.RemoveDatabase,
-		dbPathFor:   store.DBPath,
-		openStore:   store.Open,
+		removeDB:  store.RemoveDatabase,
+		dbPathFor: store.DBPath,
+		openStore: store.Open,
+		storageMode: func() string {
+			return string(storagepath.CurrentMode())
+		},
 		now:         time.Now,
 		clients:     map[string]*clientEntry{},
 		stores:      map[string]*storeEntry{},

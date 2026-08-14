@@ -9,6 +9,8 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+
+	"backlog-assistant/internal/storagepath"
 )
 
 // ErrProfileNotFound は指定 ID のプロファイルが存在しない場合のエラー。
@@ -46,16 +48,16 @@ type Manager struct {
 	path string
 }
 
-// DefaultDir はアプリの設定ディレクトリ(os.UserConfigDir()/backlog-assistant)を返す。
+// DefaultDir はアプリの設定ディレクトリ(データ保存先の基点)を返す。
+//
+// 既定は os.UserConfigDir()/backlog-assistant だが、portable.txt または
+// 環境変数 BACKLOG_ASSISTANT_HOME でカスタマイズできる(internal/storagepath)。
+// 解決は起動時に 1 回だけ行われ、以降は同じ値を返す。
 func DefaultDir() (string, error) {
-	base, err := os.UserConfigDir()
-	if err != nil {
-		return "", fmt.Errorf("ユーザ設定ディレクトリを取得できません: %w", err)
-	}
-	return filepath.Join(base, "backlog-assistant"), nil
+	return storagepath.BaseDir()
 }
 
-// NewManager は既定の場所(os.UserConfigDir()/backlog-assistant/config.json)を使う Manager を返す。
+// NewManager は既定の場所(データ保存先の基点/config.json)を使う Manager を返す。
 func NewManager() (*Manager, error) {
 	dir, err := DefaultDir()
 	if err != nil {

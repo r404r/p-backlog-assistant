@@ -48,6 +48,13 @@
     "title": "保存データ",
     "description": "このアプリがこのパソコンに保存しているファイルの場所です。API キーは下記のファイルではなく OS のキーチェーンに保存されます。",
     "loadFailed": "保存データの情報を取得できませんでした: {message}",
+    "storageMode": "保存先モード",
+    "storageModeValue": {
+      "default": "既定(ユーザ設定フォルダ)",
+      "env": "環境変数(BACKLOG_ASSISTANT_HOME)",
+      "portable": "ポータブル(portable.txt)"
+    },
+    "storageModeNote": "保存先の変更方法はユーザガイドの「保存先の変更」をご確認ください。",
     "configDir": "設定フォルダ",
     "configDirNote": "接続プロファイル(config.json)の保存先です。",
     "database": "ローカル DB",

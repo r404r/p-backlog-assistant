@@ -464,3 +464,60 @@ describe('モックバックエンドの exportBulkTemplate', () => {
     expect(filtered.rows).toBeLessThan(all.rows)
   })
 })
+
+/**
+ * 保存データ情報(アプリ情報画面)の変換。
+ *
+ * 保存先モード(storageMode)は Go 側が 'default' / 'env' / 'portable' の
+ * 3 値で返す。画面はこの値でラベルを引くため、想定外の値が素通りすると
+ * 翻訳キーが見つからず画面に生の値が出てしまう。ここで丸めを固定する。
+ */
+describe('getStorageInfo の変換', () => {
+  /** Wails バインディングを差し替えた backend モジュールを読み込む */
+  async function loadWithWailsApp(
+    getStorageInfo: () => Promise<unknown>,
+  ): Promise<typeof import('./backend')> {
+    vi.resetModules()
+    const w = window as unknown as Record<string, unknown>
+    w['go'] = {
+      main: { App: { ListProfiles: async () => [], GetStorageInfo: getStorageInfo } },
+    }
+    return await import('./backend')
+  }
+
+  afterEach(() => {
+    delete (window as unknown as Record<string, unknown>)['go']
+    vi.resetModules()
+  })
+
+  it('Go が返した保存先モードをそのまま渡す', async () => {
+    const mod = await loadWithWailsApp(async () => ({
+      configDir: '/base',
+      storageMode: 'portable',
+      databases: [],
+      logPath: '',
+      logEnabled: false,
+    }))
+
+    const info = await mod.getBackend().getStorageInfo()
+
+    expect(info.storageMode).toBe('portable')
+    expect(info.configDir).toBe('/base')
+  })
+
+  it('未知・欠落の保存先モードは既定に丸める', async () => {
+    const unknown = await loadWithWailsApp(async () => ({
+      configDir: '/base',
+      storageMode: 'network',
+      databases: [],
+    }))
+    expect((await unknown.getBackend().getStorageInfo()).storageMode).toBe('default')
+
+    const missing = await loadWithWailsApp(async () => ({ configDir: '/base', databases: [] }))
+    expect((await missing.getBackend().getStorageInfo()).storageMode).toBe('default')
+  })
+
+  it('モックバックエンドも保存先モードを返す', async () => {
+    expect((await getBackend().getStorageInfo()).storageMode).toBe('default')
+  })
+})

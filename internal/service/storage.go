@@ -33,8 +33,12 @@ type DatabaseInfo struct {
 // StorageInfo は保存データ(設定ファイル・ローカル DB)の所在(画面表示用)。
 // 動作ログのパスは app.go 側で合流させる(バインディングは 1 メソッドに保つ)。
 type StorageInfo struct {
-	ConfigDir string         `json:"configDir"`
-	Databases []DatabaseInfo `json:"databases"`
+	ConfigDir string `json:"configDir"`
+	// StorageMode は保存先の決定方法("default" / "env" / "portable")。
+	// 明示指定が使えない場合は起動時にエラーにする設計のため、この 3 値のみ
+	// (フォールバック状態は存在しない)。
+	StorageMode string         `json:"storageMode"`
+	Databases   []DatabaseInfo `json:"databases"`
 }
 
 // GetStorageInfo は設定ディレクトリと、プロファイルごとのローカル DB の
@@ -62,8 +66,9 @@ func (s *ProfileService) GetStorageInfo() (*StorageInfo, error) {
 	}
 	return &StorageInfo{
 		// config.json の置き場所 = アプリの設定ディレクトリ
-		ConfigDir: filepath.Dir(s.cfg.Path()),
-		Databases: databases,
+		ConfigDir:   filepath.Dir(s.cfg.Path()),
+		StorageMode: s.storageMode(),
+		Databases:   databases,
 	}, nil
 }
 

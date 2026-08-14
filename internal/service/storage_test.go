@@ -40,6 +40,34 @@ func newStorageTestService(t *testing.T, profiles ...config.Profile) (*ProfileSe
 	return s, cfgDir, dataDir
 }
 
+// TestGetStorageInfo_ReportsStorageMode は、保存先の決定方法
+// (default / env / portable)を返すことを確認する(アプリ情報画面の表示用)。
+func TestGetStorageInfo_ReportsStorageMode(t *testing.T) {
+	s, _, _ := newStorageTestService(t)
+	s.storageMode = func() string { return "portable" }
+
+	info, err := s.GetStorageInfo()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.StorageMode != "portable" {
+		t.Errorf("StorageMode = %q, want %q", info.StorageMode, "portable")
+	}
+}
+
+// TestNewProfileService_DefaultStorageMode は、既定の構成でも保存先モードが
+// 3 値のいずれかで得られる(空にならない)ことを確認する。
+func TestNewProfileService_DefaultStorageMode(t *testing.T) {
+	s := NewProfileService(config.NewManagerAt(t.TempDir()))
+	t.Cleanup(func() { _ = s.Close() })
+
+	switch got := s.storageMode(); got {
+	case "default", "env", "portable":
+	default:
+		t.Errorf("既定の保存先モード = %q, want default / env / portable のいずれか", got)
+	}
+}
+
 // TestGetStorageInfo_SumsDatabaseFileSizes は、DB 本体に WAL / SHM を加えた
 // 合計サイズを返すこと、設定ディレクトリと DB パスを返すことを確認する。
 func TestGetStorageInfo_SumsDatabaseFileSizes(t *testing.T) {

@@ -12,6 +12,8 @@ import (
 	"time"
 
 	_ "modernc.org/sqlite" // driver name: "sqlite"
+
+	"backlog-assistant/internal/storagepath"
 )
 
 // dbtx は *sql.DB と *sql.Tx の共通インターフェース。
@@ -35,13 +37,16 @@ type Store struct {
 	path string
 }
 
-// DefaultDataDir は DB 置き場(os.UserConfigDir()/backlog-assistant/data)を返す。
+// DefaultDataDir は DB 置き場(データ保存先の基点/data)を返す。
+//
+// 基点は既定で os.UserConfigDir()/backlog-assistant だが、portable.txt または
+// 環境変数 BACKLOG_ASSISTANT_HOME でカスタマイズできる(internal/storagepath)。
 func DefaultDataDir() (string, error) {
-	base, err := os.UserConfigDir()
+	base, err := storagepath.BaseDir()
 	if err != nil {
-		return "", fmt.Errorf("ユーザ設定ディレクトリを取得できません: %w", err)
+		return "", err
 	}
-	return filepath.Join(base, "backlog-assistant", "data"), nil
+	return filepath.Join(base, "data"), nil
 }
 
 // DBPathIn は baseDir 配下の DB ファイルパス(<ホスト名>_<ユーザID>.db)を返す。

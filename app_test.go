@@ -718,3 +718,30 @@ func TestNewIssueDetailDTO_Comments(t *testing.T) {
 		}
 	})
 }
+
+// TestNewStorageInfoDTO は、アプリ情報画面へ返す保存データ DTO が
+// service の情報(保存先モードを含む)と動作ログの状態を合流させることを確認する。
+func TestNewStorageInfoDTO(t *testing.T) {
+	info := &service.StorageInfo{
+		ConfigDir:   "/base",
+		StorageMode: "portable",
+		Databases: []service.DatabaseInfo{
+			{ProfileID: "p1", ProfileName: "検証用", Path: "/base/data/example.backlog.jp_1.db"},
+		},
+	}
+
+	got := newStorageInfoDTO(info, "/exe/logs/backlog-assistant-20260815.log", true)
+
+	if got.ConfigDir != "/base" {
+		t.Errorf("ConfigDir = %q, want %q", got.ConfigDir, "/base")
+	}
+	if got.StorageMode != "portable" {
+		t.Errorf("StorageMode = %q, want %q", got.StorageMode, "portable")
+	}
+	if len(got.Databases) != 1 || got.Databases[0].ProfileID != "p1" {
+		t.Errorf("Databases = %+v", got.Databases)
+	}
+	if got.LogPath != "/exe/logs/backlog-assistant-20260815.log" || !got.LogEnabled {
+		t.Errorf("動作ログ = %q / %v", got.LogPath, got.LogEnabled)
+	}
+}

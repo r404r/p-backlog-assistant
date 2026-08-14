@@ -9,6 +9,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"backlog-assistant/internal/storagepath"
 )
 
 // TestWindowShower_ShowsOnce は、OnDomReady とフォールバックタイマーの
@@ -161,5 +163,67 @@ func TestWriteCrashFile_CreatesAndAppends(t *testing.T) {
 func TestWriteCrashFile_RejectsEmptyDir(t *testing.T) {
 	if _, err := writeCrashFile("", "内容\n"); err == nil {
 		t.Error("出力先が空でもエラーにならなかった")
+	}
+}
+
+// TestCrashFileDirs_IgnoresCustomStorageBase は、crash.txt の保存先が
+// データ保存先のカスタマイズ(BACKLOG_ASSISTANT_HOME / portable.txt)に
+// **追従しない**ことを確認する(設計 §3.2)。
+//
+// 起動エラーの主な原因はカスタム保存先が使えないことなので、記録先まで
+// そこへ寄せると「なぜ起動できないのか」を残せなくなる。
+// 依存は注入する。XDG_CONFIG_HOME は macOS / Windows では効かないため、
+// 実際の os.UserConfigDir を使うと利用者の実フォルダへ MkdirAll してしまう。
+func TestCrashFileDirs_IgnoresCustomStorageBase(t *testing.T) {
+	custom := t.TempDir()
+	t.Setenv(storagepath.EnvVar, custom)
+	exeDir := t.TempDir()
+	configBase := t.TempDir()
+	var created []string
+
+	dirs := crashFileDirsWith(
+		func() (string, error) { return filepath.Join(exeDir, "backlog-assistant"), nil },
+		func() (string, error) { return configBase, nil },
+		func(path string, perm os.FileMode) error {
+			created = append(created, path)
+			return os.MkdirAll(path, perm)
+		},
+	)
+
+	want := []string{exeDir, filepath.Join(configBase, crashAppDirName)}
+	if len(dirs) != len(want) || dirs[0] != want[0] || dirs[1] != want[1] {
+		t.Errorf("候補 = %v, want %v", dirs, want)
+	}
+	for _, d := range dirs {
+		if d == custom {
+			t.Errorf("カスタム保存先が候補に含まれている: %v", dirs)
+		}
+	}
+	if len(created) != 1 || created[0] != want[1] {
+		t.Errorf("作成したフォルダ = %v, want %v のみ", created, want[1:])
+	}
+}
+
+// TestCrashFileDirs_SkipsUnavailableCandidates は、位置を特定できない
+// (または作成できない)候補を黙って飛ばすことを確認する。
+func TestCrashFileDirs_SkipsUnavailableCandidates(t *testing.T) {
+	configBase := t.TempDir()
+	noExe := func() (string, error) { return "", errors.New("特定できません") }
+	okConfig := func() (string, error) { return configBase, nil }
+	mkdirOK := func(path string, perm os.FileMode) error { return os.MkdirAll(path, perm) }
+
+	if got := crashFileDirsWith(noExe, okConfig, mkdirOK); len(got) != 1 ||
+		got[0] != filepath.Join(configBase, crashAppDirName) {
+		t.Errorf("実行ファイル不明時の候補 = %v", got)
+	}
+
+	noConfig := func() (string, error) { return "", errors.New("取得できません") }
+	if got := crashFileDirsWith(noExe, noConfig, mkdirOK); len(got) != 0 {
+		t.Errorf("候補なしのはずが %v", got)
+	}
+
+	mkdirNG := func(string, os.FileMode) error { return errors.New("作成できません") }
+	if got := crashFileDirsWith(noExe, okConfig, mkdirNG); len(got) != 0 {
+		t.Errorf("作成失敗時に候補へ加えている: %v", got)
 	}
 }

@@ -26,6 +26,7 @@ vi.mock('../lib/backend', async (importOriginal) => {
       getAppVersion: async () => ({ version: 'test' }),
       getStorageInfo: async () => ({
         configDir: '/tmp/config',
+        storageMode: 'default',
         databases: [],
         logEnabled: false,
         logPath: '',

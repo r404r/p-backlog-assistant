@@ -763,10 +763,32 @@ export interface StorageDatabase {
   error: string
 }
 
+/**
+ * 保存先の決定方法(Go 側 storagepath.Mode と対)。
+ *
+ * 明示指定(portable.txt / 環境変数)が使えない場合は起動時にエラーとするため、
+ * 「フォールバック中」という状態は存在しない(この 3 値のみ)。
+ */
+export type StorageMode = 'default' | 'env' | 'portable'
+
+/** 保存先モードの一覧(表示の選択肢と正規化に使う) */
+export const STORAGE_MODES: readonly StorageMode[] = ['default', 'env', 'portable']
+
+/**
+ * Go から届いた保存先モードを正規化する。
+ * 想定外の値をそのまま画面へ渡すと翻訳キーが引けず生の値が出てしまうため、
+ * 既定へ丸める(既定は「カスタマイズしていない」状態で、最も無害)。
+ */
+function normalizeStorageMode(value: unknown): StorageMode {
+  return STORAGE_MODES.includes(value as StorageMode) ? (value as StorageMode) : 'default'
+}
+
 /** 保存データの所在(Go 側 main.StorageInfo と対) */
 export interface StorageInfo {
   /** 設定ファイル(config.json)の置き場所 */
   configDir: string
+  /** 保存先(config.json・data/ の基点)の決定方法 */
+  storageMode: StorageMode
   /** プロファイルごとのローカル DB */
   databases: StorageDatabase[]
   /** 動作ログのパス(無効な場合は空文字) */
@@ -1303,6 +1325,7 @@ function createWailsBackend(app: WailsApp): Backend {
       const r = await app.GetStorageInfo()
       return {
         configDir: r?.configDir ?? '',
+        storageMode: normalizeStorageMode(r?.storageMode),
         databases: (r?.databases ?? []).map((d) => ({
           profileId: d?.profileId ?? '',
           profileName: d?.profileName ?? '',
@@ -2470,6 +2493,8 @@ function createMockBackend(): Backend {
       // モックでは実ファイルを作らないため、ダミーのパス・サイズを返す
       return {
         configDir: '(モック)~/.config/backlog-assistant',
+        // カスタマイズしていない状態(既定)を再現する
+        storageMode: 'default' as const,
         databases: profiles.map((p, i) => ({
           profileId: p.id,
           profileName: p.name,

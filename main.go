@@ -16,7 +16,7 @@ import (
 	wailsruntime "github.com/wailsapp/wails/v2/pkg/runtime"
 
 	"backlog-assistant/internal/applog"
-	"backlog-assistant/internal/config"
+	"backlog-assistant/internal/storagepath"
 )
 
 //go:embed all:frontend/dist
@@ -28,6 +28,11 @@ var version = "dev"
 
 // crashFileName は動作ログを開けないときに起動失敗の理由を書き出すファイル名。
 const crashFileName = "crash.txt"
+
+// crashAppDirName は crash.txt のフォールバック先(ユーザ設定ディレクトリ配下)の
+// フォルダ名。データ保存先のカスタマイズには追従させないため、
+// config.DefaultDir() ではなくこの固定名を使う(crashFileDirs のコメント参照)。
+const crashAppDirName = "backlog-assistant"
 
 // windowShowTimeout はウィンドウ表示のフォールバック待ち時間。
 //
@@ -74,6 +79,16 @@ func startupWithWindowShow(
 }
 
 func main() {
+	// データの保存先(config.json・data/)を起動時に 1 回だけ決定する。
+	// portable.txt / BACKLOG_ASSISTANT_HOME による明示指定が使えない場合は、
+	// 既定へフォールバックせずここで起動を中止する(黙って別の場所へ新規データを
+	// 作ると「データが消えた」ように見えるため。設計 §3.1)。
+	// 記録は既存の起動失敗経路(動作ログ → crash.txt)に載せる。
+	if _, err := storagepath.Current(); err != nil {
+		reportStartupFailure(err)
+		os.Exit(1)
+	}
+
 	// Create an instance of the app structure
 	app := NewApp()
 
@@ -149,13 +164,32 @@ func reportStartupFailure(runErr error) {
 // 第一候補は実行ファイルと同じフォルダ(動作ログと同じ場所で、利用者が
 // 見つけやすい)。ただし macOS の .app 配下や Program Files 配下は
 // 書き込めないことがあるため、ユーザ設定ディレクトリ配下も候補に加える。
+//
+// **保存先は従来仕様のまま**で、データ保存先のカスタマイズ
+// (portable.txt / BACKLOG_ASSISTANT_HOME。internal/storagepath)には
+// 追従させない(設計 §3.2)。起動失敗の主な原因はカスタム保存先が使えないこと
+// なので、記録先までそこに寄せると理由を残せなくなるため。
 func crashFileDirs() []string {
+	return crashFileDirsWith(os.Executable, os.UserConfigDir, os.MkdirAll)
+}
+
+// crashFileDirsWith は crashFileDirs の依存注入版(テスト用)。
+//
+// 実装を分けているのは、テストで実行環境のユーザ設定フォルダに
+// 実際のフォルダを作らないため(os.UserConfigDir の参照先は OS ごとに
+// 異なり、環境変数では差し替えられない)。
+func crashFileDirsWith(
+	executable func() (string, error),
+	userConfigDir func() (string, error),
+	mkdirAll func(path string, perm os.FileMode) error,
+) []string {
 	var dirs []string
-	if exe, err := os.Executable(); err == nil {
+	if exe, err := executable(); err == nil {
 		dirs = append(dirs, filepath.Dir(exe))
 	}
-	if dir, err := config.DefaultDir(); err == nil {
-		if err := os.MkdirAll(dir, 0o700); err == nil {
+	if base, err := userConfigDir(); err == nil {
+		dir := filepath.Join(base, crashAppDirName)
+		if err := mkdirAll(dir, 0o700); err == nil {
 			dirs = append(dirs, dir)
 		}
 	}

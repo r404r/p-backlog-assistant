@@ -24,11 +24,26 @@ func (a *App) GetLogInfo() (*LogInfo, error) {
 // 設定・ローカル DB(service 層が解決)と動作ログ(applog)を 1 つにまとめ、
 // 画面側の呼び出しを 1 回で済ませる。
 type StorageInfo struct {
-	ConfigDir string                 `json:"configDir"`
-	Databases []service.DatabaseInfo `json:"databases"`
+	ConfigDir string `json:"configDir"`
+	// StorageMode は保存先の決定方法("default" / "env" / "portable")。
+	// 既定以外(portable.txt / BACKLOG_ASSISTANT_HOME)で運用しているかを
+	// 画面で確認できるようにする。
+	StorageMode string                 `json:"storageMode"`
+	Databases   []service.DatabaseInfo `json:"databases"`
 	// LogPath / LogEnabled は GetLogInfo と同じ情報(アプリ情報画面での再取得を避ける)
 	LogPath    string `json:"logPath"`
 	LogEnabled bool   `json:"logEnabled"`
+}
+
+// newStorageInfoDTO は service の保存データ情報と動作ログの状態を合流させる。
+func newStorageInfoDTO(info *service.StorageInfo, logPath string, logEnabled bool) *StorageInfo {
+	return &StorageInfo{
+		ConfigDir:   info.ConfigDir,
+		StorageMode: info.StorageMode,
+		Databases:   info.Databases,
+		LogPath:     logPath,
+		LogEnabled:  logEnabled,
+	}
 }
 
 // GetStorageInfo は設定ディレクトリ・プロファイルごとのローカル DB・動作ログの
@@ -43,15 +58,13 @@ func (a *App) GetStorageInfo() (*StorageInfo, error) {
 			if err != nil {
 				return nil, nil, err
 			}
-			out := &StorageInfo{
-				ConfigDir:  info.ConfigDir,
-				Databases:  info.Databases,
-				LogPath:    a.log.Path(),
-				LogEnabled: a.log.Enabled(),
-			}
+			out := newStorageInfoDTO(info, a.log.Path(), a.log.Enabled())
 			return out, []slog.Attr{
 				slog.Int("count", len(out.Databases)),
 				slog.Bool("logEnabled", out.LogEnabled),
+				// 保存先モードは理由コードと同じく値が固定の 3 値で、
+				// パスを含まないためログに残してよい
+				slog.String("storageMode", out.StorageMode),
 			}, nil
 		})
 }

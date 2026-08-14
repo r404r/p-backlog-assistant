@@ -48,6 +48,13 @@
     "title": "Stored Data",
     "description": "Where this app stores files on this computer. API keys are stored in the OS keychain, not in the files below.",
     "loadFailed": "Could not load the stored data information: {message}",
+    "storageMode": "Storage location mode",
+    "storageModeValue": {
+      "default": "Default (user config folder)",
+      "env": "Environment variable (BACKLOG_ASSISTANT_HOME)",
+      "portable": "Portable (portable.txt)"
+    },
+    "storageModeNote": "See \"Changing the storage location\" in the User Guide for how to change it.",
     "configDir": "Config folder",
     "configDirNote": "Where connection profiles (config.json) are stored.",
     "database": "Local DB",

@@ -28,6 +28,7 @@ vi.mock('../lib/backend', async (importOriginal) => {
         if (storageFails) throw new Error('disk error')
         return {
           configDir: '/tmp/config',
+          storageMode,
           databases: [],
           logEnabled: false,
           logPath: '',
@@ -43,6 +44,9 @@ const opened: string[] = []
 
 /** 保存データの取得を失敗させるか(生成済みメッセージの言語追従の検証に使う) */
 let storageFails = false
+
+/** バックエンドが返す保存先モード(表示の検証に使う) */
+let storageMode: 'default' | 'env' | 'portable' = 'default'
 
 /** 保留中の Promise の継続と Vue の再描画をすべて進める */
 async function flush(): Promise<void> {
@@ -86,6 +90,7 @@ beforeEach(() => {
   localStorage.clear()
   opened.length = 0
   storageFails = false
+  storageMode = 'default'
   // 明示モードから始める(happy-dom の navigator.language に依存させない)
   setLanguageMode('ja')
 })
@@ -184,6 +189,37 @@ describe('AboutView の表示言語', () => {
 
     expect(host.textContent).toContain('Could not load the stored data information: disk error')
     expect(host.textContent).not.toContain('保存データの情報を取得できませんでした')
+  })
+
+  it('保存データの節に保存先モードを表示する(既定)', async () => {
+    const { host } = (mounted = await mountAboutView())
+
+    expect(host.textContent).toContain('保存先モード')
+    expect(host.textContent).toContain('既定(ユーザ設定フォルダ)')
+
+    await chooseLanguage(host, 'en')
+
+    expect(host.textContent).toContain('Storage location mode')
+    expect(host.textContent).toContain('Default (user config folder)')
+    expect(host.textContent).not.toContain('保存先モード')
+  })
+
+  it('ポータブル・環境変数で運用中はその旨を表示する', async () => {
+    storageMode = 'portable'
+    const { host } = (mounted = await mountAboutView())
+    expect(host.textContent).toContain('ポータブル(portable.txt)')
+
+    await chooseLanguage(host, 'en')
+    expect(host.textContent).toContain('Portable (portable.txt)')
+
+    mounted.unmount()
+    storageMode = 'env'
+    setLanguageMode('ja')
+    const second = (mounted = await mountAboutView())
+    expect(second.host.textContent).toContain('環境変数(BACKLOG_ASSISTANT_HOME)')
+
+    await chooseLanguage(second.host, 'en')
+    expect(second.host.textContent).toContain('Environment variable (BACKLOG_ASSISTANT_HOME)')
   })
 
   it('再マウントしても保存済みの言語で表示される', async () => {

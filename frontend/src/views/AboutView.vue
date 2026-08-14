@@ -4,7 +4,12 @@
 // AboutView.i18n.test.ts で検証している)。
 import { computed, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { getBackend, openExternalURL, type StorageInfo } from '../lib/backend'
+import {
+  getBackend,
+  openExternalURL,
+  type StorageInfo,
+  type StorageMode,
+} from '../lib/backend'
 import { errorMessage } from '../lib/format'
 import { LANGUAGE_MODES, useLanguage, type LanguageMode } from '../lib/language'
 import { useMessage } from '../lib/message'
@@ -64,6 +69,13 @@ const CONTACT_MAIL = 'r404r.dev@gmail.com'
 // アプリのバージョン。取得できるまで、また取得に失敗した場合は
 // ローカル開発ビルドと同じ 'dev' 表示に縮退する(表示専用のためエラーにはしない)。
 const appVersion = ref('dev')
+
+/** 保存先モードの表示名を引くカタログキー(値の集合は StorageMode と共通) */
+const STORAGE_MODE_LABEL_KEYS: Record<StorageMode, string> = {
+  default: 'about.storage.storageModeValue.default',
+  env: 'about.storage.storageModeValue.env',
+  portable: 'about.storage.storageModeValue.portable',
+}
 
 // 保存データ(設定・ローカル DB・動作ログ)の所在。取得前は null。
 const storage = ref<StorageInfo | null>(null)
@@ -217,6 +229,14 @@ function openLink(url: string): void {
       <p v-else-if="!storage">{{ t('common.state.loading') }}</p>
 
       <dl v-else class="info">
+        <!-- 保存先(config.json・data/ の基点)をどう決めたか。既定以外で
+             運用している場合に、利用者が意図どおりかを確認できるようにする -->
+        <dt>{{ t('about.storage.storageMode') }}</dt>
+        <dd>
+          {{ t(STORAGE_MODE_LABEL_KEYS[storage.storageMode]) }}
+          <span class="note">{{ t('about.storage.storageModeNote') }}</span>
+        </dd>
+
         <dt>{{ t('about.storage.configDir') }}</dt>
         <dd>
           {{ storage.configDir }}
