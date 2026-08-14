@@ -1,13 +1,109 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
+
+// TestWindowShower_ShowsOnce は、OnDomReady とフォールバックタイマーの
+// どちらから呼ばれてもウィンドウ表示が 1 回だけになることを確認する。
+//
+// なお wails.Run のオプション(StartHidden・OnDomReady の結線)自体は
+// Wails ランタイムとの結合が必要で自動テストが難しいため、TDD 例外(手動確認)。
+func TestWindowShower_ShowsOnce(t *testing.T) {
+	var mu sync.Mutex
+	calls := 0
+	s := &windowShower{show: func(_ context.Context) {
+		mu.Lock()
+		defer mu.Unlock()
+		calls++
+	}}
+
+	ctx := context.Background()
+	// 2 経路(DomReady・フォールバック)からの呼び出しを同時に再現する
+	var wg sync.WaitGroup
+	for i := 0; i < 5; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			s.Show(ctx)
+		}()
+	}
+	wg.Wait()
+
+	if calls != 1 {
+		t.Errorf("表示回数 = %d, want 1", calls)
+	}
+}
+
+// TestNewWindowShower_HasShowFunc は、既定の生成関数が表示処理を持つ
+// (nil のまま Show を呼んで panic しない)ことを確認する。
+func TestNewWindowShower_HasShowFunc(t *testing.T) {
+	if newWindowShower().show == nil {
+		t.Error("既定の表示処理が設定されていない")
+	}
+}
+
+// TestStartupWithWindowShow_RegistersFallbackBeforeStartup は、表示のフォールバック
+// タイマーが app.startup より **先に** 登録されることを確認する。
+//
+// startup は設定の読み込み・キーチェーンの初期化などを行うため、環境によっては
+// 長時間ブロックし得る。タイマーの登録が startup の後だと、その間ウィンドウが
+// 隠れたまま(StartHidden)になり「起動したのに何も出ない」状態が続いてしまう。
+func TestStartupWithWindowShow_RegistersFallbackBeforeStartup(t *testing.T) {
+	shown := make(chan struct{})
+	shower := &windowShower{show: func(_ context.Context) { close(shown) }}
+
+	startupCalled := false
+	handler := startupWithWindowShow(shower, func(_ context.Context) {
+		startupCalled = true
+		// startup が終わらないうちに、フォールバックで表示されることを確認する
+		select {
+		case <-shown:
+		case <-time.After(3 * time.Second):
+			t.Error("startup の完了前にウィンドウが表示されなかった")
+		}
+	}, time.Millisecond)
+
+	handler(context.Background())
+
+	if !startupCalled {
+		t.Error("startup が呼ばれていない")
+	}
+}
+
+// TestStartupWithWindowShow_DomReadyWinsOverFallback は、フロントエンドが
+// 正常に読み込めた場合(OnDomReady が先)にフォールバックが二重に表示しないことを
+// 確認する。
+func TestStartupWithWindowShow_DomReadyWinsOverFallback(t *testing.T) {
+	var mu sync.Mutex
+	calls := 0
+	shower := &windowShower{show: func(_ context.Context) {
+		mu.Lock()
+		defer mu.Unlock()
+		calls++
+	}}
+
+	ctx := context.Background()
+	handler := startupWithWindowShow(shower, func(_ context.Context) {}, 10*time.Millisecond)
+	handler(ctx)
+	// OnDomReady 相当(フォールバックより前に届く)
+	shower.Show(ctx)
+	// フォールバックタイマーが発火する時間まで待つ
+	time.Sleep(50 * time.Millisecond)
+
+	mu.Lock()
+	defer mu.Unlock()
+	if calls != 1 {
+		t.Errorf("表示回数 = %d, want 1", calls)
+	}
+}
 
 // TestStartupFailureText は、起動失敗の記録本文に日時と原因が入り、
 // 機密(API キー)・スペース URL・ホームディレクトリのパスが残らないことを確認する。

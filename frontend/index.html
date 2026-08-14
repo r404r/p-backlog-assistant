@@ -1,7 +1,14 @@
 <!DOCTYPE html>
 <html lang="ja">
 <head>
+    <!-- charset は先頭のまま(仕様上、文書の先頭付近に必要)。
+         それ以外の要素より前にテーマを確定させる。 -->
     <meta charset="UTF-8"/>
+    <!-- 起動時のちらつき対策(設計 §3.3)。最初の描画より前に data-theme を確定させたいので、
+         ブロッキング読込にする(defer / async / type="module" を付けると間に合わない)。 -->
+    <script src="/prepaint.js"></script>
+    <!-- ネイティブ描画(スクロールバー・フォームコントロール)が両テーマに対応することを宣言する -->
+    <meta content="light dark" name="color-scheme"/>
     <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
     <title>backlog-assistant</title>
 </head>
@@ -10,4 +17,3 @@
 <script src="./src/main.ts" type="module"></script>
 </body>
 </html>
-

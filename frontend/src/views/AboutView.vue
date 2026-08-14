@@ -1,10 +1,26 @@
 <script lang="ts" setup>
-// アプリ情報画面。TDD 例外(GUI): フロントエンドにテスト基盤が無いため手動確認で担保する。
+// アプリ情報画面。TDD 例外(GUI): 見た目・レイアウトは手動確認で担保する
+// (表示テーマの切替は配線を AboutView.theme.test.ts で検証している)。
 import { onMounted, ref } from 'vue'
 import { getBackend, openExternalURL, type StorageInfo } from '../lib/backend'
 import { errorMessage } from '../lib/format'
+import { THEME_MODES, useTheme, type ThemeMode } from '../lib/theme'
 
 const backend = getBackend()
+
+// --- 表示テーマ ---
+// 状態と購読は lib/theme.ts のシングルトンが持つ(この画面は画面切替のたびに
+// 破棄されるため、購読を所有すると開いている間しか OS 追従しなくなる)。
+// ここは現在値の参照と切替の呼び出しだけを行う。
+
+/** ラジオの表示名(選択肢の並びは THEME_MODES と共通) */
+const THEME_LABELS: Record<ThemeMode, string> = {
+  system: 'システムに合わせる(既定)',
+  light: 'ライト',
+  dark: 'ダーク',
+}
+
+const { mode: themeMode, setMode: setThemeMode } = useTheme()
 
 /** リポジトリ・不具合報告の窓口 */
 const REPOSITORY_URL = 'https://github.com/r404r/p-backlog-assistant'
@@ -125,6 +141,32 @@ function openLink(url: string): void {
     </section>
 
     <section class="panel">
+      <h2>表示テーマ</h2>
+      <p class="description">
+        画面の配色を切り替えます。選ぶとすぐに反映され、設定は自動で保存されます。
+      </p>
+
+      <div class="theme-modes" role="radiogroup" aria-label="表示テーマ">
+        <label v-for="m in THEME_MODES" :key="m" class="theme-mode">
+          <input
+            type="radio"
+            name="theme-mode"
+            :value="m"
+            :checked="themeMode === m"
+            @change="setThemeMode(m)"
+          >
+          <span>{{ THEME_LABELS[m] }}</span>
+        </label>
+      </div>
+
+      <span class="note">「システムに合わせる」は OS の外観設定に追従します。</span>
+      <span class="note">
+        ウィンドウ枠(タイトルバー)の配色は、Windows ではテーマに追従し、macOS では OS
+        の外観設定に従います。
+      </span>
+    </section>
+
+    <section class="panel">
       <h2>保存データ</h2>
       <p class="description">
         このアプリがこのパソコンに保存しているファイルの場所です。API
@@ -202,11 +244,11 @@ h2 {
 }
 
 .panel {
-  border: 1px solid #d0d7de;
+  border: 1px solid var(--border);
   border-radius: 6px;
   padding: 1rem 1.25rem;
   margin-bottom: 1.25rem;
-  background: #fff;
+  background: var(--surface);
 }
 
 .description {
@@ -225,7 +267,7 @@ h2 {
 
 .info dt {
   font-weight: 600;
-  color: #57606a;
+  color: var(--text-muted);
 }
 
 .info dd {
@@ -234,7 +276,23 @@ h2 {
 }
 
 .link {
-  color: #0b5cad;
+  color: var(--accent-fg);
+  cursor: pointer;
+}
+
+/* テーマの選択肢を横並びにする。狭いウインドウでは折り返す */
+.theme-modes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem 1.5rem;
+  margin: 0 0 0.5rem;
+  font-size: 0.9rem;
+}
+
+.theme-mode {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
   cursor: pointer;
 }
 
@@ -248,13 +306,13 @@ h2 {
 .note {
   display: block;
   font-size: 0.8rem;
-  color: #57606a;
+  color: var(--text-muted);
   word-break: normal;
 }
 
 /* エラー文にはパスや URL が入りうるため、必ず折り返す(.info dd の外でも同様) */
 .error {
-  color: #b52a2a;
+  color: var(--danger-text);
   font-size: 0.9rem;
   margin: 0.5rem 0 0;
   overflow-wrap: anywhere;
@@ -288,6 +346,6 @@ h2 {
 
 .db-empty {
   margin: 0;
-  color: #57606a;
+  color: var(--text-muted);
 }
 </style>

@@ -1,16 +1,19 @@
 package main
 
 import (
+	"context"
 	"embed"
 	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
+	wailsruntime "github.com/wailsapp/wails/v2/pkg/runtime"
 
 	"backlog-assistant/internal/applog"
 	"backlog-assistant/internal/config"
@@ -26,9 +29,57 @@ var version = "dev"
 // crashFileName は動作ログを開けないときに起動失敗の理由を書き出すファイル名。
 const crashFileName = "crash.txt"
 
+// windowShowTimeout はウィンドウ表示のフォールバック待ち時間。
+//
+// 通常は OnDomReady(フロントエンドの読み込み完了)で表示するが、
+// フロントエンドが読み込めない異常時にウィンドウが出ないままになると
+// 「起動したのに何も起きない」状態になってしまう。この時間が過ぎたら
+// 読み込みの成否によらず表示する。
+const windowShowTimeout = 3 * time.Second
+
+// windowShower はウィンドウの初回表示を 1 回に集約する。
+//
+// 表示のきっかけは OnDomReady とフォールバックタイマーの 2 経路あり、
+// どちらが先になるかは起動のたびに変わる。二重の WindowShow 自体は無害だが、
+// 経路を増やしても 1 回で済むことをテストで固定できるよう sync.Once で包む。
+type windowShower struct {
+	once sync.Once
+	// show は実際の表示処理。テストでは差し替える(Wails ランタイムは結合が必要なため)。
+	show func(ctx context.Context)
+}
+
+func newWindowShower() *windowShower {
+	return &windowShower{show: wailsruntime.WindowShow}
+}
+
+// Show はウィンドウを表示する(2 回目以降は何もしない)。
+func (s *windowShower) Show(ctx context.Context) {
+	s.once.Do(func() { s.show(ctx) })
+}
+
+// startupWithWindowShow は OnStartup ハンドラを組み立てる。
+//
+// 表示のフォールバックタイマーは **startup を呼ぶ前に** 登録する。startup は
+// 設定の読み込み・キーチェーンの初期化などを行うため環境によっては長引くことがあり、
+// 登録が後だとその間ウィンドウが隠れたまま(StartHidden)になってしまうため。
+func startupWithWindowShow(
+	shower *windowShower,
+	startup func(ctx context.Context),
+	fallback time.Duration,
+) func(ctx context.Context) {
+	return func(ctx context.Context) {
+		time.AfterFunc(fallback, func() { shower.Show(ctx) })
+		startup(ctx)
+	}
+}
+
 func main() {
 	// Create an instance of the app structure
 	app := NewApp()
+
+	// 起動直後のちらつき(テーマ確定前の白い画面)を避けるため、ウィンドウは
+	// 隠した状態で起動し、フロントエンドの準備ができてから表示する(設計 §3.3)。
+	shower := newWindowShower()
 
 	// Create application with options
 	err := wails.Run(&options.App{
@@ -38,9 +89,15 @@ func main() {
 		AssetServer: &assetserver.Options{
 			Assets: assets,
 		},
-		BackgroundColour: &options.RGBA{R: 27, G: 38, B: 54, A: 1},
-		OnStartup:        app.startup,
-		OnShutdown:       app.shutdown,
+		// WebView の外側に覗く地の色。A は 255 段階(0 に近いとほぼ透明)。
+		// ライトの背景色で不透明に塗り、テーマ確定後はフロントエンドが
+		// WindowSetBackgroundColour で同期する(frontend/src/lib/theme.ts)。
+		BackgroundColour: &options.RGBA{R: 255, G: 255, B: 255, A: 255},
+		StartHidden:      true,
+		OnStartup:        startupWithWindowShow(shower, app.startup, windowShowTimeout),
+		// prepaint スクリプトの実行後に発火するため、この時点でテーマは確定している
+		OnDomReady: func(ctx context.Context) { shower.Show(ctx) },
+		OnShutdown: app.shutdown,
 		Bind: []interface{}{
 			app,
 		},

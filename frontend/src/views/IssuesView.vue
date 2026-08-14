@@ -1767,34 +1767,34 @@ h2 {
 }
 
 .panel {
-  border: 1px solid #d0d7de;
+  border: 1px solid var(--border);
   border-radius: 6px;
   padding: 1rem 1.25rem;
   margin-bottom: 1.25rem;
-  background: #fff;
+  background: var(--surface);
 }
 
 .mock-note {
-  background: #fff8e1;
-  border: 1px solid #e6c96a;
+  background: var(--warning-bg);
+  border: 1px solid var(--warning-border);
   border-radius: 4px;
   padding: 0.5rem 0.75rem;
   font-size: 0.85rem;
 }
 
 .notice {
-  background: #f6f8fa;
-  border: 1px solid #d0d7de;
+  background: var(--bg-muted);
+  border: 1px solid var(--border);
   border-radius: 4px;
   padding: 0.5rem 0.75rem;
   font-size: 0.85rem;
-  color: #57606a;
+  color: var(--text-muted);
 }
 
 .notice.warn {
-  background: #fff8e1;
-  border-color: #e6c96a;
-  color: #9a6700;
+  background: var(--warning-bg);
+  border-color: var(--warning-border);
+  color: var(--warning-text);
 }
 
 .row {
@@ -1834,11 +1834,11 @@ input[type='text'],
 input[type='date'],
 select {
   padding: 0.4rem 0.5rem;
-  border: 1px solid #d0d7de;
+  border: 1px solid var(--border);
   border-radius: 4px;
   font-size: 0.9rem;
-  background: #fff;
-  color: #1f2328;
+  background: var(--bg);
+  color: var(--text);
 }
 
 input.wide {
@@ -1851,11 +1851,11 @@ input.narrow {
 
 /* カスタム属性の絞り込み(折りたたみ) */
 .cf-filters {
-  border: 1px solid #d0d7de;
+  border: 1px solid var(--border);
   border-radius: 4px;
   padding: 0.5rem 0.75rem;
   margin-bottom: 0.75rem;
-  background: #f6f8fa;
+  background: var(--bg-muted);
 }
 
 .cf-filters > summary {
@@ -1870,7 +1870,7 @@ input.narrow {
 
 .cf-count {
   font-weight: 400;
-  color: #0b5cad;
+  color: var(--accent-fg);
 }
 
 /* 属性名は幅を揃えて、入力欄の左端を縦に並べる */
@@ -1880,18 +1880,18 @@ input.narrow {
 
 input:disabled,
 select:disabled {
-  background: #f6f8fa;
-  color: #8c959f;
+  background: var(--bg-muted);
+  color: var(--text-faint);
 }
 
 .hint {
   font-size: 0.8rem;
-  color: #57606a;
+  color: var(--text-muted);
   margin: 0 0 0.75rem;
 }
 
 .hint.warn {
-  color: #9a6700;
+  color: var(--warning-text);
 }
 
 /* 文中に置く軽量なアクション(カスタム属性取得の再試行) */
@@ -1900,29 +1900,29 @@ button.link {
   background: none;
   padding: 0;
   font-size: inherit;
-  color: #0b5cad;
+  color: var(--accent-fg);
   cursor: pointer;
   text-decoration: underline;
 }
 
 .freshness {
   font-size: 0.85rem;
-  color: #57606a;
+  color: var(--text-muted);
   margin: 0 0 0.5rem;
 }
 
 button {
   padding: 0.4rem 0.9rem;
-  border: 1px solid #d0d7de;
+  border: 1px solid var(--border);
   border-radius: 4px;
-  background: #f6f8fa;
-  color: #1f2328;
+  background: var(--bg-muted);
+  color: var(--text);
   font-size: 0.9rem;
   cursor: pointer;
 }
 
 button:hover:not(:disabled) {
-  background: #eaeef2;
+  background: var(--bg-hover);
 }
 
 button:disabled {
@@ -1931,21 +1931,21 @@ button:disabled {
 }
 
 button.primary {
-  background: #0b5cad;
-  border-color: #0b5cad;
-  color: #fff;
+  background: var(--accent-emphasis);
+  border-color: var(--accent-emphasis);
+  color: var(--on-accent);
 }
 
 button.primary:hover:not(:disabled) {
-  background: #094c8f;
+  background: var(--accent-emphasis-hover);
 }
 
 .spinner {
   display: inline-block;
   width: 14px;
   height: 14px;
-  border: 2px solid #d0d7de;
-  border-top-color: #0b5cad;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent-fg);
   border-radius: 50%;
   animation: spin 0.8s linear infinite;
 }
@@ -1953,7 +1953,7 @@ button.primary:hover:not(:disabled) {
 /* 同期中の進捗(取得中 N / M 件) */
 .sync-progress {
   font-size: 0.85rem;
-  color: #57606a;
+  color: var(--text-muted);
   font-variant-numeric: tabular-nums;
 }
 
@@ -1964,7 +1964,7 @@ button.primary:hover:not(:disabled) {
 }
 
 .error {
-  color: #b52a2a;
+  color: var(--danger-text);
   font-size: 0.9rem;
   margin: 0.5rem 0 0;
 }
@@ -1977,8 +1977,8 @@ button.primary:hover:not(:disabled) {
 }
 
 .result.ok {
-  background: #e9f5ec;
-  border: 1px solid #7fbf90;
+  background: var(--success-bg);
+  border: 1px solid var(--success-border);
 }
 
 .result-title {
@@ -1993,7 +1993,7 @@ button.primary:hover:not(:disabled) {
 
 .warnings {
   margin-top: 0.5rem;
-  color: #9a6700;
+  color: var(--warning-text);
 }
 
 .path {
@@ -2011,7 +2011,7 @@ button.primary:hover:not(:disabled) {
 .table-wrap {
   max-height: 420px;
   overflow: auto;
-  border: 1px solid #d0d7de;
+  border: 1px solid var(--border);
   border-radius: 4px;
 }
 
@@ -2023,14 +2023,14 @@ table {
 
 th,
 td {
-  border-bottom: 1px solid #d0d7de;
+  border-bottom: 1px solid var(--border);
   padding: 0.35rem 0.6rem;
   text-align: left;
   vertical-align: top;
 }
 
 th {
-  background: #f6f8fa;
+  background: var(--bg-muted);
   font-weight: 600;
   position: sticky;
   top: 0;
@@ -2063,7 +2063,7 @@ th {
 
 .pager-total {
   font-size: 0.85rem;
-  color: #57606a;
+  color: var(--text-muted);
   margin-right: 0.5rem;
 }
 
@@ -2074,7 +2074,7 @@ button.issue-key {
   padding: 0;
   font-size: inherit;
   font-family: inherit;
-  color: #0b5cad;
+  color: var(--accent-fg);
   cursor: pointer;
   text-decoration: underline;
 }
@@ -2082,7 +2082,7 @@ button.issue-key {
 /* 上の button:hover の背景(灰色のボタン面)が付かないよう打ち消す */
 button.issue-key:hover {
   background: none;
-  color: #094c8f;
+  color: var(--accent-fg-hover);
 }
 
 /* 課題 URL コピーのアイコンボタン(課題キーの右隣に常時表示)。
@@ -2092,7 +2092,7 @@ button.copy-icon {
   background: none;
   padding: 0;
   margin-left: 0.35rem;
-  color: #8c959f;
+  color: var(--text-faint);
   cursor: pointer;
   /* 行の文字とベースラインをそろえる(1 行の高さを変えない) */
   vertical-align: -0.15em;
@@ -2101,7 +2101,7 @@ button.copy-icon {
 
 button.copy-icon:hover:not(:disabled) {
   background: none;
-  color: #0b5cad;
+  color: var(--accent-fg);
 }
 
 /* ---- 課題詳細のポップアップ ---- */
@@ -2110,7 +2110,7 @@ button.copy-icon:hover:not(:disabled) {
 .modal-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.35);
+  background: var(--overlay);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -2120,14 +2120,14 @@ button.copy-icon:hover:not(:disabled) {
 }
 
 .modal {
-  background: #fff;
+  background: var(--surface);
   border-radius: 6px;
   padding: 1.25rem 1.5rem;
   width: min(720px, 92vw);
   /* 長い課題でもウインドウから溢れないよう、中身をスクロールさせる */
   max-height: 85vh;
   overflow: auto;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.2);
+  box-shadow: 0 8px 24px var(--shadow);
   font-size: 0.9rem;
 }
 
@@ -2141,7 +2141,7 @@ button.copy-icon:hover:not(:disabled) {
 
 .detail-key {
   font-family: monospace;
-  color: #57606a;
+  color: var(--text-muted);
 }
 
 .detail-summary {
@@ -2164,7 +2164,7 @@ button.copy-icon:hover:not(:disabled) {
 
 .detail-grid dt {
   font-weight: 600;
-  color: #57606a;
+  color: var(--text-muted);
 }
 
 .detail-grid dd {
@@ -2176,9 +2176,9 @@ button.copy-icon:hover:not(:disabled) {
 .detail-description {
   margin: 0;
   padding: 0.6rem 0.75rem;
-  border: 1px solid #d0d7de;
+  border: 1px solid var(--border);
   border-radius: 4px;
-  background: #f6f8fa;
+  background: var(--bg-muted);
   font-family: inherit;
   font-size: 0.85rem;
   white-space: pre-wrap;
@@ -2204,7 +2204,7 @@ button.copy-icon:hover:not(:disabled) {
   padding: 0;
   max-height: 16rem;
   overflow-y: auto;
-  border: 1px solid #d0d7de;
+  border: 1px solid var(--border);
   border-radius: 4px;
 }
 
@@ -2213,7 +2213,7 @@ button.copy-icon:hover:not(:disabled) {
 }
 
 .comment + .comment {
-  border-top: 1px solid #d0d7de;
+  border-top: 1px solid var(--border);
 }
 
 .comment-meta {
@@ -2222,7 +2222,7 @@ button.copy-icon:hover:not(:disabled) {
   gap: 0.5rem;
   margin: 0 0 0.25rem;
   font-size: 0.8rem;
-  color: #57606a;
+  color: var(--text-muted);
 }
 
 .comment-author {
@@ -2257,13 +2257,13 @@ button.copy-icon:hover:not(:disabled) {
   transform: translateX(-50%);
   margin: 0;
   padding: 0.5rem 1rem;
-  border: 1px solid #7fbf90;
+  border: 1px solid var(--success-border);
   border-radius: 999px;
-  background: #e9f5ec;
-  color: #1a7f37;
+  background: var(--success-bg);
+  color: var(--success-text);
   font-size: 0.85rem;
   white-space: nowrap;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  box-shadow: 0 4px 12px var(--shadow-subtle);
   /* 表の固定ヘッダ(z-index: 1)と課題詳細のポップアップ(z-index: 100)より
      手前に出す(ポップアップの「URL をコピー」の結果が隠れないように)。
      クリックは下の要素へ通す */

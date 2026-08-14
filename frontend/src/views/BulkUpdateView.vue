@@ -1206,27 +1206,27 @@ h3 {
 }
 
 .panel {
-  border: 1px solid #d0d7de;
+  border: 1px solid var(--border);
   border-radius: 6px;
   padding: 1rem 1.25rem;
   margin-bottom: 1.25rem;
-  background: #fff;
+  background: var(--surface);
 }
 
 .danger-note {
-  background: #fdeceb;
-  border: 1px solid #e2a09b;
+  background: var(--danger-bg);
+  border: 1px solid var(--danger-border);
   border-radius: 4px;
   padding: 0.6rem 0.75rem;
   font-size: 0.9rem;
   font-weight: 600;
-  color: #8a2420;
+  color: var(--danger-strong);
   margin: 0 0 0.75rem;
 }
 
 .mock-note {
-  background: #fff8e1;
-  border: 1px solid #e6c96a;
+  background: var(--warning-bg);
+  border: 1px solid var(--warning-border);
   border-radius: 4px;
   padding: 0.5rem 0.75rem;
   font-size: 0.85rem;
@@ -1243,24 +1243,24 @@ h3 {
 }
 
 .notice {
-  background: #f6f8fa;
-  border: 1px solid #d0d7de;
+  background: var(--bg-muted);
+  border: 1px solid var(--border);
   border-radius: 4px;
   padding: 0.5rem 0.75rem;
   font-size: 0.85rem;
-  color: #57606a;
+  color: var(--text-muted);
 }
 
 .notice.warn {
-  background: #fff8e1;
-  border-color: #e6c96a;
-  color: #9a6700;
+  background: var(--warning-bg);
+  border-color: var(--warning-border);
+  color: var(--warning-text);
 }
 
 .notice.ok-note {
-  background: #e9f5ec;
-  border-color: #7fbf90;
-  color: #1a7f37;
+  background: var(--success-bg);
+  border-color: var(--success-border);
+  color: var(--success-text);
 }
 
 .notice.conflict {
@@ -1309,11 +1309,11 @@ input[type='text'],
 input[type='date'],
 select {
   padding: 0.4rem 0.5rem;
-  border: 1px solid #d0d7de;
+  border: 1px solid var(--border);
   border-radius: 4px;
   font-size: 0.9rem;
-  background: #fff;
-  color: #1f2328;
+  background: var(--bg);
+  color: var(--text);
 }
 
 input.wide {
@@ -1322,38 +1322,38 @@ input.wide {
 
 input:disabled,
 select:disabled {
-  background: #f6f8fa;
-  color: #8c959f;
+  background: var(--bg-muted);
+  color: var(--text-faint);
 }
 
 .hint {
   font-size: 0.8rem;
-  color: #57606a;
+  color: var(--text-muted);
   margin: 0.5rem 0 0.75rem;
 }
 
 .hint.warn {
-  color: #9a6700;
+  color: var(--warning-text);
 }
 
 .warn-text {
   font-size: 0.85rem;
-  color: #9a6700;
+  color: var(--warning-text);
   margin: 0 0 0.4rem;
 }
 
 button {
   padding: 0.4rem 0.9rem;
-  border: 1px solid #d0d7de;
+  border: 1px solid var(--border);
   border-radius: 4px;
-  background: #f6f8fa;
-  color: #1f2328;
+  background: var(--bg-muted);
+  color: var(--text);
   font-size: 0.9rem;
   cursor: pointer;
 }
 
 button:hover:not(:disabled) {
-  background: #eaeef2;
+  background: var(--bg-hover);
 }
 
 button:disabled {
@@ -1362,13 +1362,13 @@ button:disabled {
 }
 
 button.primary {
-  background: #0b5cad;
-  border-color: #0b5cad;
-  color: #fff;
+  background: var(--accent-emphasis);
+  border-color: var(--accent-emphasis);
+  color: var(--on-accent);
 }
 
 button.primary:hover:not(:disabled) {
-  background: #094c8f;
+  background: var(--accent-emphasis-hover);
 }
 
 button.inline {
@@ -1381,8 +1381,8 @@ button.inline {
   display: inline-block;
   width: 14px;
   height: 14px;
-  border: 2px solid #d0d7de;
-  border-top-color: #0b5cad;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent-fg);
   border-radius: 50%;
   animation: spin 0.8s linear infinite;
 }
@@ -1394,7 +1394,7 @@ button.inline {
 }
 
 .error {
-  color: #b52a2a;
+  color: var(--danger-text);
   font-size: 0.9rem;
   margin: 0.5rem 0 0;
 }
@@ -1407,13 +1407,13 @@ button.inline {
 }
 
 .result.ok {
-  background: #e9f5ec;
-  border: 1px solid #7fbf90;
+  background: var(--success-bg);
+  border: 1px solid var(--success-border);
 }
 
 .result.ng {
-  background: #fdeceb;
-  border: 1px solid #e2a09b;
+  background: var(--danger-bg);
+  border: 1px solid var(--danger-border);
 }
 
 .result-title {
@@ -1428,7 +1428,7 @@ button.inline {
 
 .warnings {
   margin-top: 0.5rem;
-  color: #9a6700;
+  color: var(--warning-text);
 }
 
 .path {
@@ -1445,8 +1445,8 @@ button.inline {
 
 .confirm {
   margin-top: 0.75rem;
-  border: 1px solid #e6c96a;
-  background: #fff8e1;
+  border: 1px solid var(--warning-border);
+  background: var(--warning-bg);
   border-radius: 4px;
   padding: 0.75rem 0.9rem;
   font-size: 0.9rem;
@@ -1459,20 +1459,20 @@ button.inline {
 .progress {
   height: 10px;
   border-radius: 5px;
-  background: #eaeef2;
+  background: var(--bg-hover);
   overflow: hidden;
 }
 
 .progress-bar {
   height: 100%;
-  background: #0b5cad;
+  background: var(--accent-emphasis);
   transition: width 0.2s linear;
 }
 
 .table-wrap {
   max-height: 420px;
   overflow: auto;
-  border: 1px solid #d0d7de;
+  border: 1px solid var(--border);
   border-radius: 4px;
   margin-top: 0.75rem;
 }
@@ -1485,14 +1485,14 @@ table {
 
 th,
 td {
-  border-bottom: 1px solid #d0d7de;
+  border-bottom: 1px solid var(--border);
   padding: 0.35rem 0.6rem;
   text-align: left;
   vertical-align: top;
 }
 
 th {
-  background: #f6f8fa;
+  background: var(--bg-muted);
   font-weight: 600;
   position: sticky;
   top: 0;
@@ -1504,7 +1504,7 @@ td.num {
 }
 
 tr.skip {
-  color: #8c959f;
+  color: var(--text-faint);
 }
 
 .nowrap {
@@ -1521,63 +1521,63 @@ tr.skip {
   padding: 0.05rem 0.4rem;
   border-radius: 999px;
   font-size: 0.75rem;
-  border: 1px solid #d0d7de;
-  background: #f6f8fa;
+  border: 1px solid var(--border);
+  background: var(--bg-muted);
 }
 
 .badge.create {
-  background: #e9f5ec;
-  border-color: #7fbf90;
-  color: #1a7f37;
+  background: var(--success-bg);
+  border-color: var(--success-border);
+  color: var(--success-text);
 }
 
 .badge.update {
-  background: #ddebf7;
-  border-color: #7fa8cf;
-  color: #0b5cad;
+  background: var(--status-info-bg);
+  border-color: var(--accent-muted);
+  color: var(--accent-fg);
 }
 
 .badge.warn {
-  background: #fff8e1;
-  border-color: #e6c96a;
-  color: #9a6700;
+  background: var(--warning-bg);
+  border-color: var(--warning-border);
+  color: var(--warning-text);
 }
 
 /* 行明細の状態バッジ(pending / sending / done / error / conflict / skip) */
 .badge.done {
-  background: #e9f5ec;
-  border-color: #7fbf90;
-  color: #1a7f37;
+  background: var(--success-bg);
+  border-color: var(--success-border);
+  color: var(--success-text);
 }
 
 .badge.sending {
-  background: #ddebf7;
-  border-color: #7fa8cf;
-  color: #0b5cad;
+  background: var(--status-info-bg);
+  border-color: var(--accent-muted);
+  color: var(--accent-fg);
 }
 
 .badge.error {
-  background: #fdeceb;
-  border-color: #e2a09b;
-  color: #8a2420;
+  background: var(--danger-bg);
+  border-color: var(--danger-border);
+  color: var(--danger-strong);
 }
 
 .badge.conflict {
-  background: #fff8e1;
-  border-color: #e6c96a;
-  color: #9a6700;
+  background: var(--warning-bg);
+  border-color: var(--warning-border);
+  color: var(--warning-text);
 }
 
 .badge.pending,
 .badge.skip {
-  background: #f6f8fa;
-  border-color: #d0d7de;
-  color: #57606a;
+  background: var(--bg-muted);
+  border-color: var(--border);
+  color: var(--text-muted);
 }
 
 .sending-note {
-  background: #fff8e1;
-  color: #9a6700;
+  background: var(--warning-bg);
+  color: var(--warning-text);
   font-size: 0.8rem;
 }
 
@@ -1593,13 +1593,13 @@ td.actions button {
 }
 
 .detail-cell {
-  background: #f6f8fa;
+  background: var(--bg-muted);
   padding: 0.5rem 0.75rem;
 }
 
 .detail-table {
-  background: #fff;
-  border: 1px solid #d0d7de;
+  background: var(--bg);
+  border: 1px solid var(--border);
   border-radius: 4px;
   font-size: 0.8rem;
 }

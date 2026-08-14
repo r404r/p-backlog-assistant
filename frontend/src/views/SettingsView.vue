@@ -475,18 +475,18 @@ section {
 }
 
 .mock-note {
-  background: #fff8e1;
-  border: 1px solid #e6c96a;
+  background: var(--warning-bg);
+  border: 1px solid var(--warning-border);
   border-radius: 4px;
   padding: 0.5rem 0.75rem;
   font-size: 0.85rem;
 }
 
 .first-run {
-  border: 1px solid #d0d7de;
+  border: 1px solid var(--border);
   border-radius: 6px;
   padding: 1.5rem;
-  background: #f6f8fa;
+  background: var(--bg-muted);
 }
 
 .selector-row {
@@ -513,18 +513,18 @@ section {
 
 .profile-list th,
 .profile-list td {
-  border: 1px solid #d0d7de;
+  border: 1px solid var(--border);
   padding: 0.4rem 0.6rem;
   text-align: left;
 }
 
 .profile-list th {
-  background: #f6f8fa;
+  background: var(--bg-muted);
   font-weight: 600;
 }
 
 .profile-list tr.active td {
-  background: #eef6ff;
+  background: var(--selection-bg);
 }
 
 .badge {
@@ -532,8 +532,8 @@ section {
   margin-left: 0.4rem;
   padding: 0 0.4rem;
   font-size: 0.75rem;
-  color: #0b5cad;
-  border: 1px solid #0b5cad;
+  color: var(--accent-fg);
+  border: 1px solid var(--accent-fg);
   border-radius: 8px;
 }
 
@@ -551,10 +551,10 @@ section {
 }
 
 .profile-form {
-  border: 1px solid #d0d7de;
+  border: 1px solid var(--border);
   border-radius: 6px;
   padding: 1rem 1.25rem;
-  background: #fff;
+  background: var(--surface);
 }
 
 .field {
@@ -578,21 +578,21 @@ input[type='text'],
 input[type='password'],
 select {
   padding: 0.4rem 0.5rem;
-  border: 1px solid #d0d7de;
+  border: 1px solid var(--border);
   border-radius: 4px;
   font-size: 0.9rem;
-  background: #fff;
-  color: #1f2328;
+  background: var(--bg);
+  color: var(--text);
 }
 
 .hint {
   font-size: 0.8rem;
-  color: #57606a;
+  color: var(--text-muted);
   margin: 0.25rem 0 0;
 }
 
 .hint.warn {
-  color: #9a6700;
+  color: var(--warning-text);
 }
 
 .form-buttons {
@@ -603,16 +603,16 @@ select {
 
 button {
   padding: 0.4rem 0.9rem;
-  border: 1px solid #d0d7de;
+  border: 1px solid var(--border);
   border-radius: 4px;
-  background: #f6f8fa;
-  color: #1f2328;
+  background: var(--bg-muted);
+  color: var(--text);
   font-size: 0.9rem;
   cursor: pointer;
 }
 
 button:hover:not(:disabled) {
-  background: #eaeef2;
+  background: var(--bg-hover);
 }
 
 button:disabled {
@@ -621,26 +621,26 @@ button:disabled {
 }
 
 button.primary {
-  background: #0b5cad;
-  border-color: #0b5cad;
-  color: #fff;
+  background: var(--accent-emphasis);
+  border-color: var(--accent-emphasis);
+  color: var(--on-accent);
 }
 
 button.primary:hover:not(:disabled) {
-  background: #094c8f;
+  background: var(--accent-emphasis-hover);
 }
 
 button.danger {
-  color: #b52a2a;
-  border-color: #d0a0a0;
+  color: var(--danger-text);
+  border-color: var(--danger-border-muted);
 }
 
 button.danger:hover:not(:disabled) {
-  background: #fbeaea;
+  background: var(--danger-bg-hover);
 }
 
 .error {
-  color: #b52a2a;
+  color: var(--danger-text);
   font-size: 0.9rem;
   margin: 0.5rem 0 0;
 }
@@ -653,13 +653,13 @@ button.danger:hover:not(:disabled) {
 }
 
 .test-result.ok {
-  background: #e9f5ec;
-  border: 1px solid #7fbf90;
+  background: var(--success-bg);
+  border: 1px solid var(--success-border);
 }
 
 .test-result.ng {
-  background: #fbeaea;
-  border: 1px solid #d0a0a0;
+  background: var(--danger-bg-hover);
+  border: 1px solid var(--danger-border-muted);
 }
 
 .result-title {
@@ -675,7 +675,7 @@ button.danger:hover:not(:disabled) {
 .modal-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.35);
+  background: var(--overlay);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -683,11 +683,11 @@ button.danger:hover:not(:disabled) {
 }
 
 .modal {
-  background: #fff;
+  background: var(--surface);
   border-radius: 6px;
   padding: 1.25rem 1.5rem;
   width: min(480px, 90vw);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.2);
+  box-shadow: 0 8px 24px var(--shadow);
   font-size: 0.9rem;
 }
 

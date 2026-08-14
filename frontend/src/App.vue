@@ -256,8 +256,8 @@ onErrorCaptured((err) => {
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
-  background: #f6f8fa;
-  border-right: 1px solid #d0d7de;
+  background: var(--bg-muted);
+  border-right: 1px solid var(--border);
   padding: 1rem 0;
   box-sizing: border-box;
   overflow: hidden;
@@ -269,7 +269,7 @@ onErrorCaptured((err) => {
   margin-top: auto;
   padding: 0.5rem 1rem 0;
   font-size: 0.75rem;
-  color: #57606a;
+  color: var(--text-muted);
   white-space: nowrap;
 }
 
@@ -296,12 +296,12 @@ onErrorCaptured((err) => {
 }
 
 .resize-handle:hover {
-  background: #bcc7d1;
+  background: var(--handle-hover-bg);
 }
 
 /* ドラッグ中はカーソルがハンドルから外れてもハイライトを維持する */
 .layout.resizing .resize-handle {
-  background: #0b5cad;
+  background: var(--accent-emphasis);
 }
 
 /* ドラッグ中の文字列選択・カーソルのちらつきを抑える */
@@ -320,12 +320,12 @@ onErrorCaptured((err) => {
   background: transparent;
   font-size: 1.15rem;
   line-height: 1.2;
-  color: #57606a;
+  color: var(--text-muted);
   cursor: pointer;
 }
 
 .sidebar-toggle:hover {
-  color: #1f2328;
+  color: var(--text);
 }
 
 .sidebar.collapsed .sidebar-toggle {
@@ -337,7 +337,7 @@ onErrorCaptured((err) => {
   font-weight: 700;
   font-size: 1rem;
   padding: 0 1rem 1rem;
-  color: #1f2328;
+  color: var(--text);
   white-space: nowrap;
 }
 
@@ -361,7 +361,7 @@ onErrorCaptured((err) => {
   border: none;
   background: transparent;
   font-size: 0.95rem;
-  color: #1f2328;
+  color: var(--text);
   cursor: pointer;
   white-space: nowrap;
   overflow: hidden;
@@ -373,13 +373,13 @@ onErrorCaptured((err) => {
 }
 
 .sidebar li button:hover {
-  background: #eaeef2;
+  background: var(--bg-hover);
 }
 
 .sidebar li button.active {
-  background: #dbe9f6;
+  background: var(--nav-active-bg);
   font-weight: 600;
-  border-right: 3px solid #0b5cad;
+  border-right: 3px solid var(--accent-emphasis);
 }
 
 /* 残り幅を全て使う。min-width: 0 が無いと中身の広いテーブルで
@@ -393,7 +393,7 @@ onErrorCaptured((err) => {
   overflow-x: auto;
   padding: 1.5rem 2rem;
   box-sizing: border-box;
-  background: #fff;
+  background: var(--bg);
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -407,21 +407,22 @@ onErrorCaptured((err) => {
 .fatal-error {
   margin: 24px;
   padding: 16px 20px;
-  border: 1px solid #d1242f;
+  /* 罫線にも文字と同じ強調色を使う(変換前からこの色だったため踏襲する) */
+  border: 1px solid var(--danger-emphasis-text);
   border-radius: 6px;
-  background: #fff5f5;
-  color: #24292f;
+  background: var(--danger-bg-subtle);
+  color: var(--text);
 }
 .fatal-error h2 {
   margin-top: 0;
-  color: #d1242f;
+  color: var(--danger-emphasis-text);
   font-size: 16px;
 }
 .fatal-error .detail {
   font-family: monospace;
   white-space: pre-wrap;
-  background: #fff;
-  border: 1px solid #d0d7de;
+  background: var(--surface);
+  border: 1px solid var(--border);
   border-radius: 4px;
   padding: 8px;
 }
