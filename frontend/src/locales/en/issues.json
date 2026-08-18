@@ -22,7 +22,9 @@
   "freshness": {
     "label": "Data freshness:",
     "unknown": "Could not get the freshness (check the log)",
-    "lastSynced": "Last synced {at} ({elapsed})"
+    "lastSynced": "Last synced {at} ({elapsed})",
+    "headerSynced": "Last synced: {at} ({elapsed})",
+    "headerNotSynced": "Last synced: Not synced"
   },
   "sync": {
     "title": "Sync",

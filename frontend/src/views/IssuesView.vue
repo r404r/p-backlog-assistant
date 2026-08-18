@@ -152,6 +152,33 @@ const neverSynced = computed(
   () => !!selectedProject.value && !syncStateUnknown.value && !selectedProject.value.lastSyncedAt,
 )
 
+/**
+ * 選択中プロジェクトの最終同期時刻の整形結果(未同期・プロジェクト未選択なら null)。
+ * 見出し右側と同期セクションの鮮度表示で同じ値を使い、表記の揺れを防ぐ。
+ *
+ * 経過時間はプロジェクト一覧を読み直した時点(同期の完了・画面表示時の最新化)で
+ * 計算し直す。時計に追従する再計算は行わない(元から鮮度表示に時計は無く、
+ * 目安として十分なため)。
+ */
+const lastSyncedParts = computed(() => {
+  const at = selectedProject.value?.lastSyncedAt
+  if (!at) return null
+  return { at: formatDateTime(at), elapsed: formatElapsed(at, t) }
+})
+
+/**
+ * 見出し(h1)の右側に出す最終同期の表示(表示しない場合は null)。
+ *
+ * プロジェクト未選択のときは対象が無いため出さない。鮮度を取得できなかった
+ * (syncStateUnknown)ときも、原因を説明する長い文言は見出しに載せず、
+ * 同期セクションの鮮度表示(issues.freshness.unknown)に任せる。
+ */
+const headerLastSynced = computed<string | null>(() => {
+  if (!selectedProject.value || syncStateUnknown.value) return null
+  const parts = lastSyncedParts.value
+  return parts ? t('issues.freshness.headerSynced', parts) : t('issues.freshness.headerNotSynced')
+})
+
 async function loadProjects() {
   if (!profileId.value) return
   const token = selectionGuard.begin()
@@ -1184,7 +1211,12 @@ async function exportExcel() {
 
 <template>
   <div class="issues">
-    <h1>{{ t('issues.title') }}</h1>
+    <!-- 見出しの右側に選択中プロジェクトの最終同期を出す(同期セクションまで
+         スクロールしなくても鮮度が分かるようにするため) -->
+    <div class="page-header">
+      <h1>{{ t('issues.title') }}</h1>
+      <span v-if="headerLastSynced" class="header-freshness">{{ headerLastSynced }}</span>
+    </div>
 
     <p v-if="mock" class="mock-note">{{ t('issues.mockNote') }}</p>
 
@@ -1223,13 +1255,8 @@ async function exportExcel() {
         <p v-if="selectedProject" class="freshness">
           {{ t('issues.freshness.label') }}
           <template v-if="syncStateUnknown">{{ t('issues.freshness.unknown') }}</template>
-          <template v-else-if="selectedProject.lastSyncedAt">
-            {{
-              t('issues.freshness.lastSynced', {
-                at: formatDateTime(selectedProject.lastSyncedAt),
-                elapsed: formatElapsed(selectedProject.lastSyncedAt, t),
-              })
-            }}
+          <template v-else-if="lastSyncedParts">
+            {{ t('issues.freshness.lastSynced', lastSyncedParts) }}
           </template>
           <template v-else>{{ t('common.state.notSynced') }}</template>
         </p>
@@ -1796,9 +1823,25 @@ async function exportExcel() {
   box-sizing: border-box;
 }
 
+/* 見出しと最終同期を同じ行に置く(最終同期は右寄せ)。
+   下の余白は h1 の margin をそのまま使うため、ここでは付けない */
+.page-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
 h1 {
   font-size: 1.4rem;
   margin: 0 0 1rem;
+}
+
+/* 見出しの主役は画面名のため、鮮度表示(.freshness)と同じ控えめな見た目にする */
+.header-freshness {
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  text-align: right;
 }
 
 h2 {

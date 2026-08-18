@@ -22,7 +22,9 @@
   "freshness": {
     "label": "データ鮮度:",
     "unknown": "鮮度を取得できませんでした(ログを確認してください)",
-    "lastSynced": "最終同期 {at} ({elapsed})"
+    "lastSynced": "最終同期 {at} ({elapsed})",
+    "headerSynced": "最終同期: {at} ({elapsed})",
+    "headerNotSynced": "最終同期: 未同期"
   },
   "sync": {
     "title": "同期",
