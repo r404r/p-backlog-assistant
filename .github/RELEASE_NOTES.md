@@ -1,17 +1,15 @@
-# backlog-assistant v1.2.1
+# backlog-assistant v1.2.2
 
-データの保存先を変更できるようにするリリースです。
+課題抽出画面の使い勝手を改善するリリースです。
 
-**English summary**: You can now customize where the app stores its data (config and local DB). Put a `portable.txt` file next to the executable (next to the `.app` bundle on macOS) to keep the config and local DB in a `userdata` folder alongside the app, or set the `BACKLOG_ASSISTANT_HOME` environment variable to an absolute path (no `~`/`%VAR%` expansion, paths containing `?` are rejected). Portable mode keeps the config and local DB alongside the app — handy for USB drives or moving between PCs, though API keys stay in the OS keychain and must be re-entered on a new PC, and switching locations never migrates existing data automatically. If an explicitly chosen location becomes unavailable, the app stops at startup instead of silently creating a new data set elsewhere. See the [User Guide](https://github.com/r404r/p-backlog-assistant/blob/main/docs/USER_GUIDE.en.md) for details.
+**English summary**: The Issues screen now shows the selected project's last sync time next to the page title ("Last synced: {datetime} ({elapsed})", or "Last synced: Not synced" for projects that have never been synced), so you can tell at a glance how fresh the local data is before searching.
 
-## 新機能
+## 改善
 
-- **データ保存先のカスタマイズ**: 設定(config.json)とローカル DB の保存先を 2 つの方法で変更できるようになりました(優先順位: ポータブル > 環境変数 > 既定)
-  - **ポータブルモード**: 実行ファイル(macOS は `.app` バンドル)の**隣**に `portable.txt` を置くと、同じ場所の `userdata` フォルダにデータを保存します。フォルダごとコピーするだけで別のパソコンへ移行できます(API キーのみ再入力が必要です)
-  - **環境変数**: `BACKLOG_ASSISTANT_HOME` に絶対パスを設定すると、そのフォルダを保存先にします(`~` や `%VAR%` は展開されません。`?` を含むパスは使用できません)
-  - 指定した保存先が使えない場合は、別の場所へ黙ってデータを新規作成せず**起動を中止**してお知らせします(保存先の分断防止)
-  - 保存先を切り替えてもデータは自動移行されません。継続利用するには、アプリ終了後に保存先フォルダ全体をコピーしてください
-  - 現在の保存先とモードは「アプリ情報」画面で確認できます。詳細は [ユーザガイド](https://github.com/r404r/p-backlog-assistant/blob/main/docs/USER_GUIDE.md) の「保存先の変更」を参照してください
+- **課題抽出のタイトル右に最終同期時刻を表示**: 見出し「課題抽出」と同じ行の右側に「最終同期: {日時} ({経過})」を表示するようになりました
+  - 検索の前に、ローカルデータの鮮度がひと目で分かります
+  - 未同期のプロジェクトでは「最終同期: 未同期」と表示されます
+  - 同期の完了やプロジェクトの切り替えで自動的に更新されます
 
 ## 動作環境
 
