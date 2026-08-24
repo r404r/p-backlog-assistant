@@ -7,6 +7,7 @@
 // (設計 §3.3)。生の文字列が戻っていないことは lib/noHardcodedText.test.ts が検査する。
 import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
+import IssueDetailDialog from '../components/IssueDetailDialog.vue'
 import {
   copyToClipboard,
   customColumnKey,
@@ -34,7 +35,6 @@ import type { Language } from '../lib/i18n'
 import { useIssuePagination } from '../lib/issuePagination'
 import { buildIssueQuery, newIssueConditions, resetIssueConditions } from '../lib/issueQuery'
 import { useMessage } from '../lib/message'
-import { useModalFocus } from '../lib/modalFocus'
 import { runSharedProjectRefresh, shouldSkipProjectRefreshFor } from '../lib/projectRefresh'
 import {
   resolveProjectSelection,
@@ -848,21 +848,6 @@ let detailRequestSeq = 0
 /** 閉じたときにフォーカスを戻す先(詳細を開いた課題キーのボタン) */
 let detailOpener: HTMLElement | null = null
 
-/** ポップアップの「閉じる」ボタン(開いた直後のフォーカス移動先) */
-const detailCloseButton = ref<HTMLButtonElement | null>(null)
-
-/** ポップアップ本体(フォーカスをこの中へ閉じ込める範囲) */
-const detailModal = ref<HTMLElement | null>(null)
-
-// 開いている間はフォーカスをポップアップ内に閉じ込め、ESC で閉じる。
-// 戻り先は「開いた課題キーのボタン」を明示する(クリックでフォーカスが
-// 移らない WebView でも確実に戻すため)
-useModalFocus(detailModal, detailOpen, {
-  initialFocus: () => detailCloseButton.value,
-  returnFocus: () => detailOpener,
-  onEscape: () => closeIssueDetail(),
-})
-
 /** 課題キーのクリック: 課題詳細をポップアップで表示する */
 async function openIssueDetail(issueKey: string, e: MouseEvent) {
   // 同期中は開かない(R10)。同期途中のローカル DB を読むと、完了後の内容と
@@ -934,36 +919,6 @@ async function refreshIssueDetail() {
     pagination.markStaleForProject(originProjectId)
   }
 }
-
-/**
- * 内容の時点を伝える注記。
- *
- * 詳細はローカル DB の内容であり、Backlog 側の最新とは限らないため必ず出す。
- * 「最新の状態を取得」で 1 件だけ取り込み直すと fetchedAt がその時刻になるため、
- * 表示する時刻は常に「この課題をローカルへ取り込んだ時刻」を指す。
- */
-const detailNote = computed(() => {
-  const at = detail.value?.fetchedAt ? formatDateTime(detail.value.fetchedAt) : ''
-  // 時刻の有無で文が変わるため、断片をつなぐのではなく文ごとにキーを分ける
-  return at ? t('issues.detail.note.fetched', { at }) : t('issues.detail.note.unknown')
-})
-
-/**
- * コメントの取得状況を伝える注意書き(ポップアップ最上部)。
- *
- * コメントは同期の対象外で、「最新の状態を取得」を押した課題にだけ入る。
- * 空のコメント欄を見て「コメントが無い課題」と誤解されないよう、
- * 未取得と取得済み(いつ時点か)をここで必ず区別して伝える。
- */
-const commentNote = computed(() => {
-  const at = detail.value?.commentsFetchedAt ? formatDateTime(detail.value.commentsFetchedAt) : ''
-  return at
-    ? t('issues.detail.commentNote.fetched', { at })
-    : t('issues.detail.commentNote.notFetched')
-})
-
-/** コメントを取得済みか(取得済みで 0 件 = 「コメントなし」と未取得を区別する) */
-const commentsFetched = computed(() => (detail.value?.commentsFetchedAt ?? '') !== '')
 
 /**
  * 詳細ポップアップを閉じる(実行中の取得は失効させる)。
@@ -1676,131 +1631,23 @@ async function exportExcel() {
       </section>
     </template>
 
-    <!-- 課題詳細のポップアップ。
-         背景クリック(@click.self)と ESC で閉じるのは、接続設定の削除確認
-         ダイアログ(SettingsView)と同じ流儀。内容はローカル DB へ取り込んだ
-         時点のもので、開くだけでは API を呼ばない(呼ぶのは「最新の状態を取得」
-         を押したときだけ) -->
-    <div v-if="detailOpen" class="modal-overlay" @click.self="closeIssueDetail">
-      <div
-        ref="detailModal"
-        class="modal"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="issue-detail-title"
-      >
-        <!-- コメントの取得状況は最上部に出す(コメント欄まで読まないと
-             「同期では取得されない」ことに気づけないため)。詳細を取得できて
-             いないときは注意書きの対象が無いので出さない -->
-        <p v-if="detail" class="notice comment-note">{{ commentNote }}</p>
-
-        <!-- 部分失敗(課題本体は取得できたがコメントだけ失敗した等)。
-             詳細は有効なので、表示は消さず警告だけを添える -->
-        <p v-for="(w, i) in detail?.warnings ?? []" :key="i" class="notice warn comment-note">
-          {{ w }}
-        </p>
-
-        <h2 id="issue-detail-title" class="detail-title">
-          <span class="detail-key">{{ detailIssueKey }}</span>
-          <span v-if="detail" class="detail-summary">{{ detail.summary }}</span>
-        </h2>
-
-        <p v-if="detailLoading" class="notice">{{ t('common.state.loading') }}</p>
-        <p v-else-if="detailError" class="error">{{ detailError }}</p>
-
-        <template v-else-if="detail">
-          <dl class="detail-grid">
-            <dt>{{ t('issues.detail.field.status') }}</dt>
-            <dd>{{ detail.statusName || '-' }}</dd>
-            <dt>{{ t('issues.detail.field.issueType') }}</dt>
-            <dd>{{ detail.issueTypeName || '-' }}</dd>
-            <dt>{{ t('issues.detail.field.priority') }}</dt>
-            <dd>{{ detail.priorityName || '-' }}</dd>
-            <dt>{{ t('issues.detail.field.assignee') }}</dt>
-            <dd>{{ detail.assigneeName || t('issues.value.unset') }}</dd>
-            <dt>{{ t('issues.detail.field.dueDate') }}</dt>
-            <dd>{{ detail.dueDate || '-' }}</dd>
-            <dt>{{ t('issues.detail.field.created') }}</dt>
-            <dd>{{ formatDateTime(detail.created) || '-' }}</dd>
-            <dt>{{ t('issues.detail.field.updated') }}</dt>
-            <dd>{{ formatDateTime(detail.updated) || '-' }}</dd>
-            <dt>{{ t('issues.detail.field.parentIssue') }}</dt>
-            <dd>{{ detail.parentIssueKey || t('issues.value.none') }}</dd>
-          </dl>
-
-          <!-- カスタム属性(定義があり、値を持つ課題でのみ表示)。属性名は利用者データ -->
-          <template v-if="detail.customFields.length > 0">
-            <h3 class="detail-section">{{ t('issues.detail.customFields') }}</h3>
-            <dl class="detail-grid">
-              <template v-for="(f, i) in detail.customFields" :key="i">
-                <dt>{{ f.name }}</dt>
-                <dd>{{ f.value || t('issues.value.unset') }}</dd>
-              </template>
-            </dl>
-          </template>
-
-          <h3 class="detail-section">{{ t('issues.detail.description') }}</h3>
-          <pre v-if="detail.description" class="detail-description">{{ detail.description }}</pre>
-          <p v-else class="hint">{{ t('issues.detail.noDescription') }}</p>
-
-          <!-- コメント(オンデマンド取得)。同期では取得されないため、
-               未取得・取得済み 0 件・取得済みありの 3 状態を出し分ける -->
-          <h3 class="detail-section">{{ t('issues.detail.comments') }}</h3>
-          <p v-if="!commentsFetched" class="hint">
-            {{ t('issues.detail.commentsNotFetched') }}
-          </p>
-          <p v-else-if="detail.comments.length === 0" class="hint">
-            {{ t('issues.detail.noComments') }}
-          </p>
-          <ol v-else class="comment-list">
-            <li v-for="(c, i) in detail.comments" :key="i" class="comment">
-              <p class="comment-meta">
-                <span class="comment-author">{{
-                  c.authorName || t('issues.detail.unknownAuthor')
-                }}</span>
-                <span class="comment-date">{{ formatDateTime(c.created) }}</span>
-              </p>
-              <pre class="comment-body">{{ c.content }}</pre>
-            </li>
-          </ol>
-          <!-- 本文を持たない項目(状態変更等)は件数だけを伝える -->
-          <p v-if="commentsFetched && detail.commentsHistoryOnly > 0" class="hint">
-            {{ t('issues.detail.historyOnly', { count: detail.commentsHistoryOnly }) }}
-          </p>
-          <p v-if="detail.commentsTruncated" class="hint warn">
-            {{ t('issues.detail.commentsTruncated') }}
-          </p>
-
-          <p class="hint detail-note">{{ detailNote }}</p>
-        </template>
-
-        <!-- コピー・再取得の失敗はここに出す(一覧側のエラーはオーバーレイの背後で見えない) -->
-        <p v-if="detailCopyError" class="error detail-error">{{ detailCopyError }}</p>
-        <p v-if="detailRefreshError" class="error detail-error">{{ detailRefreshError }}</p>
-
-        <div class="row buttons detail-buttons">
-          <!-- この課題 1 件だけを Backlog から取得し直してローカル DB へ反映する
-               (プロジェクト全体の同期は行わないため、最終同期時刻は変わらない) -->
-          <button
-            type="button"
-            :disabled="detailRefreshing || detailLoading || issueSyncing"
-            @click="refreshIssueDetail"
-          >
-            {{ detailRefreshing ? t('issues.detail.refreshing') : t('issues.detail.refresh') }}
-          </button>
-          <span v-if="detailRefreshing" class="spinner" aria-hidden="true"></span>
-          <button v-if="canCopyIssueUrl" type="button" @click="copyIssueUrl(detailIssueKey, true)">
-            {{ t('issues.detail.copyUrl') }}
-          </button>
-          <button v-if="canCopyIssueUrl" type="button" @click="openIssueInBrowser">
-            {{ t('issues.detail.openInBrowser') }}
-          </button>
-          <button ref="detailCloseButton" type="button" @click="closeIssueDetail">
-            {{ t('common.action.close') }}
-          </button>
-        </div>
-      </div>
-    </div>
+    <IssueDetailDialog
+      :open="detailOpen"
+      :issue-key="detailIssueKey"
+      :detail="detail"
+      :loading="detailLoading"
+      :error="detailError"
+      :copy-error="detailCopyError"
+      :refresh-error="detailRefreshError"
+      :refreshing="detailRefreshing"
+      :syncing="issueSyncing"
+      :can-copy="canCopyIssueUrl"
+      :return-focus="detailOpener"
+      @refresh="refreshIssueDetail"
+      @copy="copyIssueUrl(detailIssueKey, true)"
+      @open-browser="openIssueInBrowser"
+      @close="closeIssueDetail"
+    />
 
     <!-- コピー完了の通知(トースト)。
          行内に出すと課題キー列の幅が変わってテーブルがずれるため、
@@ -2158,149 +2005,6 @@ button.copy-icon {
 button.copy-icon:hover:not(:disabled) {
   background: none;
   color: var(--accent-fg);
-}
-
-/* ---- 課題詳細のポップアップ ---- */
-
-/* 配色・重なり順は SettingsView の削除確認ダイアログに合わせる */
-.modal-overlay {
-  position: fixed;
-  inset: 0;
-  background: var(--overlay);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 100;
-  padding: 1rem;
-  box-sizing: border-box;
-}
-
-.modal {
-  background: var(--surface);
-  border-radius: 6px;
-  padding: 1.25rem 1.5rem;
-  width: min(720px, 92vw);
-  /* 長い課題でもウインドウから溢れないよう、中身をスクロールさせる */
-  max-height: 85vh;
-  overflow: auto;
-  box-shadow: 0 8px 24px var(--shadow);
-  font-size: 0.9rem;
-}
-
-.detail-title {
-  display: flex;
-  align-items: baseline;
-  flex-wrap: wrap;
-  gap: 0.5rem;
-  margin: 0 0 0.75rem;
-}
-
-.detail-key {
-  font-family: monospace;
-  color: var(--text-muted);
-}
-
-.detail-summary {
-  font-size: 1.05rem;
-}
-
-.detail-section {
-  font-size: 0.9rem;
-  margin: 1rem 0 0.4rem;
-}
-
-/* 項目名と値の 2 列。項目名の幅は内容に合わせ、値だけを伸ばす */
-.detail-grid {
-  display: grid;
-  grid-template-columns: max-content 1fr;
-  column-gap: 0.75rem;
-  row-gap: 0.3rem;
-  margin: 0;
-}
-
-.detail-grid dt {
-  font-weight: 600;
-  color: var(--text-muted);
-}
-
-.detail-grid dd {
-  margin: 0;
-  word-break: break-word;
-}
-
-/* 詳細本文は改行・空白を保ったまま折り返す(長文はスクロール) */
-.detail-description {
-  margin: 0;
-  padding: 0.6rem 0.75rem;
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  background: var(--bg-muted);
-  font-family: inherit;
-  font-size: 0.85rem;
-  white-space: pre-wrap;
-  word-break: break-word;
-  max-height: 240px;
-  overflow: auto;
-}
-
-.detail-note {
-  margin: 0.75rem 0 0;
-}
-
-/* コメントの注意書き(最上部)。タイトルの前に置くため下側にだけ余白を取る */
-.comment-note {
-  margin: 0 0 0.75rem;
-}
-
-/* コメント一覧。件数が多い課題でもポップアップが伸び続けないよう、
-   この領域だけを高さ上限付きでスクロールさせる */
-.comment-list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  max-height: 16rem;
-  overflow-y: auto;
-  border: 1px solid var(--border);
-  border-radius: 4px;
-}
-
-.comment {
-  padding: 0.5rem 0.75rem;
-}
-
-.comment + .comment {
-  border-top: 1px solid var(--border);
-}
-
-.comment-meta {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.5rem;
-  margin: 0 0 0.25rem;
-  font-size: 0.8rem;
-  color: var(--text-muted);
-}
-
-.comment-author {
-  font-weight: 600;
-}
-
-/* 本文は改行・空白を保ったまま折り返す(詳細本文と同じ扱い) */
-.comment-body {
-  margin: 0;
-  font-family: inherit;
-  font-size: 0.85rem;
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-
-.detail-error {
-  margin: 0.75rem 0 0;
-}
-
-.detail-buttons {
-  margin-top: 1rem;
-  margin-bottom: 0;
 }
 
 /* コピー成功のトースト(数秒で自動的に消える)。
