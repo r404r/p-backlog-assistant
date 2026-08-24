@@ -5,11 +5,11 @@
 //
 // 表示文字列はすべてカタログ(locales/{ja,en}/issues.json・common.json)経由にする
 // (設計 §3.3)。生の文字列が戻っていないことは lib/noHardcodedText.test.ts が検査する。
-import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import IssueDetailDialog from '../components/IssueDetailDialog.vue'
+import { useIssueUrlCopy } from '../composables/useIssueUrlCopy'
 import {
-  copyToClipboard,
   customColumnKey,
   formatSyncProgress,
   getBackend,
@@ -479,8 +479,7 @@ watch(selectedProjectId, () => {
   // まとめて片付ける。表示列は前のプロジェクトの定義なので残さない
   pagination.reset()
   // 消した一覧に対する「コピーしました」・コピー失敗の表示を残さない
-  clearCopiedFeedback()
-  setCopyError(null)
+  clearListFeedback()
   // 前のプロジェクトの課題を表示したままにしない(取得中の要求も失効させる)
   closeIssueDetail()
   syncResult.value = null
@@ -603,8 +602,7 @@ async function search() {
   // 判定は共有状態込みの issueSyncing(他画面で開始した同期も対象)。
   if (!selectedProjectId.value || searching.value || issueSyncing.value) return
   // 前の一覧に対するコピーの表示は、結果が入れ替わる前に消す
-  clearCopiedFeedback()
-  setCopyError(null)
+  clearListFeedback()
   // 検索条件と値を取得する列は「この検索の時点」のものをスナップショットとして渡す
   // (以降のページ移動はこのスナップショットで取得する。フォーム・列選択を
   //  後から変えても表示中の結果には影響しない)
@@ -626,8 +624,7 @@ const canPage = computed(
 async function goToPage(n: number) {
   if (!canPage.value) return
   // 前の一覧に対するコピーの表示は、結果が入れ替わる前に消す
-  clearCopiedFeedback()
-  setCopyError(null)
+  clearListFeedback()
   await pagination.goToPage(n)
   // クランプ・取得失敗で要求どおりのページにならないことがあるため、
   // 入力欄は確定済みのページへ必ず戻す
@@ -694,45 +691,16 @@ function onKeywordEnter(e: KeyboardEvent) {
  */
 const spaceUrl = ref('')
 
-/** 課題キーをクリックで URL コピーできるか(スペース URL が分かる場合のみ) */
-const canCopyIssueUrl = computed(() => !!spaceUrl.value)
-
-/**
- * コピー完了のトーストに表示中の課題キー(空 = 非表示)。
- *
- * 以前は課題キーのセル内に「コピーしました」を出していたが、表示・消滅のたびに
- * 列幅が変わってテーブルがずれるため、レイアウトに影響しない固定位置の
- * トースト(画面下部中央)に変更した。
- */
-const copyToastKey = ref('')
-
-/** コピーに失敗したときの説明(空 = 正常) */
-const [copyError, setCopyError] = useMessage(t)
-
-/** トーストの表示時間(ミリ秒) */
-const COPY_TOAST_MS = 2000
-
-/**
- * トーストを消すタイマー。
- * 別の行を続けてクリックした場合・連打した場合に、前のタイマーが後の表示を
- * 消してしまわないよう、常に 1 本だけ持って張り替える。
- */
-let copiedTimer: ReturnType<typeof setTimeout> | null = null
-
-/**
- * コピー操作の要求番号。連打時に非同期のコピー完了順が逆転しても、
- * 「最後にクリックした操作」だけがトースト・タイマー・エラーを更新する
- * (古い完了が新しいトーストを上書き・消去しないため)。
- */
-let copyRequestSeq = 0
-
-function clearCopiedFeedback() {
-  if (copiedTimer !== null) {
-    clearTimeout(copiedTimer)
-    copiedTimer = null
-  }
-  copyToastKey.value = ''
-}
+const {
+  canCopy: canCopyIssueUrl,
+  toastKey: copyToastKey,
+  listError: copyError,
+  detailError: detailCopyError,
+  copyIssueUrl,
+  clearListFeedback,
+  clearDetailError: setDetailCopyError,
+  invalidateAndClearDetail: invalidateDetailCopy,
+} = useIssueUrlCopy(spaceUrl, t)
 
 /**
  * アクティブプロファイルのスペース URL を解決する。
@@ -751,53 +719,6 @@ async function loadSpaceUrl() {
     spaceUrl.value = ''
   }
 }
-
-/**
- * 課題 URL をクリップボードへコピーする(一覧のアイコン・詳細ポップアップの共通処理)。
- *
- * inDetail が真のときは失敗をポップアップ内に表示する。一覧側のエラー表示は
- * オーバーレイの背後になり、ポップアップを開いたままでは見えないため。
- */
-async function copyIssueUrl(issueKey: string, inDetail = false) {
-  const url = issueUrl(spaceUrl.value, issueKey)
-  // スペース URL が分からない場合はボタン自体を出していないが、念のため何もしない
-  if (!url) return
-  const seq = ++copyRequestSeq
-  try {
-    await copyToClipboard(url)
-    // 完了までの間に別の課題キーがクリックされていたら、この(古い)結果は反映しない
-    if (seq !== copyRequestSeq) return
-    setCopyError(null)
-    setDetailCopyError(null)
-    if (copiedTimer !== null) clearTimeout(copiedTimer)
-    // 同じ課題を連続コピーしたときも支援技術(role="status")へ再通知されるよう、
-    // 一度空にして次のティックで再設定する(DOM 内容が変化しないと読み上げられない)
-    copyToastKey.value = ''
-    await nextTick()
-    if (seq !== copyRequestSeq) return
-    copyToastKey.value = issueKey
-    copiedTimer = setTimeout(() => {
-      copyToastKey.value = ''
-      copiedTimer = null
-    }, COPY_TOAST_MS)
-  } catch (e) {
-    if (seq !== copyRequestSeq) return
-    // 成功表示が残っていると失敗に気づけないため、先に消してからエラーを出す
-    clearCopiedFeedback()
-    // 表示先が違うだけで内容は同じ(翻訳は表示時に行うため、ここでは素材を渡す)
-    const params = { message: errorMessage(e) }
-    if (inDetail) {
-      setDetailCopyError('issues.error.copyUrl', params)
-    } else {
-      setCopyError('issues.error.copyUrl', params)
-    }
-  }
-}
-
-// 画面を離れるときにタイマーを残さない(破棄後の ref 更新を避ける)
-onUnmounted(() => {
-  clearCopiedFeedback()
-})
 
 // ---------------------------------------------------------------------------
 // 課題詳細のポップアップ(課題キーのクリック)
@@ -823,8 +744,6 @@ const [detailError, setDetailError] = useMessage(t)
  * 一覧側の copyError はオーバーレイの背後に隠れて見えないため、
  * ポップアップから実行したコピーの失敗はポップアップ内に出す。
  */
-const [detailCopyError, setDetailCopyError] = useMessage(t)
-
 /** 「最新の状態を取得」を実行中か(ボタンの無効化・スピナー表示) */
 const detailRefreshing = ref(false)
 
@@ -930,11 +849,10 @@ function closeIssueDetail() {
   detailRequestSeq++
   // モーダル起点で進行中のコピーも失効させる。閉じた後に完了した古いコピーの
   // 失敗が、次に開いたモーダルの detailCopyError へ混入するのを防ぐ
-  copyRequestSeq++
+  invalidateDetailCopy()
   detailIssueKey.value = ''
   detail.value = null
   setDetailError(null)
-  setDetailCopyError(null)
   setDetailRefreshError(null)
   // 実行中の取得は上の detailRequestSeq++ で失効させているため、
   // その応答では解除されない(次に開いたときへ持ち越さないよう、ここで戻す)
