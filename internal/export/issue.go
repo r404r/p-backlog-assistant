@@ -359,58 +359,23 @@ func setInfoCount(f *excelize.File, count int) error {
 // writeIssueSheet は課題シートを StreamWriter で書き出し、書き出した行数を返す。
 // 課題は rows から 1 件ずつ受け取り、セルへ変換したらすぐ捨てる(R4)。
 func writeIssueSheet(f *excelize.File, cols []column, rows IssueSeq, opts Options) (int, error) {
-	sw, err := f.NewStreamWriter(SheetIssues)
-	if err != nil {
-		return 0, err
-	}
-
 	withBaseUpdated := opts.WithBaseUpdated
 	colCount := len(cols)
 	if withBaseUpdated {
 		colCount++
 	}
-
-	// 列幅・固定行は最初の SetRow より前に設定する(StreamWriter の制約)。
-	for i, c := range cols {
-		if err := sw.SetColWidth(i+1, i+1, c.width); err != nil {
-			return 0, err
-		}
+	specs := make([]streamSheetColumn, 0, colCount)
+	for _, c := range cols {
+		specs = append(specs, streamSheetColumn{header: c.header, width: c.width})
 	}
 	if withBaseUpdated {
-		if err := sw.SetColWidth(colCount, colCount, 22); err != nil {
-			return 0, err
-		}
+		specs = append(specs, streamSheetColumn{header: BaseUpdatedHeader, width: 22})
 	}
-	// ヘッダ行(1 行目)を固定表示にする。
-	if err := sw.SetPanes(&excelize.Panes{
-		Freeze:      true,
-		YSplit:      1,
-		TopLeftCell: "A2",
-		ActivePane:  "bottomLeft",
-		Selection:   []excelize.Selection{{Pane: "bottomLeft", ActiveCell: "A2", SQRef: "A2"}},
-	}); err != nil {
-		return 0, err
-	}
-
-	headerStyle, err := f.NewStyle(&excelize.Style{
-		Font: &excelize.Font{Bold: true},
-		Fill: excelize.Fill{Type: "pattern", Pattern: 1, Color: []string{"#DDEBF7"}},
-	})
+	sheet, err := newStreamDataSheet(f, SheetIssues, specs)
 	if err != nil {
 		return 0, err
 	}
-
-	// 1 行目: 日本語ヘッダ。
-	header := make([]any, 0, colCount)
-	for _, c := range cols {
-		header = append(header, excelize.Cell{StyleID: headerStyle, Value: c.header})
-	}
-	if withBaseUpdated {
-		header = append(header, excelize.Cell{StyleID: headerStyle, Value: BaseUpdatedHeader})
-	}
-	if err := sw.SetRow("A1", header); err != nil {
-		return 0, err
-	}
+	sw := sheet.writer
 
 	// 2 行目以降: 課題データ。
 	// カスタム属性列があるときだけ、行ごとに生 JSON を 1 回解析して値を引く
@@ -453,15 +418,7 @@ func writeIssueSheet(f *excelize.File, cols []column, rows IssueSeq, opts Option
 		}
 	}
 
-	// オートフィルタはヘッダ行に設定する(Flush 前に設定する必要がある)。
-	lastCol, err := excelize.ColumnNumberToName(colCount)
-	if err != nil {
-		return 0, err
-	}
-	if err := f.AutoFilter(SheetIssues, fmt.Sprintf("A1:%s1", lastCol), nil); err != nil {
-		return 0, err
-	}
-	if err := sw.Flush(); err != nil {
+	if err := sheet.Finish(nil); err != nil {
 		return 0, err
 	}
 	return count, nil

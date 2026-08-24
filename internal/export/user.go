@@ -190,46 +190,16 @@ func ExportUsers(w io.Writer, rows []UserExportRow, opts UserOptions) error {
 
 // writeUserSheet はユーザシートを StreamWriter で書き出す。
 func writeUserSheet(f *excelize.File, cols []userColumn, rows []UserExportRow) error {
-	sw, err := f.NewStreamWriter(SheetUsers)
-	if err != nil {
-		return err
-	}
-
 	colCount := len(cols)
-
-	// 列幅・固定行は最初の SetRow より前に設定する(StreamWriter の制約)。
-	for i, c := range cols {
-		if err := sw.SetColWidth(i+1, i+1, c.width); err != nil {
-			return err
-		}
+	specs := make([]streamSheetColumn, 0, colCount)
+	for _, c := range cols {
+		specs = append(specs, streamSheetColumn{header: c.header, width: c.width})
 	}
-	// ヘッダ行(1 行目)を固定表示にする。
-	if err := sw.SetPanes(&excelize.Panes{
-		Freeze:      true,
-		YSplit:      1,
-		TopLeftCell: "A2",
-		ActivePane:  "bottomLeft",
-		Selection:   []excelize.Selection{{Pane: "bottomLeft", ActiveCell: "A2", SQRef: "A2"}},
-	}); err != nil {
-		return err
-	}
-
-	headerStyle, err := f.NewStyle(&excelize.Style{
-		Font: &excelize.Font{Bold: true},
-		Fill: excelize.Fill{Type: "pattern", Pattern: 1, Color: []string{"#DDEBF7"}},
-	})
+	sheet, err := newStreamDataSheet(f, SheetUsers, specs)
 	if err != nil {
 		return err
 	}
-
-	// 1 行目: 日本語ヘッダ。
-	header := make([]any, 0, colCount)
-	for _, c := range cols {
-		header = append(header, excelize.Cell{StyleID: headerStyle, Value: c.header})
-	}
-	if err := sw.SetRow("A1", header); err != nil {
-		return err
-	}
+	sw := sheet.writer
 
 	// 2 行目以降: ユーザデータ。
 	values := make([]any, colCount)
@@ -247,13 +217,5 @@ func writeUserSheet(f *excelize.File, cols []userColumn, rows []UserExportRow) e
 		}
 	}
 
-	// オートフィルタはヘッダ行に設定する(Flush 前に設定する必要がある)。
-	lastCol, err := excelize.ColumnNumberToName(colCount)
-	if err != nil {
-		return err
-	}
-	if err := f.AutoFilter(SheetUsers, fmt.Sprintf("A1:%s1", lastCol), nil); err != nil {
-		return err
-	}
-	return sw.Flush()
+	return sheet.Finish(nil)
 }
