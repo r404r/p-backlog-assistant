@@ -10,6 +10,7 @@
 // 「中断した sending 行は自動再送しない」を UI 上でも徹底する。
 import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
+import BulkJobHistory from '../components/BulkJobHistory.vue'
 import BulkRunConfirmation from '../components/BulkRunConfirmation.vue'
 import {
   getBackend,
@@ -22,9 +23,9 @@ import {
   type MasterItem,
   type Project,
 } from '../lib/backend'
-import { translateAction, translateRowStatus, type TranslateFn } from '../lib/enumLabels'
+import { translateAction, type TranslateFn } from '../lib/enumLabels'
 import { estimateBulkSeconds, estimateBulkSecondsRange } from '../lib/bulkEstimate'
-import { errorMessage, formatDateTime } from '../lib/format'
+import { errorMessage } from '../lib/format'
 import { buildIssueQuery, newIssueConditions, resetIssueConditions } from '../lib/issueQuery'
 import { useMessage } from '../lib/message'
 import { issueSyncRunning } from '../lib/syncState'
@@ -556,22 +557,6 @@ async function loadJobs() {
   if (expandedJobId.value) await loadJobRows(expandedJobId.value)
 }
 
-/** 中断された可能性のあるジョブ(送信中のまま残った行がある) */
-function hasSending(job: BulkJobRow): boolean {
-  return job.sending > 0
-}
-
-/**
- * 通常の「再開」で処理できるジョブ(未処理・送信中が残っている)。
- *
- * 競合行は通常の再開では対象にならない(force 指定時のみ再実行される)ため、
- * 競合しか残っていないジョブに「再開」を出すと空振りする。
- * その場合は「競合を上書きして再実行」だけを表示する。
- */
-function canResume(job: BulkJobRow): boolean {
-  return job.pending > 0 || job.sending > 0
-}
-
 /**
  * 履歴から再開する。resendSending は sending 行を再送するかどうか。
  * 競合行は通常の再開では送信されないため件数に含めない。
@@ -606,22 +591,6 @@ async function loadJobRows(jobId: number) {
   } finally {
     jobRowsLoading.value = false
   }
-}
-
-/**
- * 行明細の「課題キー」欄の表示。
- *
- * 作成済みの課題 ID が入るのは新規追加が成立した行だけ。その行には作成された
- * 課題のキーも記録されるため、キーの有無より先に見て「(新規)」の目印を残す
- * (キーだけを出すと更新行と区別が付かなくなる)。
- */
-function jobRowIssueLabel(r: BulkJobRowDetail): string {
-  if (r.resultIssueId > 0) {
-    return r.issueKey
-      ? t('bulk.jobRows.newWithKey', { issueKey: r.issueKey })
-      : t('bulk.jobRows.newWithId', { issueId: r.resultIssueId })
-  }
-  return r.issueKey || t('bulk.newIssue')
 }
 
 /** 明細の表示・非表示を切り替える(表示時に毎回取得して最新状態を出す) */
@@ -1091,140 +1060,23 @@ onUnmounted(() => {
         </div>
       </section>
 
-      <!-- ⑥ ジョブ履歴 -->
-      <section class="panel">
-        <h2>{{ t('bulk.step6.title') }}</h2>
-        <div class="row buttons">
-          <button :disabled="running" @click="loadJobs">{{ t('bulk.step6.refresh') }}</button>
-        </div>
-        <p v-if="jobsError" class="error">{{ jobsError }}</p>
-        <p v-if="jobs.length === 0" class="notice">{{ t('bulk.step6.empty') }}</p>
-
-        <div v-else class="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>{{ t('bulk.col.job') }}</th>
-                <th>{{ t('bulk.col.createdAt') }}</th>
-                <th>{{ t('bulk.col.kind') }}</th>
-                <th>{{ t('common.label.status') }}</th>
-                <th>{{ t('bulk.col.total') }}</th>
-                <th>{{ t('bulk.col.done') }}</th>
-                <th>{{ t('bulk.col.failed') }}</th>
-                <th>{{ t('bulk.col.conflict') }}</th>
-                <th>{{ t('bulk.col.pending') }}</th>
-                <th>{{ t('bulk.col.sending') }}</th>
-                <th>{{ t('bulk.col.skipped') }}</th>
-                <th>{{ t('bulk.col.actions') }}</th>
-              </tr>
-            </thead>
-            <tbody>
-              <template v-for="j in jobs" :key="j.jobId">
-                <tr>
-                  <td class="nowrap">#{{ j.jobId }}</td>
-                  <td class="nowrap">{{ formatDateTime(j.createdAt) }}</td>
-                  <!-- ジョブ種別・ジョブ状態は Go の生値(bulk_update / done 等)を
-                       そのまま出す。翻訳対象の機械値はフェーズ 1 では
-                       処理区分・行状態に限る(設計 §3.1) -->
-                  <td class="nowrap">{{ j.kind }}</td>
-                  <td class="nowrap">{{ j.status }}</td>
-                  <td class="num">{{ j.total }}</td>
-                  <td class="num">{{ j.done }}</td>
-                  <td class="num">{{ j.failed }}</td>
-                  <td class="num">{{ j.conflict }}</td>
-                  <td class="num">{{ j.pending }}</td>
-                  <td class="num">{{ j.sending }}</td>
-                  <td class="num">{{ j.skipped }}</td>
-                  <td class="nowrap actions">
-                    <!-- 再開・再実行は askRun を通るため、課題同期中は実行できない -->
-                    <button
-                      v-if="canResume(j)"
-                      :disabled="running || issueSyncRunning"
-                      @click="resumeJob(j, false)"
-                    >
-                      {{ t('bulk.action.resume') }}
-                    </button>
-                    <button
-                      v-if="j.conflict > 0"
-                      :disabled="running || issueSyncRunning"
-                      @click="forceResumeJob(j)"
-                    >
-                      {{ t('bulk.action.forceRerun') }}
-                    </button>
-                    <button :disabled="running" @click="toggleJobRows(j)">
-                      {{
-                        expandedJobId === j.jobId
-                          ? t('bulk.action.hideRows')
-                          : t('bulk.action.showRows')
-                      }}
-                    </button>
-                    <button
-                      :disabled="running || resultExportingJobId !== 0"
-                      @click="exportResultExcel(j.jobId)"
-                    >
-                      {{
-                        resultExportingJobId === j.jobId
-                          ? t('common.state.exporting')
-                          : t('bulk.action.exportResult')
-                      }}
-                    </button>
-                  </td>
-                </tr>
-
-                <!-- 成否不明(sending が残った)行の説明と再送の導線 -->
-                <tr v-if="hasSending(j)">
-                  <td colspan="12" class="sending-note">
-                    {{ t('bulk.step6.sendingNote', { count: j.sending }) }}
-                    <button
-                      class="inline"
-                      :disabled="running || issueSyncRunning"
-                      @click="resumeJob(j, true)"
-                    >
-                      {{ t('bulk.action.resumeResend') }}
-                    </button>
-                  </td>
-                </tr>
-
-                <!-- 行明細(展開表示) -->
-                <tr v-if="expandedJobId === j.jobId">
-                  <td colspan="12" class="detail-cell">
-                    <p v-if="jobRowsLoading" class="hint">{{ t('bulk.step6.rowsLoading') }}</p>
-                    <p v-else-if="jobRowsError" class="error">{{ jobRowsError }}</p>
-                    <p v-else-if="jobRowDetails.length === 0" class="hint">
-                      {{ t('bulk.step6.rowsEmpty') }}
-                    </p>
-                    <table v-else class="detail-table">
-                      <thead>
-                        <tr>
-                          <th>{{ t('bulk.col.row') }}</th>
-                          <th>{{ t('bulk.col.issueKey') }}</th>
-                          <th>{{ t('common.label.status') }}</th>
-                          <th>{{ t('common.label.error') }}</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        <tr v-for="r in jobRowDetails" :key="r.rowNo">
-                          <td class="nowrap">{{ r.rowNo }}</td>
-                          <td class="nowrap">{{ jobRowIssueLabel(r) }}</td>
-                          <td class="nowrap">
-                            <!-- 表示は生の機械値(status)をフロントで翻訳する。
-                                 Go が返す statusLabel(日本語)は表示に使わない -->
-                            <span class="badge" :class="r.status">
-                              {{ translateRowStatus(translate, r.status) }}
-                            </span>
-                          </td>
-                          <!-- エラー本文は Go 生成の自由文のためそのまま表示する -->
-                          <td>{{ r.error || '-' }}</td>
-                        </tr>
-                      </tbody>
-                    </table>
-                  </td>
-                </tr>
-              </template>
-            </tbody>
-          </table>
-        </div>
-      </section>
+      <BulkJobHistory
+        :jobs="jobs"
+        :jobs-error="jobsError"
+        :running="running"
+        :syncing="issueSyncRunning"
+        :expanded-job-id="expandedJobId"
+        :rows-loading="jobRowsLoading"
+        :rows-error="jobRowsError"
+        :rows="jobRowDetails"
+        :exporting-job-id="resultExportingJobId"
+        :translate="translate"
+        @refresh="loadJobs"
+        @resume="resumeJob"
+        @force="forceResumeJob"
+        @toggle="toggleJobRows"
+        @export-result="exportResultExcel"
+      />
     </template>
   </div>
 </template>
@@ -1550,74 +1402,4 @@ tr.skip {
   color: var(--warning-text);
 }
 
-/* 行明細の状態バッジ(pending / sending / done / error / conflict / skip) */
-.badge.done {
-  background: var(--success-bg);
-  border-color: var(--success-border);
-  color: var(--success-text);
-}
-
-.badge.sending {
-  background: var(--status-info-bg);
-  border-color: var(--accent-muted);
-  color: var(--accent-fg);
-}
-
-.badge.error {
-  background: var(--danger-bg);
-  border-color: var(--danger-border);
-  color: var(--danger-strong);
-}
-
-.badge.conflict {
-  background: var(--warning-bg);
-  border-color: var(--warning-border);
-  color: var(--warning-text);
-}
-
-.badge.pending,
-.badge.skip {
-  background: var(--bg-muted);
-  border-color: var(--border);
-  color: var(--text-muted);
-}
-
-.sending-note {
-  background: var(--warning-bg);
-  color: var(--warning-text);
-  font-size: 0.8rem;
-}
-
-td.actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.3rem;
-}
-
-td.actions button {
-  padding: 0.2rem 0.5rem;
-  font-size: 0.78rem;
-}
-
-.detail-cell {
-  background: var(--bg-muted);
-  padding: 0.5rem 0.75rem;
-}
-
-.detail-table {
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  font-size: 0.8rem;
-}
-
-/* 親テーブルのヘッダ固定は入れ子の明細テーブルには適用しない */
-.detail-table th {
-  position: static;
-}
-
-.detail-cell .hint,
-.detail-cell .error {
-  margin: 0;
-}
 </style>
