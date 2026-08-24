@@ -7,7 +7,9 @@
 // (設計 §3.3)。生の文字列が戻っていないことは lib/noHardcodedText.test.ts が検査する。
 import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
+import CustomFieldFilters from '../components/CustomFieldFilters.vue'
 import IssueDetailDialog from '../components/IssueDetailDialog.vue'
+import { useCustomFieldConditions } from '../composables/useCustomFieldConditions'
 import { useIssueUrlCopy } from '../composables/useIssueUrlCopy'
 import {
   customColumnKey,
@@ -18,7 +20,6 @@ import {
   onSyncProgress,
   openExternalURL,
   type CustomFieldDef,
-  type CustomFieldFilter,
   type ExportColumn,
   type IssueDetail,
   type IssueQuery,
@@ -74,14 +75,6 @@ const selectionGuard = useProjectSelectionGuard()
  * 画面はこの件数ずつ取得し、ページャで改ページする(lib/issuePagination)。
  */
 const PAGE_SIZE = 200
-
-/**
- * カスタム属性の型 ID(Go 側 customfield の定数と対)。
- * 絞り込み UI の入力方法(テキスト / 範囲 / 選択肢)の切り替えに使う。
- */
-const CF_TYPE_NUMERIC = 3
-const CF_TYPE_DATE = 4
-const CF_LIST_TYPE_IDS = [5, 6, 7, 8]
 
 /**
  * 固定の出力列(列キー・ラベル・既定選択は Go 側 export の列定義から取得する。R14)。
@@ -322,69 +315,15 @@ const customColumns = computed<ExportColumn[]>(() =>
 /** カスタム属性の取得失敗の表示用メッセージ(空 = 正常) */
 const [customFieldsError, setCustomFieldsError] = useMessage(t)
 
-/** カスタム属性 1 定義ぶんの絞り込み条件(型に応じて使うフィールドが変わる) */
-interface CustomFieldCondition {
-  /** テキスト系の部分一致 */
-  text: string
-  /** 数値・日付の下限 / 上限 */
-  min: string
-  max: string
-  /** リスト系で選択した選択肢 ID */
-  itemIds: number[]
-}
-
-/** 定義 ID → 絞り込み条件。定義の取得・切替のたびに作り直す */
-const cfCond = ref<Record<number, CustomFieldCondition>>({})
+const {
+  conditions: cfCond,
+  filterCount: customFieldFilterCount,
+  reset: resetCustomFieldConditions,
+  buildFilters: buildCustomFieldFilters,
+} = useCustomFieldConditions(customFields)
 
 /** 絞り込みセクションの開閉(利用者の操作を上書きしないよう ref で保持する) */
 const cfPanelOpen = ref(false)
-
-/** カスタム属性がリスト系(選択肢から選ぶ)かを判定する。
- * 選択肢が取れない定義は、選びようが無いのでテキストの部分一致へ縮退する。 */
-function isListField(def: CustomFieldDef): boolean {
-  return CF_LIST_TYPE_IDS.includes(def.typeId) && def.items.length > 0
-}
-
-/** 定義に合わせて条件の入れ物を作り直す(前のプロジェクトの条件を残さない) */
-function resetCustomFieldConditions() {
-  const next: Record<number, CustomFieldCondition> = {}
-  for (const f of customFields.value) {
-    next[f.id] = { text: '', min: '', max: '', itemIds: [] }
-  }
-  cfCond.value = next
-}
-
-/** 入力済みの条件だけを検索条件(Go 側 customfield.Filter)へ変換する */
-function buildCustomFieldFilters(): CustomFieldFilter[] {
-  const out: CustomFieldFilter[] = []
-  for (const def of customFields.value) {
-    const c = cfCond.value[def.id]
-    if (!c) continue
-    const filter: CustomFieldFilter = { defId: def.id, typeId: def.typeId }
-    let used = false
-    if (c.text.trim()) {
-      filter.text = c.text.trim()
-      used = true
-    }
-    if (c.min) {
-      filter.min = c.min
-      used = true
-    }
-    if (c.max) {
-      filter.max = c.max
-      used = true
-    }
-    if (c.itemIds.length > 0) {
-      filter.itemIds = [...c.itemIds]
-      used = true
-    }
-    if (used) out.push(filter)
-  }
-  return out
-}
-
-/** 指定中のカスタム属性条件の数(折りたたんだままでも指定に気づけるようにする) */
-const customFieldFilterCount = computed(() => buildCustomFieldFilters().length)
 
 /**
  * loadCustomFields の世代番号。プロジェクトを A→B→A と素早く切り替えると
@@ -1262,70 +1201,13 @@ async function exportExcel() {
           {{ t('issues.search.optionsHint') }}
         </p>
 
-        <!-- カスタム属性の絞り込み(定義があるプロジェクトでのみ表示) -->
-        <details
+        <CustomFieldFilters
           v-if="customFields.length > 0"
-          class="cf-filters"
-          :open="cfPanelOpen"
-          @toggle="cfPanelOpen = ($event.target as HTMLDetailsElement).open"
-        >
-          <summary>
-            {{ t('issues.cf.summary') }}
-            <span v-if="customFieldFilterCount > 0" class="cf-count">
-              {{ t('issues.cf.count', { count: customFieldFilterCount }) }}
-            </span>
-          </summary>
-
-          <div v-for="def in customFields" :key="def.id" class="row cf-row">
-            <label :for="`i-cf-${def.id}`">{{ def.name }}</label>
-            <template v-if="cfCond[def.id]">
-              <!-- リスト系: 選択肢の複数選択(いずれか一致) -->
-              <template v-if="isListField(def)">
-                <label v-for="it in def.items" :key="it.id" class="checkbox">
-                  <input v-model="cfCond[def.id].itemIds" type="checkbox" :value="it.id" />
-                  {{ it.name }}
-                </label>
-              </template>
-              <!-- 数値: 範囲 -->
-              <template v-else-if="def.typeId === CF_TYPE_NUMERIC">
-                <input
-                  :id="`i-cf-${def.id}`"
-                  v-model="cfCond[def.id].min"
-                  type="number"
-                  step="any"
-                  class="narrow"
-                  :placeholder="t('issues.cf.min')"
-                />
-                <span>{{ t('issues.rangeSeparator') }}</span>
-                <input
-                  v-model="cfCond[def.id].max"
-                  type="number"
-                  step="any"
-                  class="narrow"
-                  :placeholder="t('issues.cf.max')"
-                />
-              </template>
-              <!-- 日付: 範囲 -->
-              <template v-else-if="def.typeId === CF_TYPE_DATE">
-                <input :id="`i-cf-${def.id}`" v-model="cfCond[def.id].min" type="date" />
-                <span>{{ t('issues.rangeSeparator') }}</span>
-                <input v-model="cfCond[def.id].max" type="date" />
-              </template>
-              <!-- 文字列・文章(選択肢が取れないリスト系を含む): 部分一致 -->
-              <template v-else>
-                <input
-                  :id="`i-cf-${def.id}`"
-                  v-model="cfCond[def.id].text"
-                  type="text"
-                  class="wide"
-                  :placeholder="t('issues.cf.contains')"
-                />
-              </template>
-            </template>
-          </div>
-
-          <p class="hint">{{ t('issues.cf.hint') }}</p>
-        </details>
+          v-model:open="cfPanelOpen"
+          v-model:conditions="cfCond"
+          :definitions="customFields"
+          :filter-count="customFieldFilterCount"
+        />
 
         <div class="row buttons">
           <!-- 同期中は検索しない(R10。search() のコメント参照) -->
@@ -1691,39 +1573,6 @@ select {
 
 input.wide {
   width: 320px;
-}
-
-input.narrow {
-  width: 120px;
-}
-
-/* カスタム属性の絞り込み(折りたたみ) */
-.cf-filters {
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  padding: 0.5rem 0.75rem;
-  margin-bottom: 0.75rem;
-  background: var(--bg-muted);
-}
-
-.cf-filters > summary {
-  cursor: pointer;
-  font-size: 0.9rem;
-  font-weight: 600;
-}
-
-.cf-filters[open] > summary {
-  margin-bottom: 0.75rem;
-}
-
-.cf-count {
-  font-weight: 400;
-  color: var(--accent-fg);
-}
-
-/* 属性名は幅を揃えて、入力欄の左端を縦に並べる */
-.cf-row > label {
-  min-width: 10rem;
 }
 
 input:disabled,
