@@ -1449,38 +1449,6 @@ button.inline {
   margin: 0.5rem 0 0;
 }
 
-.result {
-  margin-top: 0.75rem;
-  border-radius: 4px;
-  padding: 0.6rem 0.9rem;
-  font-size: 0.9rem;
-}
-
-.result.ok {
-  background: var(--success-bg);
-  border: 1px solid var(--success-border);
-}
-
-.result.ng {
-  background: var(--danger-bg);
-  border: 1px solid var(--danger-border);
-}
-
-.result-title {
-  font-weight: 600;
-  margin: 0 0 0.3rem;
-}
-
-.result ul {
-  margin: 0;
-  padding-left: 1.2rem;
-}
-
-.warnings {
-  margin-top: 0.5rem;
-  color: var(--warning-text);
-}
-
 .path {
   margin: 0;
   font-family: monospace;

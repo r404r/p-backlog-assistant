@@ -2,6 +2,7 @@
 // 同期状態画面。TDD 例外(GUI): フロントエンドにテスト基盤が無いため手動確認で担保する。
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
+import SyncResultPanel from '../components/SyncResultPanel.vue'
 import {
   formatSyncProgress,
   getBackend,
@@ -490,32 +491,16 @@ async function runProjectSync() {
 
         <p v-if="syncError" class="error">{{ syncError }}</p>
 
-        <div v-if="syncResult" class="result ok">
-          <p class="result-title">
-            {{
-              t('sync.result.title', {
-                project: syncResultProject,
-                mode: translateSyncMode(t, syncResult.mode),
-              })
-            }}
-          </p>
-          <ul>
-            <li>{{ t('sync.result.fetched', { count: syncResult.fetched }) }}</li>
-            <li>{{ t('sync.result.upserted', { count: syncResult.upserted }) }}</li>
-            <li>{{ t('sync.result.deleted', { count: syncResult.deleted }) }}</li>
-            <li>
-              {{
-                t('sync.result.duration', { seconds: (syncResult.durationMs / 1000).toFixed(1) })
-              }}
-            </li>
-          </ul>
-          <div v-if="syncResult.warnings.length > 0" class="warnings">
-            <p class="result-title">{{ t('common.label.warning') }}</p>
-            <ul>
-              <li v-for="(w, i) in syncResult.warnings" :key="i">{{ w }}</li>
-            </ul>
-          </div>
-        </div>
+        <SyncResultPanel
+          v-if="syncResult"
+          :result="syncResult"
+          :title="
+            t('sync.result.title', {
+              project: syncResultProject,
+              mode: translateSyncMode(t, syncResult.mode),
+            })
+          "
+        />
       </section>
 
       <!-- レート制限の残量(観測値のみ。10 秒間隔で自動更新) -->
@@ -746,33 +731,6 @@ button.primary:hover:not(:disabled) {
   color: var(--danger-text);
   font-size: 0.9rem;
   margin: 0.5rem 0 0;
-}
-
-.result {
-  margin-top: 0.75rem;
-  border-radius: 4px;
-  padding: 0.6rem 0.9rem;
-  font-size: 0.9rem;
-}
-
-.result.ok {
-  background: var(--success-bg);
-  border: 1px solid var(--success-border);
-}
-
-.result-title {
-  font-weight: 600;
-  margin: 0 0 0.3rem;
-}
-
-.result ul {
-  margin: 0;
-  padding-left: 1.2rem;
-}
-
-.warnings {
-  margin-top: 0.5rem;
-  color: var(--warning-text);
 }
 
 .log-info {
