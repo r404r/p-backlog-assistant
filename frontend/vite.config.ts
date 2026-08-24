@@ -17,6 +17,10 @@ export default defineConfig({
     // なる。テストが必要とするのは localStorage・window 程度の軽い DOM だけなので、
     // engines が >=20.0.0 の happy-dom で十分足りる(起動も速い)。
     environment: 'happy-dom',
+    // Node 26 は実験的 Web Storage を globalThis に公開するが、
+    // --localstorage-file 未指定時は undefined になり happy-dom の Storage を
+    // 隠してしまう。テスト起動時にブラウザ相当の Storage を明示的に保証する。
+    setupFiles: ['src/testing/setup.ts'],
     include: ['src/**/*.test.ts'],
   },
 })
