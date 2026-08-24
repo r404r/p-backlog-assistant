@@ -213,25 +213,6 @@ h2 {
   margin: 0.5rem 0 0.75rem;
 }
 
-button {
-  padding: 0.4rem 0.9rem;
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  background: var(--bg-muted);
-  color: var(--text);
-  font-size: 0.9rem;
-  cursor: pointer;
-}
-
-button:hover:not(:disabled) {
-  background: var(--bg-hover);
-}
-
-button:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
 button.inline {
   padding: 0.2rem 0.6rem;
   font-size: 0.8rem;

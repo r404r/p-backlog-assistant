@@ -333,25 +333,6 @@ const commentsFetched = computed(() => (props.detail?.commentsFetchedAt ?? '') !
   margin-bottom: 0;
 }
 
-button {
-  padding: 0.4rem 0.9rem;
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  background: var(--bg-muted);
-  color: var(--text);
-  font-size: 0.9rem;
-  cursor: pointer;
-}
-
-button:hover:not(:disabled) {
-  background: var(--bg-hover);
-}
-
-button:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
 .spinner {
   display: inline-block;
   width: 14px;

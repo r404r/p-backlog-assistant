@@ -63,27 +63,4 @@ const { t } = useI18n()
   margin-bottom: 0;
 }
 
-button {
-  padding: 0.4rem 0.9rem;
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  background: var(--bg-muted);
-  color: var(--text);
-  font-size: 0.9rem;
-  cursor: pointer;
-}
-
-button:hover:not(:disabled) {
-  background: var(--bg-hover);
-}
-
-button.primary {
-  background: var(--accent-emphasis);
-  border-color: var(--accent-emphasis);
-  color: var(--on-accent);
-}
-
-button.primary:hover:not(:disabled) {
-  background: var(--accent-emphasis-hover);
-}
 </style>
