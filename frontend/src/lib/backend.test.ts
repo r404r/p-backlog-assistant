@@ -181,6 +181,7 @@ describe('copyToClipboard', () => {
   afterEach(() => {
     setRuntime(undefined)
     setClipboard(undefined)
+    i18n.global.locale.value = 'ja'
   })
 
   it('Wails ランタイムがあれば ClipboardSetText を使う', async () => {
@@ -199,6 +200,14 @@ describe('copyToClipboard', () => {
   it('ClipboardSetText が false を返したら失敗として扱う', async () => {
     setRuntime({ ClipboardSetText: vi.fn().mockResolvedValue(false) })
     await expect(copyToClipboard('text')).rejects.toThrow()
+  })
+
+  it('adapter自身のエラーは現在の表示言語で返す', async () => {
+    i18n.global.locale.value = 'en'
+    setRuntime({ ClipboardSetText: vi.fn().mockResolvedValue(false) })
+
+    await expect(copyToClipboard('text')).rejects.toThrow('Clipboard access was rejected.')
+
   })
 
   it('ClipboardSetText が失敗したらそのエラーを伝える', async () => {

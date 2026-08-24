@@ -23,6 +23,14 @@
     "error": "エラー",
     "page": "ページ"
   },
+  "backend": {
+    "exportColumnsUnavailable": "出力できる列の情報を取得できませんでした(アプリを更新してください)",
+    "issueDetailUnavailable": "課題の詳細はこのバージョンのアプリでは表示できません(アプリを更新してください)",
+    "issueRefreshUnavailable": "最新の状態の取得はこのバージョンのアプリでは利用できません(アプリを更新してください)",
+    "storageInfoUnavailable": "保存データの情報はこのバージョンのアプリでは取得できません(アプリを更新してください)",
+    "clipboardRejected": "クリップボードへの書き込みが拒否されました",
+    "clipboardUnavailable": "この環境ではクリップボードを利用できません"
+  },
   "enum": {
     "action": {
       "create": "新規追加",

@@ -446,7 +446,7 @@ export function analyzeFragment(file: string, code: string): FileAnalysis {
         if (text !== null && KEY_SHAPE.test(text)) argumentKeyCalls.push({ callee: name, key: text })
       }
 
-      if (name === 't' || name === '$t') {
+      if (name === 't' || name === '$t' || name === 'globalTranslate') {
         const arg = node.arguments[0]
         const expression = arg ? arg.getText(sourceFile).trim() : ''
         const literal = arg ? literalText(arg) : null
@@ -523,7 +523,7 @@ export function analyzeFragment(file: string, code: string): FileAnalysis {
           const nm = calleeName(n)
           if (nm !== null) {
             calleeNames.add(nm)
-            if (nm === 't' || nm === '$t') hasDirectTranslate = true
+            if (nm === 't' || nm === '$t' || nm === 'globalTranslate') hasDirectTranslate = true
           }
         }
       })

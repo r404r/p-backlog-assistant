@@ -56,9 +56,14 @@ const CONVERTED_FILES: string[] = [
  */
 const FILE_EXEMPTIONS: { file: string; reason: string }[] = [
   {
-    file: 'src/lib/backend.ts',
+    file: 'src/lib/backend/mock.ts',
     reason:
-      'Wails 外(vite dev・テスト)で動くモックバックエンドの疑似データ(プロジェクト名・課題の件名等)と、Go の契約フィールドを埋めるための日本語ラベルの写しを含む。いずれも「Backlog から届くデータ」相当で、画面が直接表示する文言ではない(表示経路は lib/enumLabels.ts の機械値翻訳へ移行済み)',
+      'Wails 外(vite dev・テスト)で動くモックバックエンドの疑似データ(プロジェクト名・課題の件名等)を含む。これは「Backlog から届くデータ」相当で、UIカタログへ移す対象ではない',
+  },
+  {
+    file: 'src/lib/backend/shared.ts',
+    reason:
+      'Goの旧契約フィールドを埋める日本語fallbackの写しを含む。画面表示はlib/enumLabels.tsで機械値から翻訳し、この値は利用しない',
   },
 ]
 

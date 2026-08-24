@@ -23,6 +23,14 @@
     "error": "Error",
     "page": "Page"
   },
+  "backend": {
+    "exportColumnsUnavailable": "Export column information is unavailable. Update the app and try again.",
+    "issueDetailUnavailable": "Issue details are unavailable in this version. Update the app and try again.",
+    "issueRefreshUnavailable": "Refreshing an issue is unavailable in this version. Update the app and try again.",
+    "storageInfoUnavailable": "Storage information is unavailable in this version. Update the app and try again.",
+    "clipboardRejected": "Clipboard access was rejected.",
+    "clipboardUnavailable": "The clipboard is unavailable in this environment."
+  },
   "enum": {
     "action": {
       "create": "Add new",
