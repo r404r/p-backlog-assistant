@@ -402,6 +402,10 @@ func TestExportBulkTemplate_GuideSheet(t *testing.T) {
 		"親課題キー",
 		"ID:",
 		"新規追加行どうしを親子にすることはできません",
+		// 実装の1秒ペーシングと競合確認回数に基づく所要時間
+		"最低 1 秒間隔",
+		"最低約 17 分",
+		"最低約 34 分",
 	}
 	for _, p := range wantPhrases {
 		if !strings.Contains(text, p) {

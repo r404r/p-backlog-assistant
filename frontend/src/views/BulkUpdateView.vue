@@ -22,6 +22,7 @@ import {
   type Project,
 } from '../lib/backend'
 import { translateAction, translateRowStatus, type TranslateFn } from '../lib/enumLabels'
+import { estimateBulkSeconds, estimateBulkSecondsRange } from '../lib/bulkEstimate'
 import { errorMessage, formatDateTime } from '../lib/format'
 import { buildIssueQuery, newIssueConditions, resetIssueConditions } from '../lib/issueQuery'
 import { useMessage } from '../lib/message'
@@ -50,15 +51,26 @@ const translate: TranslateFn = (key, named) => (named ? t(key, named) : t(key))
  */
 const selectionGuard = useProjectSelectionGuard()
 
-/** 実行時間の目安(設計書 5 節: 1,000 件で 8〜10 分) */
-const MINUTES_PER_1000 = 9
+/** 秒数を利用者向けの切り上げ分数へ整形する。 */
+function formatEstimate(seconds: number): string {
+  if (seconds <= 0) return '-'
+  if (seconds < 60) return t('bulk.estimate.lessThanMinute')
+  return t('bulk.estimate.minutes', { minutes: Math.ceil(seconds / 60) })
+}
 
-/** 件数から実行時間の目安を返す(0 件以下は目安を出さない) */
-function estimateDuration(count: number): string {
-  if (count <= 0) return '-'
-  const minutes = (count / 1000) * MINUTES_PER_1000
-  if (minutes < 1) return t('bulk.estimate.lessThanMinute')
-  return t('bulk.estimate.minutes', { minutes: Math.ceil(minutes) })
+/** 取込結果は新規／更新の内訳が分かるため、API呼出回数から見積もる。 */
+function estimateImportedDuration(result: BulkImportResult): string {
+  return formatEstimate(estimateBulkSeconds(result.creates, result.updates))
+}
+
+/** 履歴再開は内訳を持たないため、全件新規〜全件更新の範囲で示す。 */
+function estimateUnknownDuration(count: number): string {
+  const range = estimateBulkSecondsRange(count)
+  if (range.min <= 0) return '-'
+  return t('bulk.estimate.range', {
+    min: Math.max(1, Math.ceil(range.min / 60)),
+    max: Math.max(1, Math.ceil(range.max / 60)),
+  })
 }
 
 // ---------------------------------------------------------------------------
@@ -437,6 +449,8 @@ const confirmResendSending = ref(false)
 const confirmJobId = ref(0)
 /** 確認中の実行対象件数(表示用) */
 const confirmCount = ref(0)
+/** 確認を開いた時点の所要時間見積り(初回は内訳あり、履歴再開は範囲) */
+const confirmEstimate = ref('')
 
 const canRun = computed(
   () =>
@@ -458,10 +472,17 @@ const progressPercent = computed(() => {
  * 実行確認を開く(ジョブ ID・件数・オプションを確定させる)。
  * 実行・再開・強制再実行のすべてがここを通るため、課題同期中の抑止もここで行う。
  */
-function askRun(jobId: number, count: number, force: boolean, resendSending: boolean) {
+function askRun(
+  jobId: number,
+  count: number,
+  force: boolean,
+  resendSending: boolean,
+  estimate = estimateUnknownDuration(count),
+) {
   if (running.value || !jobId || issueSyncRunning.value) return
   confirmJobId.value = jobId
   confirmCount.value = count
+  confirmEstimate.value = estimate
   confirmForce.value = force
   confirmResendSending.value = resendSending
   confirming.value = true
@@ -948,13 +969,17 @@ onUnmounted(() => {
           {{
             t('bulk.step4.note', {
               count: targetCount,
-              estimate: estimateDuration(targetCount),
+              estimate: estimateImportedDuration(importResult),
             })
           }}
         </p>
 
         <div class="row buttons">
-          <button class="primary" :disabled="!canRun" @click="askRun(importResult.jobId, targetCount, false, false)">
+          <button
+            class="primary"
+            :disabled="!canRun"
+            @click="askRun(importResult.jobId, targetCount, false, false, estimateImportedDuration(importResult))"
+          >
             {{ running ? t('bulk.step4.running') : t('common.action.run') }}
           </button>
           <button v-if="running" :disabled="canceling" @click="cancelRun">
@@ -969,7 +994,7 @@ onUnmounted(() => {
           <p v-if="confirmForce" class="warn-text">{{ t('bulk.confirm.force') }}</p>
           <p v-if="confirmResendSending" class="warn-text">{{ t('bulk.confirm.resend') }}</p>
           <p class="hint">
-            {{ t('bulk.confirm.estimate', { estimate: estimateDuration(confirmCount) }) }}
+            {{ t('bulk.confirm.estimate', { estimate: confirmEstimate }) }}
           </p>
           <div class="row buttons">
             <button class="primary" @click="confirmRun">{{ t('bulk.confirm.ok') }}</button>

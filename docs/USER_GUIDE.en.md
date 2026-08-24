@@ -203,7 +203,7 @@ Export the issues of the target project to an Excel template, edit them in Excel
 
 #### Tips and notes
 
-- **Issues are written to Backlog one at a time** (there is no bulk API). Expect roughly **8-10 minutes per 1,000 rows**. The screen also shows an estimate based on the number of target rows.
+- **Issues are written to Backlog one at a time** (there is no bulk API). API calls are spaced by at least one second. A create uses one call, while an update uses two including its conflict check, so 1,000 rows take at least about 17 minutes when all are creates or about 34 minutes when all are updates. Network latency and rate-limit waits add more time. The screen shows a minimum estimate based on the create/update mix.
 - **Conflict detection**: immediately before writing, the app checks the remote updated timestamp, and if it has changed since the template was exported (`base_updated`), **the row is excluded as a conflict instead of being written**. Use "Overwrite conflicts and run again" only when you do want to overwrite (changes made remotely will be lost).
 - **Duplicate-creation protection**: rows whose send result is unknown (5xx, missing response, etc.) are held in the sending state (the row details and the result workbook show "Sending (result unconfirmed)"). The job history shows a notice starting with "The send result of some rows could not be confirmed (N rows).", and "Resume and resend the sending rows" matches them against the already created issues before re-sending them safely.
 - Each row in the job history offers "Resume", "Overwrite conflicts and run again", "Show details", and "Export result to Excel". Jobs that still have rows counted as "Pending" or "Sending" can be resumed.
@@ -426,7 +426,7 @@ Issue type, status, priority, and assignee each have both a "name" column and an
 
 Exceeding a limit produces an error such as "the Excel file is too large" or "too many data rows (the limit is 50,000)". Split the file and import the parts separately.
 
-The row limit applies to **"rows that contain at least one cell"**, not to "rows that will be imported". Because a template export can produce up to 1,000,000 rows, **a template for a project with more than 50,000 issues cannot be imported as is.** Narrow the conditions when exporting the template, delete unnecessary rows, or split the file. Also, because issues are written one at a time (8-10 minutes per 1,000 rows), we recommend keeping each run to a few thousand rows in practice.
+The row limit applies to **"rows that contain at least one cell"**, not to "rows that will be imported". Because a template export can produce up to 1,000,000 rows, **a template for a project with more than 50,000 issues cannot be imported as is.** Narrow the conditions when exporting the template, delete unnecessary rows, or split the file. Also, because API calls are made one at a time with at least a one-second interval and updates require a conflict check, we recommend keeping each run to a few thousand rows in practice.
 
 ---
 

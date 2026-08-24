@@ -22,7 +22,8 @@
   },
   "estimate": {
     "lessThanMinute": "1 分未満",
-    "minutes": "約 {minutes} 分"
+    "minutes": "約 {minutes} 分",
+    "range": "約 {min}〜{max} 分"
   },
   "filter": {
     "title": "出力する課題の条件",
@@ -70,7 +71,7 @@
   },
   "step4": {
     "title": "④ 実行",
-    "note": "1 件ずつ Backlog へ書き込みます(バルク API が無いため)。目安: 1,000 件で 8〜10 分。今回の対象 {count} 件は {estimate}です。",
+    "note": "1 件ずつ Backlog へ書き込みます(バルク API が無いため)。API 呼び出しは最低 1 秒間隔で、新規は 1 回、更新は確認を含め 2 回です。今回の対象 {count} 件の最低目安は {estimate}です(通信・レート制限の待ち時間は別途かかります)。",
     "running": "実行中...",
     "canceling": "中断要求中...",
     "invalidNote": "検証エラーがあるため実行できません。Excel を修正して取り込み直してください。"
@@ -79,7 +80,7 @@
     "title": "{count} 件を Backlog に書き込みます。よろしいですか?",
     "force": "リモートの変更を上書きします。競合した課題に対してリモートで行われた変更は失われます。",
     "resend": "作成済みの課題を確認してから再送します(二重作成は自動で防止されます)。",
-    "estimate": "所要時間の目安: {estimate}",
+    "estimate": "所要時間の最低目安: {estimate}(通信・レート制限の待ち時間を除く)",
     "ok": "書き込む",
     "cancel": "やめる"
   },

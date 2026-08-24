@@ -22,7 +22,8 @@
   },
   "estimate": {
     "lessThanMinute": "less than 1 minute",
-    "minutes": "about {minutes} minutes"
+    "minutes": "about {minutes} minutes",
+    "range": "about {min}-{max} minutes"
   },
   "filter": {
     "title": "Conditions for the issues to export",
@@ -70,7 +71,7 @@
   },
   "step4": {
     "title": "④ Run",
-    "note": "Issues are written to Backlog one at a time (there is no bulk API). Estimate: 8-10 minutes per 1,000 rows. The {count} target rows of this run will take {estimate}.",
+    "note": "Issues are written to Backlog one at a time (there is no bulk API). API calls are spaced by at least one second; a create uses one call and an update uses two including its conflict check. The minimum estimate for the {count} target rows is {estimate} (network and rate-limit waits take additional time).",
     "running": "Running...",
     "canceling": "Canceling...",
     "invalidNote": "Cannot run because there are validation errors. Fix the Excel file and import it again."
@@ -79,7 +80,7 @@
     "title": "{count} rows will be written to Backlog. Are you sure?",
     "force": "Remote changes will be overwritten. Changes made remotely to the conflicting issues will be lost.",
     "resend": "Already created issues are checked before resending (duplicate creation is prevented automatically).",
-    "estimate": "Estimated time: {estimate}",
+    "estimate": "Minimum estimated time: {estimate} (excluding network and rate-limit waits)",
     "ok": "Write",
     "cancel": "Don't write"
   },
