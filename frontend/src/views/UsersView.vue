@@ -453,24 +453,6 @@ async function exportExcel() {
   box-sizing: border-box;
 }
 
-h1 {
-  font-size: 1.4rem;
-  margin: 0 0 1rem;
-}
-
-h2 {
-  font-size: 1.05rem;
-  margin: 0 0 0.75rem;
-}
-
-.panel {
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 1rem 1.25rem;
-  margin-bottom: 1.25rem;
-  background: var(--surface);
-}
-
 .mock-note {
   background: var(--warning-bg);
   border: 1px solid var(--warning-border);
@@ -494,23 +476,10 @@ h2 {
   color: var(--warning-text);
 }
 
-.row {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  margin-bottom: 0.75rem;
-  flex-wrap: wrap;
-}
-
 .row > label {
   font-weight: 600;
   font-size: 0.9rem;
   min-width: 6rem;
-}
-
-.row.buttons {
-  margin-top: 0.75rem;
-  margin-bottom: 0;
 }
 
 input[type='text'],

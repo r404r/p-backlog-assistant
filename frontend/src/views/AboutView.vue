@@ -295,24 +295,6 @@ function openLink(url: string): void {
   box-sizing: border-box;
 }
 
-h1 {
-  font-size: 1.4rem;
-  margin: 0 0 1rem;
-}
-
-h2 {
-  font-size: 1.05rem;
-  margin: 0 0 0.75rem;
-}
-
-.panel {
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 1rem 1.25rem;
-  margin-bottom: 1.25rem;
-  background: var(--surface);
-}
-
 .description {
   font-size: 0.9rem;
   margin: 0 0 1rem;

@@ -321,13 +321,6 @@ const commentsFetched = computed(() => (props.detail?.commentsFetchedAt ?? '') !
   margin: 0.75rem 0 0;
 }
 
-.row {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  flex-wrap: wrap;
-}
-
 .detail-buttons {
   margin-top: 1rem;
   margin-bottom: 0;

@@ -1089,28 +1089,10 @@ onUnmounted(() => {
   box-sizing: border-box;
 }
 
-h1 {
-  font-size: 1.4rem;
-  margin: 0 0 1rem;
-}
-
-h2 {
-  font-size: 1.05rem;
-  margin: 0 0 0.75rem;
-}
-
 /* セクション内の小見出し(テンプレート出力の検索条件) */
 h3 {
   font-size: 0.95rem;
   margin: 1rem 0 0.6rem;
-}
-
-.panel {
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 1rem 1.25rem;
-  margin-bottom: 1.25rem;
-  background: var(--surface);
 }
 
 .danger-note {
@@ -1171,14 +1153,6 @@ h3 {
   margin: 0;
 }
 
-.row {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  margin-bottom: 0.75rem;
-  flex-wrap: wrap;
-}
-
 .row > label {
   font-weight: 600;
   font-size: 0.9rem;
@@ -1189,11 +1163,6 @@ h3 {
 .row .inline-label {
   min-width: auto;
   margin-left: 0.75rem;
-}
-
-.row.buttons {
-  margin-top: 0.75rem;
-  margin-bottom: 0;
 }
 
 .radio {

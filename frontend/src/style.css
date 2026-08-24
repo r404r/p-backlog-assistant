@@ -215,3 +215,34 @@ body {
 .content button.primary:hover:not(:disabled) {
   background: var(--accent-emphasis-hover);
 }
+
+.content h1 {
+  font-size: 1.4rem;
+  margin: 0 0 1rem;
+}
+
+.content h2 {
+  font-size: 1.05rem;
+  margin: 0 0 0.75rem;
+}
+
+.content .panel {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 1rem 1.25rem;
+  margin-bottom: 1.25rem;
+  background: var(--surface);
+}
+
+.content .row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.content .row.buttons {
+  margin-top: 0.75rem;
+  margin-bottom: 0;
+}

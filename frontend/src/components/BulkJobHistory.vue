@@ -167,31 +167,6 @@ function jobRowIssueLabel(row: BulkJobRowDetail): string {
 </template>
 
 <style scoped>
-.panel {
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 1rem 1.25rem;
-  margin-bottom: 1.25rem;
-  background: var(--surface);
-}
-
-h2 {
-  font-size: 1.05rem;
-  margin: 0 0 0.75rem;
-}
-
-.row {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  flex-wrap: wrap;
-}
-
-.row.buttons {
-  margin-top: 0.75rem;
-  margin-bottom: 0;
-}
-
 .notice {
   background: var(--bg-muted);
   border: 1px solid var(--border);

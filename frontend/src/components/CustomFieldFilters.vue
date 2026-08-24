@@ -150,14 +150,6 @@ function toggleItem(definitionId: number, itemId: number, event: Event) {
   color: var(--accent-fg);
 }
 
-.row {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  margin-bottom: 0.75rem;
-  flex-wrap: wrap;
-}
-
 .row > label {
   font-weight: 600;
   font-size: 0.9rem;

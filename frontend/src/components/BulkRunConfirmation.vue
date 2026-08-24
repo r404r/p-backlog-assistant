@@ -51,16 +51,4 @@ const { t } = useI18n()
   margin: 0.5rem 0 0.75rem;
 }
 
-.row {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  flex-wrap: wrap;
-}
-
-.row.buttons {
-  margin-top: 0.75rem;
-  margin-bottom: 0;
-}
-
 </style>

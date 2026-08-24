@@ -493,16 +493,6 @@ async function confirmDelete() {
   box-sizing: border-box;
 }
 
-h1 {
-  font-size: 1.4rem;
-  margin: 0 0 1rem;
-}
-
-h2 {
-  font-size: 1.05rem;
-  margin: 0 0 0.75rem;
-}
-
 section {
   margin-bottom: 1.5rem;
 }

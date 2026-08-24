@@ -1479,29 +1479,11 @@ async function exportExcel() {
   gap: 1rem;
 }
 
-h1 {
-  font-size: 1.4rem;
-  margin: 0 0 1rem;
-}
-
 /* 見出しの主役は画面名のため、鮮度表示(.freshness)と同じ控えめな見た目にする */
 .header-freshness {
   font-size: 0.85rem;
   color: var(--text-muted);
   text-align: right;
-}
-
-h2 {
-  font-size: 1.05rem;
-  margin: 0 0 0.75rem;
-}
-
-.panel {
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 1rem 1.25rem;
-  margin-bottom: 1.25rem;
-  background: var(--surface);
 }
 
 .mock-note {
@@ -1527,14 +1509,6 @@ h2 {
   color: var(--warning-text);
 }
 
-.row {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  margin-bottom: 0.75rem;
-  flex-wrap: wrap;
-}
-
 .row > label {
   font-weight: 600;
   font-size: 0.9rem;
@@ -1544,11 +1518,6 @@ h2 {
 .row .inline-label {
   min-width: auto;
   margin-left: 0.75rem;
-}
-
-.row.buttons {
-  margin-top: 0.75rem;
-  margin-bottom: 0;
 }
 
 .radio {
