@@ -10,6 +10,7 @@
 // 「中断した sending 行は自動再送しない」を UI 上でも徹底する。
 import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
+import BulkRunConfirmation from '../components/BulkRunConfirmation.vue'
 import {
   getBackend,
   isMockBackend,
@@ -989,18 +990,15 @@ onUnmounted(() => {
         <p v-if="!importResult.valid" class="hint warn">{{ t('bulk.step4.invalidNote') }}</p>
 
         <!-- 実行確認 -->
-        <div v-if="confirming" class="confirm">
-          <p class="result-title">{{ t('bulk.confirm.title', { count: confirmCount }) }}</p>
-          <p v-if="confirmForce" class="warn-text">{{ t('bulk.confirm.force') }}</p>
-          <p v-if="confirmResendSending" class="warn-text">{{ t('bulk.confirm.resend') }}</p>
-          <p class="hint">
-            {{ t('bulk.confirm.estimate', { estimate: confirmEstimate }) }}
-          </p>
-          <div class="row buttons">
-            <button class="primary" @click="confirmRun">{{ t('bulk.confirm.ok') }}</button>
-            <button @click="cancelConfirm">{{ t('bulk.confirm.cancel') }}</button>
-          </div>
-        </div>
+        <BulkRunConfirmation
+          v-if="confirming"
+          :count="confirmCount"
+          :estimate="confirmEstimate"
+          :force="confirmForce"
+          :resend-sending="confirmResendSending"
+          @confirm="confirmRun"
+          @cancel="cancelConfirm"
+        />
 
         <!-- 進捗 -->
         <div v-if="running" class="progress-box">
@@ -1459,15 +1457,6 @@ button.inline {
   font-size: 0.9rem;
   font-weight: 600;
   margin: 0 0 0.5rem;
-}
-
-.confirm {
-  margin-top: 0.75rem;
-  border: 1px solid var(--warning-border);
-  background: var(--warning-bg);
-  border-radius: 4px;
-  padding: 0.75rem 0.9rem;
-  font-size: 0.9rem;
 }
 
 .progress-box {
