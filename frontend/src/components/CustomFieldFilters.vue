@@ -1,9 +1,8 @@
 <script setup lang="ts">
 import { useI18n } from 'vue-i18n'
 import type { CustomFieldDef } from '../lib/backend'
+import { CUSTOM_FIELD_DATE, CUSTOM_FIELD_NUMERIC } from '../lib/customFieldTypes'
 import {
-  CUSTOM_FIELD_DATE,
-  CUSTOM_FIELD_NUMERIC,
   isListCustomField,
   type CustomFieldCondition,
 } from '../composables/useCustomFieldConditions'

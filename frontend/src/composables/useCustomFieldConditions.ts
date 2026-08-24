@@ -1,15 +1,9 @@
 import { computed, ref, type ComputedRef, type Ref } from 'vue'
 import type { CustomFieldDef, CustomFieldFilter } from '../lib/backend'
-
-/** Backlog API のカスタム属性 typeId（数値） */
-export const CUSTOM_FIELD_NUMERIC = 3
-/** Backlog API のカスタム属性 typeId（日付） */
-export const CUSTOM_FIELD_DATE = 4
-/** Backlog API の選択肢型（単一／複数リスト、チェックボックス、ラジオ） */
-const CUSTOM_FIELD_LIST_TYPES = new Set([5, 6, 7, 8])
+import { isCustomFieldListType } from '../lib/customFieldTypes'
 
 export function isListCustomField(definition: CustomFieldDef): boolean {
-  return CUSTOM_FIELD_LIST_TYPES.has(definition.typeId) && definition.items.length > 0
+  return isCustomFieldListType(definition.typeId) && definition.items.length > 0
 }
 
 export interface CustomFieldCondition {

@@ -1,11 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { ref } from 'vue'
 import type { CustomFieldDef } from '../lib/backend'
-import {
-  CUSTOM_FIELD_DATE,
-  CUSTOM_FIELD_NUMERIC,
-  useCustomFieldConditions,
-} from './useCustomFieldConditions'
+import { CUSTOM_FIELD_DATE, CUSTOM_FIELD_NUMERIC } from '../lib/customFieldTypes'
+import { useCustomFieldConditions } from './useCustomFieldConditions'
 
 function definition(id: number, typeId: number, items: CustomFieldDef['items'] = []): CustomFieldDef {
   return {

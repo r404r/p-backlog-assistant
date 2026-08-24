@@ -26,6 +26,12 @@ import type {
   UserRow,
 } from './contract'
 import {
+  CUSTOM_FIELD_DATE,
+  CUSTOM_FIELD_MULTIPLE_LIST,
+  CUSTOM_FIELD_NUMERIC,
+  CUSTOM_FIELD_SINGLE_LIST,
+} from '../customFieldTypes'
+import {
   ACTION_LABELS,
   CUSTOM_COLUMN_PREFIX,
   customColumnKey,
@@ -162,9 +168,6 @@ function filterMockUsers(rows: UserRow[], query: UserQuery): UserRow[] {
 function ymd(d: Date): string {
   return d.toISOString().slice(0, 10)
 }
-
-/** カスタム属性の型 ID(モックの比較方法の切り替えに使う。Go 側 customfield の定数と対) */
-const CF_TYPE_NUMERIC = 3
 
 /**
  * モック課題のカスタム属性値(表示文字列)を決定的に組み立てる。
@@ -318,7 +321,7 @@ function matchMockCustomField(row: IssueRow, f: CustomFieldFilter): boolean {
   if (f.min || f.max) {
     // 未入力の値は、上限だけの条件でも一致させない(Go 側と同じ)
     if (display === '') return false
-    if (f.typeId === CF_TYPE_NUMERIC) {
+    if (f.typeId === CUSTOM_FIELD_NUMERIC) {
       const n = Number(display)
       if (Number.isNaN(n)) return false
       if (f.min && n < Number(f.min)) return false
@@ -444,7 +447,7 @@ const MOCK_MASTER: MasterData = {
     },
     {
       id: 3002,
-      typeId: 3,
+      typeId: CUSTOM_FIELD_NUMERIC,
       typeName: '数値',
       name: '見積工数(時間)',
       description: '',
@@ -456,7 +459,7 @@ const MOCK_MASTER: MasterData = {
     },
     {
       id: 3003,
-      typeId: 4,
+      typeId: CUSTOM_FIELD_DATE,
       typeName: '日付',
       name: 'リリース予定日',
       description: '',
@@ -468,7 +471,7 @@ const MOCK_MASTER: MasterData = {
     },
     {
       id: 3004,
-      typeId: 5,
+      typeId: CUSTOM_FIELD_SINGLE_LIST,
       typeName: '単一リスト',
       name: '影響範囲',
       description: '',
@@ -484,7 +487,7 @@ const MOCK_MASTER: MasterData = {
     },
     {
       id: 3005,
-      typeId: 6,
+      typeId: CUSTOM_FIELD_MULTIPLE_LIST,
       typeName: '複数リスト',
       name: '対象環境',
       description: '',
