@@ -545,7 +545,7 @@ If the record says that the storage location could not be determined, the locati
 
 ### I keep hitting the rate limit
 
-The Backlog API is rate limited. The app manages the limit per category automatically and waits when it is about to be exceeded (bulk update writes are throttled to one per second). Check the remaining amount and the reset time per category under "Rate limit remaining" on the Sync Status screen. If the remaining amount is low, wait until the reset time before running again.
+The Backlog API is rate limited. The app manages the limit per category automatically and waits when it is about to be exceeded (during a bulk run, all API calls are throttled to at least one second apart: writes, conflict checks, and the pre-resend match). Check the remaining amount and the reset time per category under "Rate limit remaining" on the Sync Status screen. If the remaining amount is low, wait until the reset time before running again.
 
 ### There is no copy icon next to the issue key
 

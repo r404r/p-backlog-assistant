@@ -43,7 +43,7 @@ See the [User Guide](docs/USER_GUIDE.en.md) for installation steps, how to use e
 - **Duplicate-creation protection**: the send state is persisted, and rows with an unknown outcome (5xx, missing response, etc.) are held. On resume, they are matched against already created issues so they can be re-sent safely
 - Progress display, cancellation, job history (per-row details), and an Excel result report. **Rows where a new issue was created record the key and ID of the created issue** (key and ID in the result report, key in the row details)
 - Supports **updating custom fields and the parent issue key** (custom fields use `属性:定義名` (Attribute: definition name) columns; parent-child relationships are one level deep)
-- Automatic throttling with the rate limit (update category) plus a 1-second interval between writes
+- Automatic throttling with the rate limit (update category), plus a minimum 1-second interval between API calls during a bulk run (writes, conflict checks, and the pre-resend match alike)
 
 ### User Export
 

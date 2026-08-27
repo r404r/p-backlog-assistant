@@ -1,15 +1,17 @@
-# backlog-assistant v1.2.2
+# backlog-assistant v1.2.3
 
-課題抽出画面の使い勝手を改善するリリースです。
+内部品質の改善と、一括処理の所要時間見積りの修正を行うリリースです。
 
-**English summary**: The Issues screen now shows the selected project's last sync time next to the page title ("Last synced: {datetime} ({elapsed})", or "Last synced: Not synced" for projects that have never been synced), so you can tell at a glance how fresh the local data is before searching.
+**English summary**: Maintenance release. The bulk-update time estimate now matches the actual pacing (all API calls, including the pre-write conflict check, are spaced at least one second apart: one call per create, two per update in a normal run; resend matching and conflict-stopped rows vary). Large internal refactoring improves maintainability with no intended behavior changes, backed by expanded automated checks (499 tests).
 
-## 改善
+## 修正
 
-- **課題抽出のタイトル右に最終同期時刻を表示**: 見出し「課題抽出」と同じ行の右側に「最終同期: {日時} ({経過})」を表示するようになりました
-  - 検索の前に、ローカルデータの鮮度がひと目で分かります
-  - 未同期のプロジェクトでは「最終同期: 未同期」と表示されます
-  - 同期の完了やプロジェクトの切り替えで自動的に更新されます
+- **一括処理の所要時間見積りを実装と一致させました**: すべての API 呼び出し(書き込みだけでなく実行直前の競合確認も)を最低 1 秒間隔にし、通常実行時の見積り(新規 1 回 / 更新 2 回。再送・競合時は呼び出し数が変動します)・ユーザガイドの記述と実挙動が一致するようになりました。画面には新規・更新の内訳に基づく最低所要時間が表示されます
+
+## 内部改善(見た目・操作は変わりません)
+
+- 画面コンポーネント・スタイル・Excel 出力処理などの大規模なリファクタリング(保守性向上。挙動の変更はありません)
+- 自動検査の拡充: 多言語カタログの検査対象の拡大・公開契約の固定テストなど(テスト計 499 件)
 
 ## 動作環境
 
