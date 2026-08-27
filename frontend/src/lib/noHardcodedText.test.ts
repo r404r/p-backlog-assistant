@@ -39,9 +39,15 @@ const LOCALES_DIR = resolve(SRC_DIR, 'locales')
  *
  * **画面変換の担当者へ**: 自分の画面の変換が終わったらここへ 1 行追加すること。
  * 追加した時点から、その画面に生の文字列が戻ることを検査が防ぐ。
+ * 追加漏れは「src 配下の .vue が漏れなく登録されている」検査が拾う。
  */
 const CONVERTED_FILES: string[] = [
   'src/App.vue',
+  'src/components/BulkJobHistory.vue',
+  'src/components/BulkRunConfirmation.vue',
+  'src/components/CustomFieldFilters.vue',
+  'src/components/IssueDetailDialog.vue',
+  'src/components/SyncResultPanel.vue',
   'src/views/AboutView.vue',
   'src/views/BulkUpdateView.vue',
   'src/views/IssuesView.vue',
@@ -440,6 +446,21 @@ export function scanFile(file: string, source: string): Finding[] {
 // 検査対象の列挙
 // ---------------------------------------------------------------------------
 
+/** src 配下の .vue を再帰的に列挙する(CONVERTED_FILES の登録漏れ検出に使う) */
+function listVueFiles(dir: string): string[] {
+  const found: string[] = []
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const path = join(dir, entry.name)
+    if (entry.isDirectory()) {
+      found.push(...listVueFiles(path))
+      continue
+    }
+    if (!entry.name.endsWith('.vue')) continue
+    found.push(relative(process.cwd(), path))
+  }
+  return found.sort()
+}
+
 /** src 配下の .ts を再帰的に列挙する(テスト・カタログ・型宣言は除く) */
 function listScriptFiles(dir: string): string[] {
   const found: string[] = []
@@ -460,6 +481,7 @@ function listScriptFiles(dir: string): string[] {
 
 const EXEMPT_FILES = new Set(FILE_EXEMPTIONS.map((e) => e.file))
 const SCRIPT_FILES = listScriptFiles(SRC_DIR).filter((f) => !EXEMPT_FILES.has(f))
+const VUE_FILES = listVueFiles(SRC_DIR).filter((f) => !EXEMPT_FILES.has(f))
 const TARGET_FILES = [...CONVERTED_FILES, ...SCRIPT_FILES]
 
 // ---------------------------------------------------------------------------
@@ -474,6 +496,14 @@ describe('ユーザ可視文字列のハードコード', () => {
     expect(SCRIPT_FILES.some((f) => f.endsWith('.test.ts'))).toBe(false)
     expect(SCRIPT_FILES.some((f) => f.startsWith('src/locales/'))).toBe(false)
     expect(SCRIPT_FILES.length).toBeGreaterThan(10)
+  })
+
+  it('src 配下の .vue が CONVERTED_FILES に漏れなく登録されている(登録漏れの防止)', () => {
+    // 画面を分割して component を切り出したとき、CONVERTED_FILES への追加を
+    // 忘れると、その component だけ静かに検査対象から外れる(実際に
+    // src/components/ の 5 件が漏れていた)。自動列挙と突き合わせて気付けるようにする。
+    // 未変換の .vue を一時的に外す場合は FILE_EXEMPTIONS へ理由付きで登録する。
+    expect([...CONVERTED_FILES].sort()).toEqual(VUE_FILES)
   })
 
   it.each(TARGET_FILES)('%s に生のユーザ可視文字列が残っていない', (file) => {

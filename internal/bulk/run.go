@@ -50,8 +50,13 @@ func (r *RunResult) warn(format string, args ...any) {
 	r.Warnings = append(r.Warnings, fmt.Sprintf(format, args...))
 }
 
-// writeInterval は書き込みリクエスト(および再送前突合の取得)の間に空ける
-// 最小間隔(中 4)。公式の推奨に従い、連続送信でも 1 秒以上の間隔を空ける。
+// writeInterval は一括実行中の API 呼び出しの間に空ける最小間隔(中 4)。
+// 公式の推奨に従い、連続送信でも 1 秒以上の間隔を空ける。
+//
+// 対象は書き込み(追加・更新)だけでなく、実行直前の競合確認と再送前突合の
+// 取得も含む。画面の所要時間見積り(frontend/src/lib/bulkEstimate.ts)と
+// 日英ユーザ文書が「新規は 1 呼び出し・更新は競合確認を含む 2 呼び出しで、
+// 呼び出しの間は最低 1 秒」と案内しているため、取得も同じ間隔で送る。
 const writeInterval = time.Second
 
 // Engine は 1 プロファイル(API クライアント + ローカル DB)に対する実行エンジン。
@@ -258,7 +263,9 @@ func (e *Engine) processRow(ctx context.Context, job *store.Job, row store.JobRo
 
 	if row.IssueKey != "" {
 		// 実行直前の競合検知(リモートの変更を黙って上書きしない)
+		e.waitBeforeCall() // 競合確認の取得も間隔を空ける(中 4)
 		remote, gerr := e.api.GetIssue(ctx, row.IssueKey)
+		e.markCall()
 		if gerr != nil {
 			return e.handleGetIssueError(ctx, row, gerr, isResend, res)
 		}

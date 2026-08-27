@@ -98,6 +98,75 @@ func newTestEngine(api API, st *store.Store) *testEngine {
 	return te
 }
 
+// timedCall は仮想時計で記録した API 呼び出し(名前と時刻)。
+type timedCall struct {
+	name string
+	at   time.Time
+}
+
+// timedAPI は API 呼び出しの名前と時刻を記録するラッパー。
+// ペーシングは「呼び出しと呼び出しの間隔」であり、待機の回数だけでは
+// どの呼び出しの間に空いたのかを確かめられないため、時刻で検証する。
+type timedAPI struct {
+	API
+	now   func() time.Time
+	calls []timedCall
+}
+
+func (a *timedAPI) record(name string) {
+	a.calls = append(a.calls, timedCall{name: name, at: a.now()})
+}
+
+// names は記録した呼び出しの名前を順に返す(呼び出し順の検証用)。
+func (a *timedAPI) names() []string {
+	names := make([]string, 0, len(a.calls))
+	for _, c := range a.calls {
+		names = append(names, c.name)
+	}
+	return names
+}
+
+func (a *timedAPI) GetIssue(ctx context.Context, issueIDOrKey string) (*backlogclient.Issue, error) {
+	a.record("GetIssue")
+	return a.API.GetIssue(ctx, issueIDOrKey)
+}
+
+func (a *timedAPI) GetIssues(ctx context.Context, q backlogclient.IssueQuery) ([]backlogclient.Issue, error) {
+	a.record("GetIssues")
+	return a.API.GetIssues(ctx, q)
+}
+
+func (a *timedAPI) CreateIssue(ctx context.Context, in backlogclient.IssueCreate) (*backlogclient.Issue, error) {
+	a.record("CreateIssue")
+	return a.API.CreateIssue(ctx, in)
+}
+
+func (a *timedAPI) UpdateIssue(ctx context.Context, issueIDOrKey string, in backlogclient.IssueUpdate) (*backlogclient.Issue, error) {
+	a.record("UpdateIssue")
+	return a.API.UpdateIssue(ctx, issueIDOrKey, in)
+}
+
+// pacingFixture は仮想時計で動く実行エンジンと、時刻付きの API 記録。
+type pacingFixture struct {
+	engine *Engine
+	api    *timedAPI
+	clock  time.Time
+}
+
+// newPacingFixture は待機で仮想時刻だけを進める実行エンジンを組み立てる。
+// 実時間は経過しないため、1 秒間隔の検証を待たずに行える
+// (時刻は仮想時計のみで進むので、間隔は待機によってのみ生まれる)。
+func newPacingFixture(api API, st *store.Store) *pacingFixture {
+	f := &pacingFixture{clock: time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)}
+	f.api = &timedAPI{API: api, now: f.now}
+	f.engine = NewEngine(f.api, st)
+	f.engine.now = f.now
+	f.engine.sleep = func(d time.Duration) { f.clock = f.clock.Add(d) }
+	return f
+}
+
+func (f *pacingFixture) now() time.Time { return f.clock }
+
 func rowStatuses(t *testing.T, st *store.Store, jobID int64) map[int]store.JobRow {
 	t.Helper()
 	rows, err := st.ListJobRows(context.Background(), jobID)
@@ -861,6 +930,58 @@ func TestRun_PacesWriteRequests(t *testing.T) {
 	}
 	if writeInterval < time.Second {
 		t.Errorf("writeInterval = %v, want 1 秒以上", writeInterval)
+	}
+}
+
+// TestRun_PacesEveryAPICall は「API 呼び出しは最低 1 秒間隔」を、
+// 呼び出しと呼び出しの実間隔で確認する(中 4)。
+//
+// 特に更新行では、競合確認の取得(GetIssue)と書き込み(UpdateIssue)の間にも
+// 間隔が空くことを求める。画面の所要時間見積り(frontend/src/lib/bulkEstimate.ts)
+// と日英ユーザ文書は「新規は 1 呼び出し・更新は競合確認を含む 2 呼び出しで、
+// 呼び出しの間は最低 1 秒」と案内しており、取得だけ間隔を空けないと
+// 表示・文書と実際の挙動がずれる(レート消費も見積りより速くなる)。
+//
+// 待機の回数だけを見る TestRun_PacesWriteRequests では、書き込みの間の 1 回で
+// 条件を満たしてしまいこの穴を検出できない。仮想時計で呼び出し時刻を記録し、
+// 間隔そのものを検証する。
+//
+// 行の並びは「更新 → 新規追加 → 更新」にする。GetIssue がジョブ最初の呼び出しに
+// なる並びだけでは、GetIssue の**前**の待機を落としても後続の markCall で
+// 間隔が空いてしまい、取得前のペーシング欠落を検出できない
+// (書き込み → 次の行の GetIssue の間隔が要る)。
+func TestRun_PacesEveryAPICall(t *testing.T) {
+	st := openTestStore(t)
+	res := importFile(t, st, [][]string{
+		{"EXA-1", "新しい件名", "", "", "", "", "", "", "", "", "", "", "2026-08-01T00:00:00Z"},
+		{"", "新規課題", "11", "", "", "", "3", "", "", "", "", "", ""},
+		{"EXA-3", "新しい件名 3", "", "", "", "", "", "", "", "", "", "", "2026-08-03T00:00:00Z"},
+	})
+	if !res.Valid {
+		t.Fatalf("取り込みエラー = %+v", res.Errors)
+	}
+	api := newFakeAPI()
+	api.remote["EXA-1"] = backlogclient.Issue{
+		ID: 101, IssueKey: "EXA-1", ProjectID: testProjectID, Updated: "2026-08-01T00:00:00Z",
+	}
+	api.remote["EXA-3"] = backlogclient.Issue{
+		ID: 103, IssueKey: "EXA-3", ProjectID: testProjectID, Updated: "2026-08-03T00:00:00Z",
+	}
+	f := newPacingFixture(api, st)
+
+	if _, err := f.engine.Run(context.Background(), res.JobID, RunOptions{}, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	// 更新行(競合確認 → 更新)・新規追加行(追加)・更新行(競合確認 → 更新)
+	want := "GetIssue,UpdateIssue,CreateIssue,GetIssue,UpdateIssue"
+	if got := strings.Join(f.api.names(), ","); got != want {
+		t.Fatalf("API 呼び出し = %v, want %v", got, want)
+	}
+	for i := 1; i < len(f.api.calls); i++ {
+		prev, cur := f.api.calls[i-1], f.api.calls[i]
+		if d := cur.at.Sub(prev.at); d < writeInterval {
+			t.Errorf("%s → %s の間隔 = %v, want %v 以上", prev.name, cur.name, d, writeInterval)
+		}
 	}
 }
 
