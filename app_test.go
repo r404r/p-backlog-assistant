@@ -303,6 +303,56 @@ func TestParentIssueKeyOf(t *testing.T) {
 	}
 }
 
+// TestTextFormattingRuleOf は課題詳細へ載せる記法設定の抽出を確認する。
+//
+// 画面はこの値が "markdown" のときだけ本文・コメントを Markdown として
+// レンダリング表示する。"backlog"(Backlog 記法)と判定できない場合
+// (生 JSON が無い・壊れている・キーが無い・想定外の値)は空文字へ縮退させ、
+// プレーン表示のままにする(誤ってレンダリングして表示を崩さないため)。
+func TestTextFormattingRuleOf(t *testing.T) {
+	cases := []struct {
+		name    string
+		rawJSON string
+		want    string
+	}{
+		{"markdown", `{"id":1,"textFormattingRule":"markdown"}`, "markdown"},
+		{"backlog 記法", `{"id":1,"textFormattingRule":"backlog"}`, "backlog"},
+		{"キーが無い", `{"id":1}`, ""},
+		{"null", `{"id":1,"textFormattingRule":null}`, ""},
+		{"想定外の値", `{"id":1,"textFormattingRule":"html"}`, ""},
+		{"生 JSON なし", "", ""},
+		{"壊れた生 JSON", "{壊れた JSON", ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := textFormattingRuleOf(c.rawJSON); got != c.want {
+				t.Errorf("textFormattingRuleOf = %q, want %q", got, c.want)
+			}
+		})
+	}
+}
+
+// TestNewIssueDetailDTO_TextFormattingRule は記法設定が DTO に載ることを確認する。
+//
+// 判定元はその課題のプロジェクトの生 JSON(service が課題と同じ読み取りで添える)。
+// 画面が「選択中プロジェクト」を見なくて済むよう、課題の詳細と結合して届ける。
+func TestNewIssueDetailDTO_TextFormattingRule(t *testing.T) {
+	issue := &store.Issue{IssueKey: "EXA-1", Summary: "件名", RawJSON: `{"id":1}`}
+
+	dto := newIssueDetailDTO(&service.IssueDetail{
+		Issue:          issue,
+		ProjectRawJSON: `{"id":1,"textFormattingRule":"markdown"}`,
+	})
+	if dto.TextFormattingRule != "markdown" {
+		t.Errorf("記法設定 = %q, want markdown", dto.TextFormattingRule)
+	}
+
+	plain := newIssueDetailDTO(&service.IssueDetail{Issue: issue})
+	if plain.TextFormattingRule != "" {
+		t.Errorf("プロジェクト未取得の記法設定 = %q, want 空文字", plain.TextFormattingRule)
+	}
+}
+
 // TestIssueDetailDTOOf は課題詳細ポップアップ(画面 2)へ渡す DTO の組み立てを確認する。
 //
 // カスタム属性は定義取得(API)を行わず、生 JSON の name と表示規約だけで作る。

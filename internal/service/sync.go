@@ -243,6 +243,10 @@ type IssueDetail struct {
 	Comments []store.IssueComment
 	// CommentStatus はコメントの取得結果(取得時刻・上限到達・変更履歴のみの件数)。
 	CommentStatus store.CommentFetchStatus
+	// ProjectRawJSON はこの課題のプロジェクトの生 JSON(GET /projects の応答)。
+	// 呼び出し側が記法設定(textFormattingRule)を取り出すために使う。
+	// プロジェクトがローカルに無い場合は空文字(詳細表示自体は成立させる)。
+	ProjectRawJSON string
 	// Warnings は RefreshIssue の部分的な失敗(コメントだけ取得できなかった等)。
 	// GetIssueDetail(ローカル参照のみ)では常に空。
 	Warnings []string
@@ -303,10 +307,18 @@ func (s *ProfileService) issueDetailLocked(ctx context.Context, profileID string
 		if err != nil {
 			return err
 		}
+		// 記法設定(textFormattingRule)の判定材料も同じ読み取りで揃える。
+		// 課題と結合して返すことで、詳細の取得中にプロジェクトを切り替えても
+		// 画面側の判定元がずれない(画面は選択中プロジェクトを参照しない)。
+		projectRawJSON, err := store.GetProjectRawJSON(ctx, tx, projectID)
+		if err != nil {
+			return err
+		}
 		detail = IssueDetail{
 			Issue: issue, ParentKeys: keys,
 			Comments: comments, CommentStatus: status,
-			Warnings: []string{},
+			ProjectRawJSON: projectRawJSON,
+			Warnings:       []string{},
 		}
 		return nil
 	})

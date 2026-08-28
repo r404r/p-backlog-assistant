@@ -184,6 +184,9 @@ function normalizeIssueDetail(r: IssueDetail | null | undefined, issueKey: strin
     commentsHistoryOnly: r?.commentsHistoryOnly ?? 0,
     commentsTruncated: r?.commentsTruncated ?? false,
     warnings: r?.warnings ?? [],
+    // 記法設定も旧バージョンのバインディングでは届かない(undefined)。
+    // 空文字へ寄せると画面は従来のプレーン表示に縮退する(誤レンダリングしない)
+    textFormattingRule: r?.textFormattingRule ?? '',
   }
 }
 

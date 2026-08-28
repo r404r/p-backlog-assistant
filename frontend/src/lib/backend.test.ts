@@ -286,6 +286,11 @@ describe('モックバックエンドの getIssueDetail', () => {
   it('ローカルに無い課題はエラーにする(空の詳細を返さない)', async () => {
     await expect(getBackend().getIssueDetail('p1', projectId, 'SAMPLE-99999')).rejects.toThrow()
   })
+
+  it('記法設定を返す(Markdown の整形表示を Wails 外でも確認できる)', async () => {
+    const detail = await getBackend().getIssueDetail('p1', projectId, 'SAMPLE-1')
+    expect(detail.textFormattingRule).toBe('markdown')
+  })
 })
 
 /**

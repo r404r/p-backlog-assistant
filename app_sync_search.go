@@ -5,6 +5,7 @@ package main
 // Excel 出力は app_export.go、一括更新・追加は app_bulk.go にある。
 
 import (
+	"encoding/json"
 	"fmt"
 	"log/slog"
 
@@ -299,6 +300,35 @@ type IssueDetailDTO struct {
 	// 課題本体の内容は有効なため、画面は詳細を表示したうえでこれを添える
 	// (フロント契約: null を返さない)。
 	Warnings []string `json:"warnings"`
+	// TextFormattingRule はこの課題のプロジェクトの記法設定
+	// ("markdown" / "backlog"。判定できない場合は空文字)。
+	// 画面は "markdown" のときだけ本文・コメントを Markdown として整形表示する。
+	TextFormattingRule string `json:"textFormattingRule"`
+}
+
+// textFormattingRuleOf はプロジェクトの raw_json から記法設定を取り出す。
+//
+// Backlog の GET /projects は textFormattingRule に "markdown"(Markdown 記法)
+// または "backlog"(Backlog 記法)を返す。判定できない場合(生 JSON が無い・
+// 壊れている・キーが無い・想定外の値)は空文字へ縮退させる。画面はこの値が
+// "markdown" のときだけ整形表示するため、縮退は「従来どおりのプレーン表示」に
+// 落ちるだけで、Backlog 記法を Markdown として誤ってレンダリングすることはない。
+func textFormattingRuleOf(rawJSON string) string {
+	if rawJSON == "" {
+		return ""
+	}
+	var v struct {
+		TextFormattingRule string `json:"textFormattingRule"`
+	}
+	if err := json.Unmarshal([]byte(rawJSON), &v); err != nil {
+		return ""
+	}
+	switch v.TextFormattingRule {
+	case "markdown", "backlog":
+		return v.TextFormattingRule
+	default:
+		return ""
+	}
 }
 
 // issueDetailDTOOf は課題 1 件を詳細 DTO へ詰め替える。
@@ -358,6 +388,7 @@ func newIssueDetailDTO(d *service.IssueDetail) IssueDetailDTO {
 			AuthorName: c.AuthorName, Content: c.Content, Created: c.Created,
 		})
 	}
+	dto.TextFormattingRule = textFormattingRuleOf(d.ProjectRawJSON)
 	dto.CommentsFetchedAt = d.CommentStatus.FetchedAt
 	dto.CommentsHistoryOnly = d.CommentStatus.HistoryOnly
 	dto.CommentsTruncated = d.CommentStatus.Truncated

@@ -119,6 +119,7 @@ function issueDetail(issueKey: string): IssueDetail {
     commentsHistoryOnly: 0,
     commentsTruncated: false,
     warnings: [],
+    textFormattingRule: '',
   }
 }
 

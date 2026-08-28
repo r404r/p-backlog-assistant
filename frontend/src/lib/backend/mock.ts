@@ -253,7 +253,7 @@ function buildMockComments(issueKey: string, at: string): MockCommentState {
       authorName: authors[i % authors.length],
       content:
         i === 0
-          ? `${issueKey} のコメント(モックデータ)。\n複数行の本文も折り返して表示されます。`
+          ? `${issueKey} のコメント(モックデータ)。\n\n- 複数行の本文も折り返して表示されます\n- \`インラインコード\` も出せます`
           : `${issueKey} への返信 ${count - i}(モックデータ)。`,
       // 新しい順に並べる(1 件ごとに 1 時間ずつ古くする)
       created: new Date(base - i * 3600 * 1000).toISOString(),
@@ -266,15 +266,33 @@ function buildMockComments(issueKey: string, at: string): MockCommentState {
 /**
  * モック用: 課題詳細に出す本文(改行を含む複数行)。
  * 詳細ポップアップの折り返し・スクロールを Wails 外でも確認できるようにする。
+ *
+ * モックの記法設定は Markdown(buildIssueDetail の textFormattingRule)なので、
+ * 見出し・リスト・表・コード・リンク・画像を一通り入れて、整形表示と
+ * 「原文」への切替を Wails 外でも確認できるようにしている。
  */
 function mockDescription(row: IssueRow): string {
   return [
-    `${row.summary} の詳細(モックデータ)。`,
+    `## ${row.summary} の詳細(モックデータ)`,
     '',
     '再現手順:',
+    '',
     '1. サンプル画面を開く',
-    '2. 入力欄に値を入れて保存する',
+    '2. 入力欄に値を入れて **保存** する',
     '3. 一覧に戻ると反映されていない',
+    '',
+    '| 環境 | 版 |',
+    '| --- | --- |',
+    '| Windows | 11 |',
+    '| macOS | 15 |',
+    '',
+    '```json',
+    '{ "sample": true }',
+    '```',
+    '',
+    '参考: [Backlog API](https://developer.nulab.com/ja/docs/backlog/)',
+    '',
+    '![画面の様子](https://example.com/sample.png)',
     '',
     '※ これはモック用のダミー本文であり、実在の課題ではありません。',
   ].join('\n')
@@ -617,6 +635,8 @@ export function createMockBackend(): Backend {
       commentsTruncated: cm.truncated,
       // モックは部分失敗を再現しない(Go 側はコメント取得だけ失敗した場合に警告を載せる)
       warnings: [],
+      // モックのプロジェクトは Markdown 記法とし、整形表示を Wails 外でも確認できるようにする
+      textFormattingRule: 'markdown',
     }
   }
 

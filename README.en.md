@@ -32,6 +32,7 @@ See the [User Guide](docs/USER_GUIDE.en.md) for installation steps, how to use e
 - Filtering, listing, and exporting by **custom field** (text is a partial match, number and date are ranges, list types are a multi-select of their options)
 - **Click an issue key in the result list to open the issue details in a popup** (custom fields, parent issue, and the description body included; copying the URL and opening it in a browser are available there too). **The clipboard icon next to the key copies the issue URL directly**
 - **"Get the latest state"** in the detail popup re-fetches just that one issue from Backlog and applies it locally (no need to sync the whole project). It also fetches and displays **comments (up to the most recent 500)** (comments are not retrieved by a normal sync and are covered by neither keyword search nor Excel export)
+- For projects that use **Markdown formatting**, the description and comments are shown **rendered** (headings, lists, tables, code, links). You can switch between "Formatted" and "Source". Images are not displayed - their URLs are shown as text - and projects that use Backlog formatting keep the previous plain display
 - **Excel export** (selectable columns, up to 1,000,000 matching rows; above that the export fails with an error instead of producing a file). Custom field columns and the parent issue key column can also be selected
 
 ### Bulk Update & Add

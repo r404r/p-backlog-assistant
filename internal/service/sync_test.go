@@ -469,3 +469,50 @@ func TestGetIssueDetail(t *testing.T) {
 		}
 	})
 }
+
+// TestGetIssueDetail_ProjectRawJSON は課題詳細に「その課題のプロジェクト」の
+// 生 JSON が添えられることを確認する(記法設定 textFormattingRule の判定材料)。
+//
+// 判定を課題と同じ取得結果に結合させるのは、詳細の取得中にプロジェクトを
+// 切り替えても判定元がずれないようにするため(画面は選択中プロジェクトを見ない)。
+// プロジェクトが未登録の場合は空文字にし、詳細表示自体は成立させる。
+func TestGetIssueDetail_ProjectRawJSON(t *testing.T) {
+	fake := &fakeConnector{info: testInfo()}
+	s, id := newSyncTestService(t, fake)
+	ctx := context.Background()
+
+	st, err := s.storeForProfile(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.UpsertProject(ctx, &store.Project{ID: 1, ProjectKey: "EXA", Name: "検証用 A",
+		RawJSON: `{"id":1,"textFormattingRule":"markdown"}`}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.UpsertIssues(ctx, []*store.Issue{
+		{ID: 100, IssueKey: "EXA-1", ProjectID: 1, Summary: "課題", RawJSON: `{"id":100}`},
+		{ID: 200, IssueKey: "EXB-1", ProjectID: 2, Summary: "別プロジェクト", RawJSON: `{"id":200}`},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Run("プロジェクトの生 JSON を添える", func(t *testing.T) {
+		det, err := s.GetIssueDetail(ctx, id, 1, "EXA-1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if det.ProjectRawJSON != `{"id":1,"textFormattingRule":"markdown"}` {
+			t.Errorf("プロジェクトの生 JSON = %q", det.ProjectRawJSON)
+		}
+	})
+
+	t.Run("未登録のプロジェクトは空文字", func(t *testing.T) {
+		det, err := s.GetIssueDetail(ctx, id, 2, "EXB-1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if det.ProjectRawJSON != "" {
+			t.Errorf("プロジェクトの生 JSON = %q, want 空文字", det.ProjectRawJSON)
+		}
+	})
+}

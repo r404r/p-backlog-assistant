@@ -376,6 +376,14 @@ export interface IssueDetail {
    * getIssueDetail(ローカル参照のみ)では常に空配列。
    */
   warnings: string[]
+  /**
+   * この課題のプロジェクトの記法設定(`markdown` / `backlog`。判定不能は空文字)。
+   *
+   * 画面は `markdown` のときだけ本文・コメントを Markdown として整形表示する。
+   * 判定元を「選択中プロジェクト」ではなく課題の詳細に結合しているのは、
+   * 詳細の取得中にプロジェクトを切り替えても判定がずれないようにするため。
+   */
+  textFormattingRule: string
 }
 
 /** 条件フォームのセレクト候補(ローカル DB の実データから抽出) */

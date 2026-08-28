@@ -39,6 +39,54 @@ func TestUpsertProject_AndList(t *testing.T) {
 	}
 }
 
+// TestGetProjectRawJSON は課題詳細で使うプロジェクトの生 JSON を
+// 1 件だけ引けることを確認する。
+//
+// 記法設定(textFormattingRule)の判定に使うため、全件を走査する ListProjects
+// ではなく 1 件だけ引く経路を分けている(GetIssueKeyByID と同じ流儀)。
+// 見つからない場合はエラーにせず空文字を返し、詳細表示全体を止めない。
+func TestGetProjectRawJSON(t *testing.T) {
+	s := openTempStore(t)
+	ctx := context.Background()
+
+	if err := s.UpsertProject(ctx, &Project{ID: 1, ProjectKey: "EXA", Name: "検証用",
+		RawJSON: `{"id":1,"textFormattingRule":"markdown"}`}); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := s.GetProjectRawJSON(ctx, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != `{"id":1,"textFormattingRule":"markdown"}` {
+		t.Errorf("生 JSON = %q", got)
+	}
+
+	missing, err := s.GetProjectRawJSON(ctx, 99)
+	if err != nil {
+		t.Fatalf("未登録のプロジェクトでエラーになった: %v", err)
+	}
+	if missing != "" {
+		t.Errorf("未登録のプロジェクト = %q, want 空文字", missing)
+	}
+
+	// raw_json が NULL の行(生 JSON を保存していなかった頃の既存 DB)でも
+	// 走査に失敗しない。ここでエラーを返すと課題詳細の表示自体が落ちるため、
+	// 記法設定だけを諦めて空文字へ縮退させる
+	if _, err := s.DB().ExecContext(ctx,
+		`INSERT INTO projects (id, project_key, name, archived, raw_json, fetched_at)
+		 VALUES (7, 'EXN', 'NULL 行', 0, NULL, '')`); err != nil {
+		t.Fatal(err)
+	}
+	nullRow, err := s.GetProjectRawJSON(ctx, 7)
+	if err != nil {
+		t.Fatalf("raw_json が NULL の行でエラーになった: %v", err)
+	}
+	if nullRow != "" {
+		t.Errorf("raw_json が NULL の行 = %q, want 空文字", nullRow)
+	}
+}
+
 func TestDeleteProjectsNotIn(t *testing.T) {
 	s := openTempStore(t)
 	ctx := context.Background()

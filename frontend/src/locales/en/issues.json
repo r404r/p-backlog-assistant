@@ -126,6 +126,11 @@
     "customFields": "Custom fields",
     "description": "Description",
     "noDescription": "(No description)",
+    "view": {
+      "label": "Body display",
+      "formatted": "Formatted",
+      "source": "Source"
+    },
     "comments": "Comments",
     "commentsNotFetched": "Not fetched yet (use \"Get the latest state\" to fetch them).",
     "noComments": "(No comments)",

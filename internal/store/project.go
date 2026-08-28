@@ -2,6 +2,8 @@ package store
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"strings"
 )
 
@@ -59,6 +61,34 @@ func ListProjects(ctx context.Context, q dbtx) ([]Project, error) {
 // ListProjects は Store 直接実行版。
 func (s *Store) ListProjects(ctx context.Context) ([]Project, error) {
 	return ListProjects(ctx, s.db)
+}
+
+// GetProjectRawJSON はプロジェクト 1 件の生 JSON(GET /projects の応答)を返す。
+// 見つからない場合は空文字を返す(エラーにしない)。
+//
+// 課題詳細の記法設定(textFormattingRule)の判定に使う。詳細を 1 件開くたびに
+// 全プロジェクトを走査する ListProjects を呼ばずに済むよう、1 件だけ引く経路を
+// 分けている(GetIssueKeyByID と同じ流儀)。
+//
+// raw_json が NULL の行(生 JSON を保存していなかった頃の既存 DB)も空文字へ
+// 縮退させる。ここでエラーを返すと記法設定が分からないだけでは済まず、
+// 課題詳細の表示そのものが失敗してしまうため。
+func GetProjectRawJSON(ctx context.Context, q dbtx, id int64) (string, error) {
+	var rawJSON string
+	err := q.QueryRowContext(ctx,
+		`SELECT COALESCE(raw_json, '') FROM projects WHERE id = ? LIMIT 1`, id).Scan(&rawJSON)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	return rawJSON, nil
+}
+
+// GetProjectRawJSON は Store 直接実行版。
+func (s *Store) GetProjectRawJSON(ctx context.Context, id int64) (string, error) {
+	return GetProjectRawJSON(ctx, s.db, id)
 }
 
 // DeleteProjectsNotIn は keepIDs に含まれないプロジェクト行と、

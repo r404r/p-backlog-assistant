@@ -126,6 +126,11 @@
     "customFields": "カスタム属性",
     "description": "詳細",
     "noDescription": "(詳細は入力されていません)",
+    "view": {
+      "label": "本文の表示",
+      "formatted": "整形表示",
+      "source": "原文"
+    },
     "comments": "コメント",
     "commentsNotFetched": "まだ取得していません(「最新の状態を取得」で取得できます)。",
     "noComments": "(コメントはありません)",
