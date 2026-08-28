@@ -1,16 +1,13 @@
-# backlog-assistant v1.3.0
+# backlog-assistant v1.3.1
 
-課題詳細ポップアップを強化するリリースです。
+課題詳細ポップアップの表示不具合を修正するリリースです。
 
-**English summary**: The issue detail popup gets two upgrades. (1) On projects whose text formatting rule is Markdown, the description and comments are now rendered (headings, lists, tables, code, links), with a "Formatted / Source" toggle (the choice is remembered; the formatting rule is picked up when you sync the project list); links open in your default browser and remote images are never loaded (shown as placeholders) for security. (2) A maximize/restore toggle (the ⛶ button or double-clicking the title) expands the popup to nearly the full window; the state is remembered.
+**English summary**: Bug-fix release. In the maximized issue detail popup, the header (title area) and footer (action buttons) no longer show spurious vertical scrollbars caused by sub-pixel height rounding. On very short windows or high zoom, the popup now falls back to a single scroll for the whole dialog so every control stays reachable.
 
-## 新機能
+## 修正
 
-- **課題詳細・コメントの Markdown 整形表示**: 記法設定が Markdown のプロジェクトでは、詳細本文とコメントを整形して表示します(見出し・リスト・表・コード・リンク)
-  - 「整形表示 / 原文」の切り替え付き(選択を記憶)。Backlog 記法・設定不明のプロジェクトは従来どおりの表示です
-  - 安全のため、リンクは検証済みの http/https のみ既定ブラウザで開き、画像は読み込みません(URL のプレースホルダ表示)
-  - 記法設定はプロジェクト一覧の同期で取り込まれます(Backlog 側で変更した場合は「プロジェクト一覧を同期」を実行してください)
-- **詳細ポップアップの最大化 / 復元**: ヘッダの ⛶ ボタン、またはタイトルのダブルクリックで、ウィンドウ内の最大表示領域と元のサイズを切り替えられます(状態は次回も維持)
+- **最大化中のヘッダ・フッタに不要な縦スクロールバーが出ることがある問題を修正**: タイトル部分と機能ボタン部分はスクロールしない自然な高さになりました
+  - 極端に低いウィンドウや高いズーム倍率では、ポップアップ全体が 1 本のスクロールに切り替わり、すべての操作を行えます
 
 ## 動作環境
 
