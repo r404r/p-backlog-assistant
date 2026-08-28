@@ -353,6 +353,12 @@ function openMarkdownLink(event: MouseEvent): void {
  * max-height は 100%(= オーバーレイの内容ボックス)で上書きする。85vh の解除が
  * 目的だが、none にするとオーバーレイの padding(1rem)の分だけはみ出し得るため、
  * 幅の max-width: 100% と対にして「必ず画面内に収まる」ことを保証する。
+ *
+ * overflow は **.modal の auto をそのまま使う**(ここで上書きしない)。
+ * 通常は可変領域(.detail-body)が余りを吸収して中身がぴったり収まるため
+ * モーダルのスクロールバーは出ず、ヘッダ + フッタだけで高さを超える極端な場合
+ * だけモーダル全体がスクロールして中身へ到達できる。hidden にすると、その
+ * 極端な場合に中身が切れて操作できなくなる。
  */
 .modal.maximized {
   box-sizing: border-box;
@@ -360,40 +366,39 @@ function openMarkdownLink(event: MouseEvent): void {
   height: 96vh;
   max-width: 100%;
   max-height: 100%;
-  /* スクロールは detail-body だけが担当する(モーダル自身は動かさない) */
-  overflow: hidden;
   display: flex;
   flex-direction: column;
 }
 
 /*
- * ヘッダ・フッタは「基本は中身なりの高さ、上限を超えたら自分の中でスクロール」。
+ * ヘッダ・フッタは自然高で置き、**スクロールコンテナにしない**。
  *
- * ヘッダには件数の決まっていない警告、フッタには折り返し得るエラー文とボタン群が
- * 入る。両方を縮小不可(flex: 0 0 auto)にすると、狭小ウィンドウ・200% ズームで
- * 合計高さが画面を超えたときに可変領域が高さ 0 まで潰れ、しかもモーダル自身は
- * overflow: hidden のため固定領域も読めなくなる(レビュー 1 回目 指摘 1)。
- * 上限を 40% ずつに切り、超えた分は各領域内のスクロールへ退避させることで、
- * 可変領域には必ず 20% 以上が残る。
+ * 以前はレビュー 1 回目 指摘 1(狭小・200% ズームで操作不能)への対処として
+ * `max-height: 40%` + `overflow-y: auto` を与えていたが、この組合せの箱は
+ * 中身の高さが端数(行の高さ・境界線・ズーム倍率・DPI 由来)になると
+ * scrollHeight が clientHeight を 1px 上回り、**上限に達していないのに縦
+ * スクロールバーが出る**(ユーザ報告「ヘッダとフッタにときどき出る」)。
+ * 自然高 + overflow: visible にすれば、この経路は構造的に消える。
+ * 指摘 1 の保護は上の .modal.maximized(モーダル自身の退避スクロール)が担う。
  */
-.modal.maximized .detail-header {
-  flex: 0 1 auto;
-  min-height: 0;
-  max-height: 40%;
-  overflow-y: auto;
-}
-
+.modal.maximized .detail-header,
 .modal.maximized .detail-footer {
-  flex: 0 1 auto;
-  min-height: 0;
-  max-height: 40%;
-  overflow-y: auto;
+  flex: 0 0 auto;
+  overflow: visible;
 }
 
-/* 可変領域。min-height: 0 が無いと flex 項目が中身の高さまで伸びてスクロールしない */
+/*
+ * 可変領域。既定の最小高さ(min-content)のままだと flex 項目が中身の高さまで
+ * 伸びてスクロールしないため、min-height を明示して縮められるようにする。
+ *
+ * ただし **0 にはしない**。0 にすると、ヘッダ + フッタだけで高さを使い切ったとき
+ * (警告が極端に多い等)に本文が「高さ 0 のスクロールポート」へ潰れ、モーダル側を
+ * スクロールしても本文や「整形表示 / 原文」に触れなくなる(レビュー 2 回目 指摘 1)。
+ * 下限を残せば、あふれた分はモーダル自身の退避スクロールで到達できる。
+ */
 .modal.maximized .detail-body {
   flex: 1 1 auto;
-  min-height: 0;
+  min-height: 6rem;
   overflow-y: auto;
 }
 
@@ -406,6 +411,29 @@ function openMarkdownLink(event: MouseEvent): void {
 .modal.maximized .comment-list {
   max-height: none;
   overflow: visible;
+}
+
+/*
+ * ビューポートが極端に低いとき(狭小ウィンドウ・200% ズーム)の切替
+ * (レビュー 2 回目 指摘 1)。
+ *
+ * この領域ではヘッダ + フッタだけで高さを使い切りやすく、ペイン分割を保ったままだと
+ * 可変領域が下限まで縮んだ細い窓になる。フッタには届いても本文や「整形表示 / 原文」は
+ * 覗き穴からしか触れない。そこで **ペイン分割そのものをやめ**、ヘッダ・本文・フッタを
+ * 自然高で通常フローに戻し、モーダル全体を 1 本のスクロールにする
+ * (`.modal` の overflow: auto と `max-height: 100%` がそのまま効く)。
+ * ヘッダ・フッタの固定は失われるが、すべての操作へ到達できることを優先する。
+ */
+@media (max-height: 30rem) {
+  .modal.maximized {
+    display: block;
+    height: auto;
+  }
+
+  .modal.maximized .detail-body {
+    min-height: 0;
+    overflow-y: visible;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {

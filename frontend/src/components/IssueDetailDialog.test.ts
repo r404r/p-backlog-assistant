@@ -577,17 +577,32 @@ describe('IssueDetailDialog の最大化 / 復元', () => {
 })
 
 /**
- * 最大化レイアウトの CSS 検査(レビュー 1 回目 指摘 1)。
+ * 最大化レイアウトの CSS 検査。
  *
- * 最大化時のモーダルは `overflow: hidden` の flex 縦積みで、スクロールを担うのは
- * `.detail-body` だけ。ここでヘッダ(件数無制限の警告を含む)とフッタ(折り返し得る
- * エラーとボタン群)を縮小不可のままにすると、狭小ウィンドウ・200% ズームで
- * 合計高さが画面を超えたときに `.detail-body` が高さ 0 に潰れ、しかも固定領域自身も
- * スクロールできず読めなくなる。
+ * 最大化時のモーダルは flex 縦積みで、スクロールを担うのは `.detail-body` だけ。
  *
- * 実際の高さ計算は happy-dom では再現できない(レイアウトエンジンが無い)ため、
- * ここでは **崩れない構造が CSS に書かれていること**を静的に検査する
- * (styleTokens.test.ts と同じ発想)。実寸での確認は手動確認項目に残す。
+ * ヘッダ・フッタは **スクロールコンテナにしない**。以前はレビュー指摘
+ * (狭小・200% ズームで操作不能)への対処として `max-height: 40%` +
+ * `overflow-y: auto` を与えていたが、この 2 つを持つ箱は中身の高さが端数
+ * (行の高さ・境界線・ズーム倍率・DPI 由来)になると `scrollHeight` が
+ * `clientHeight` を 1px 上回り、上限に達していなくても縦スクロールバーが
+ * 出てしまう(ユーザ報告「ヘッダとフッタにときどきスクロールバーが出る」)。
+ * 自然高 + `overflow: visible` にすれば、この経路は構造的に消える。
+ *
+ * 代わりの保護は 2 段構えにする(レビュー 2 回目 指摘 1):
+ *  - ビューポートが極端に低いとき(狭小ウィンドウ・200% ズーム)は、
+ *    メディアクエリで**ペイン分割そのものをやめ**、自然高の本文を含めて
+ *    モーダル全体を 1 本のスクロールにする。可変領域を高さ 0 の内側
+ *    スクロールポートへ潰して本文・「整形表示 / 原文」を触れなくしない。
+ *  - 中身が極端に多いとき(警告多数)は、可変領域の下限(min-height)が
+ *    高さ 0 への潰れを防ぎ、あふれた分はモーダル自身の退避スクロールが担う
+ *    (`.modal` の `overflow: auto` を最大化中も上書きしない)。
+ *
+ * **検査の限界(妥協点)**: 実際の高さ計算・スクロール到達性は happy-dom では
+ * 再現できない(レイアウトエンジンが無く、ビューポート高に応じたメディアクエリの
+ * 評価もされない)。ここでは **崩れない構造が CSS に書かれていること**を静的に
+ * 検査するにとどめる(styleTokens.test.ts と同じ発想)。実寸・狭小・200% ズームでの
+ * 到達性は手動確認項目とする。
  */
 describe('IssueDetailDialog の最大化レイアウト(CSS)', () => {
   const source = readFileSync(
@@ -595,55 +610,172 @@ describe('IssueDetailDialog の最大化レイアウト(CSS)', () => {
     'utf8',
   )
 
-  /** セレクタに対応する宣言ブロックの中身を返す(入れ子を持たない平坦なブロック前提) */
-  function ruleBlock(selector: string): string {
-    const head = `${selector} {`
-    const start = source.indexOf(head)
-    expect(start, `セレクタが見つかりません: ${selector}`).toBeGreaterThanOrEqual(0)
-    const bodyStart = start + head.length
-    const end = source.indexOf('}', bodyStart)
-    expect(end, `ブロックが閉じていません: ${selector}`).toBeGreaterThan(bodyStart)
-    return source.slice(bodyStart, end)
+  /** `<style scoped>` の中身(コメントは除去。スクリプト部の波括弧を拾わないため) */
+  const styleSource = (() => {
+    const start = source.indexOf('<style scoped>')
+    const end = source.indexOf('</style>', start)
+    expect(start, '<style scoped> が見つかりません').toBeGreaterThanOrEqual(0)
+    expect(end, '</style> が見つかりません').toBeGreaterThan(start)
+    return source.slice(start + '<style scoped>'.length, end).replace(/\/\*[\s\S]*?\*\//g, '')
+  })()
+
+  interface CssRule {
+    /** 属する @media の条件(トップレベルは空文字) */
+    media: string
+    selectors: string[]
+    declarations: string
   }
 
-  /** ブロックの max-height に書かれた % の値(見つからなければ null) */
-  function maxHeightPercent(block: string): number | null {
-    const m = block.match(/max-height:\s*(\d+(?:\.\d+)?)%/)
-    return m ? Number(m[1]) : null
+  /**
+   * 規則を**出現順に**列挙する(@media の 1 段の入れ子まで対応)。
+   *
+   * 出現順を保つのは、同じセレクタに対する宣言を**後勝ち**で畳み込むため。
+   * 最初に一致したブロックだけを見ると、後続の規則で `overflow: hidden` や
+   * `max-height` を足しても検査が素通りしてしまう(レビュー 2 回目 指摘 2)。
+   */
+  function parseRules(css: string): CssRule[] {
+    const rules: CssRule[] = []
+    let media = ''
+    let prelude = ''
+    let i = 0
+    while (i < css.length) {
+      const ch = css[i]
+      if (ch === '{') {
+        const head = prelude.trim()
+        prelude = ''
+        i++
+        if (head.startsWith('@')) {
+          media = head.replace(/\s+/g, ' ')
+          continue
+        }
+        const end = css.indexOf('}', i)
+        expect(end, `ブロックが閉じていません: ${head}`).toBeGreaterThan(i - 1)
+        rules.push({
+          media,
+          selectors: head.split(',').map((s) => s.trim()),
+          declarations: css.slice(i, end),
+        })
+        i = end + 1
+        continue
+      }
+      if (ch === '}') {
+        // @media の終わり
+        media = ''
+        i++
+        continue
+      }
+      prelude += ch
+      i++
+    }
+    return rules
+  }
+
+  const RULES = parseRules(styleSource)
+
+  /**
+   * セレクタに一致する規則の宣言を、出現順に畳み込んで返す(後勝ち)。
+   * @param media 属する @media の条件(省略時はトップレベルの規則だけを見る)
+   */
+  function declarations(selector: string, media = ''): Map<string, string> {
+    const out = new Map<string, string>()
+    let found = false
+    for (const rule of RULES) {
+      if (rule.media !== media) continue
+      if (!rule.selectors.includes(selector)) continue
+      found = true
+      for (const declaration of rule.declarations.split(';')) {
+        const colon = declaration.indexOf(':')
+        if (colon < 0) continue
+        out.set(declaration.slice(0, colon).trim(), declaration.slice(colon + 1).trim())
+      }
+    }
+    expect(found, `セレクタが見つかりません: ${media} ${selector}`).toBe(true)
+    return out
+  }
+
+  /** スクロールコンテナになる overflow が指定されているか(shorthand も見る) */
+  function scrolls(decl: Map<string, string>): boolean {
+    return ['overflow', 'overflow-y'].some((p) => /^(auto|scroll)$/.test(decl.get(p) ?? ''))
   }
 
   const FIXED_AREAS = ['.modal.maximized .detail-header', '.modal.maximized .detail-footer']
 
-  it('固定領域(ヘッダ・フッタ)も縮小でき、上限を超えたら自身がスクロールする', () => {
+  it('解析器が同一セレクタの複数規則を後勝ちで畳み込む(検査自体の健全性)', () => {
+    // 最初の一致だけを見る実装では、後続規則での上書きを見逃す(指摘 2)
+    const sample = parseRules('.a { overflow: visible; color: red; }\n.a { overflow: hidden; }')
+    expect(sample).toHaveLength(2)
+    const folded = new Map<string, string>()
+    for (const rule of sample) {
+      for (const d of rule.declarations.split(';')) {
+        const colon = d.indexOf(':')
+        if (colon >= 0) folded.set(d.slice(0, colon).trim(), d.slice(colon + 1).trim())
+      }
+    }
+    expect(folded.get('overflow')).toBe('hidden')
+    expect(folded.get('color')).toBe('red')
+
+    // @media の中身も、外側とは別の規則として拾えている
+    expect(RULES.some((r) => r.media.startsWith('@media') && r.selectors.length > 0)).toBe(true)
+  })
+
+  it('固定領域(ヘッダ・フッタ)をスクロールコンテナにしない', () => {
     for (const selector of FIXED_AREAS) {
-      const block = ruleBlock(selector)
-      // 縮小可 + min-height: 0 が無いと、中身の最小高さのまま押し出してしまう
-      expect(block, `${selector}: 縮小可(flex-shrink)にしてください`).toMatch(
-        /flex:\s*0\s+1\s+auto/,
+      const decl = declarations(selector)
+      // 自然高で置く(縮めない)。縮めると中身が読めなくなる
+      expect(decl.get('flex'), `${selector}: 自然高(flex: 0 0 auto)にしてください`).toBe(
+        '0 0 auto',
       )
-      expect(block, `${selector}: min-height: 0 が必要です`).toMatch(/min-height:\s*0/)
-      expect(block, `${selector}: 上限を超えた分の退避スクロールが必要です`).toMatch(
-        /overflow-y:\s*auto/,
+      // overflow を持たせるとスクロールコンテナになり、端数の高さで 1px の
+      // スクロールバーが出る。意図を固定するため visible を明示する
+      expect(decl.get('overflow'), `${selector}: overflow: visible を明示してください`).toBe(
+        'visible',
       )
-      expect(maxHeightPercent(block), `${selector}: max-height の上限(%)が必要です`).not.toBeNull()
+      expect(scrolls(decl), `${selector}: スクロールを発生させる overflow は禁止です`).toBe(false)
+      // 高さの上限を切ると、そこへ到達した瞬間に中身が隠れて読めなくなる
+      expect(decl.has('max-height'), `${selector}: 高さの上限は設けません`).toBe(false)
     }
   })
 
-  it('固定領域の上限の合計が 100% 未満で、可変領域が高さ 0 に潰れない', () => {
-    const total = FIXED_AREAS.reduce((sum, s) => sum + (maxHeightPercent(ruleBlock(s)) ?? 100), 0)
-    expect(total, '固定領域の上限合計が 100% 以上だと本文の高さが残りません').toBeLessThan(100)
+  it('可変領域だけがスクロールを担い、高さ 0 まで潰れない', () => {
+    const body = declarations('.modal.maximized .detail-body')
+    expect(body.get('flex')).toBe('1 1 auto')
+    expect(body.get('overflow-y')).toBe('auto')
+
+    // min-height: 0 だと、ヘッダ + フッタで高さを使い切ったときに本文が
+    // 高さ 0 のスクロールポートへ潰れ、中身へ到達できなくなる(指摘 1)
+    const minHeight = body.get('min-height')
+    expect(minHeight, '可変領域には高さの下限が必要です').toBeDefined()
+    expect(minHeight, '下限 0 では高さ 0 のスクロールポートになります').not.toBe('0')
+
+    // 本文・コメントの内部スクロールは最大化中だけ解除する
+    expect(declarations('.modal.maximized .detail-description').get('max-height')).toBe('none')
+    expect(declarations('.modal.maximized .comment-list').get('max-height')).toBe('none')
   })
 
-  it('可変領域だけがスクロールを担う(二重スクロールにしない)', () => {
-    const body = ruleBlock('.modal.maximized .detail-body')
-    expect(body).toMatch(/flex:\s*1\s+1\s+auto/)
-    expect(body).toMatch(/min-height:\s*0/)
-    expect(body).toMatch(/overflow-y:\s*auto/)
+  it('モーダル自身はクリップせず、極端な場合の退避スクロールを残す', () => {
+    // ヘッダ + フッタだけで 96vh を超える極端な場合、overflow: hidden だと
+    // 中身が切れて操作できなくなる。.modal の overflow: auto を最大化中も
+    // 上書きしないことで、その場合だけモーダル全体がスクロールする
+    // (通常は可変領域が余りを吸収するので出ない)。
+    expect(declarations('.modal').get('overflow')).toBe('auto')
+    expect(
+      declarations('.modal.maximized').has('overflow'),
+      '最大化中に overflow を上書きすると、退避スクロールが失われます',
+    ).toBe(false)
+  })
 
-    // モーダル自身は動かさない(可変領域との二重スクロールを避ける)
-    expect(ruleBlock('.modal.maximized')).toMatch(/overflow:\s*hidden/)
-    // 本文・コメントの内部スクロールは最大化中だけ解除する
-    const inner = ruleBlock('.modal.maximized .detail-description,\n.modal.maximized .comment-list')
-    expect(inner).toMatch(/max-height:\s*none/)
+  it('極端に低いビューポートではペイン分割をやめ、本文へ到達できるようにする', () => {
+    // 到達性そのもの(実レイアウト)は happy-dom では検証できないため、
+    // 切替が CSS に存在することだけを固定する。実寸確認は手動確認項目。
+    const media = RULES.map((r) => r.media).find((m) => /^@media[^{]*max-height/.test(m))
+    expect(media, '低いビューポート向けの切替(@media max-height)がありません').toBeDefined()
+
+    const modal = declarations('.modal.maximized', media!)
+    expect(modal.get('display'), 'flex のペイン分割をやめてください').toBe('block')
+    expect(modal.get('height'), '固定高をやめて中身なりの高さにしてください').toBe('auto')
+
+    const body = declarations('.modal.maximized .detail-body', media!)
+    expect(body.get('overflow-y'), '本文の内側スクロールを解除してください').toBe('visible')
+    expect(scrolls(body), '本文をスクロールコンテナのままにしないでください').toBe(false)
   })
 })
