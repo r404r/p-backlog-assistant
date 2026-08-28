@@ -150,6 +150,15 @@ function openMarkdownLink(event: MouseEvent): void {
   event.preventDefault()
   openExternalURL(url)
 }
+
+/** 整形表示のリンクをキーボード(Enter)でも開けるようにする */
+function openMarkdownLinkByKeyboard(event: KeyboardEvent): void {
+  if (event.key !== 'Enter') return
+  const url = markdownLinkHref(event.target)
+  if (!url) return
+  event.preventDefault()
+  openExternalURL(url)
+}
 </script>
 
 <template>
@@ -255,7 +264,7 @@ function openMarkdownLink(event: MouseEvent): void {
             <!-- v-html に渡すのは lib/markdown.ts で変換 + DOMPurify のサニタイズを
                  必ず通した HTML だけ(設計 §3.2)。原文をそのまま渡してはならない -->
             <!-- eslint-disable-next-line vue/no-v-html -->
-            <div v-if="showMarkdown" class="detail-description markdown-body" @click="openMarkdownLink" v-html="renderedDescription"></div>
+            <div v-if="showMarkdown" class="detail-description markdown-body" @click="openMarkdownLink" @keydown="openMarkdownLinkByKeyboard" v-html="renderedDescription"></div>
             <pre v-else class="detail-description">{{ detail.description }}</pre>
           </template>
           <p v-else class="hint">{{ t('issues.detail.noDescription') }}</p>
@@ -275,7 +284,7 @@ function openMarkdownLink(event: MouseEvent): void {
               </p>
               <!-- 詳細本文と同じく lib/markdown.ts のサニタイズ済み HTML のみを渡す -->
               <!-- eslint-disable-next-line vue/no-v-html -->
-              <div v-if="showMarkdown" class="comment-body markdown-body" @click="openMarkdownLink" v-html="renderedComments[index]"></div>
+              <div v-if="showMarkdown" class="comment-body markdown-body" @click="openMarkdownLink" @keydown="openMarkdownLinkByKeyboard" v-html="renderedComments[index]"></div>
               <pre v-else class="comment-body">{{ comment.content }}</pre>
             </li>
           </ol>

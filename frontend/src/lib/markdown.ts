@@ -11,9 +11,9 @@
  *  2. **DOMPurify で二重サニタイズ**: 許可タグ・許可属性を明示した allow-list。
  *     `style` 属性・イベント属性・`img` / SVG / MathML / フォーム系は不許可。
  *  3. **リンクは href を出力しない**: 検証済み(http / https のみ)の URL を
- *     `data-href` に入れ、クリックハンドラから `openExternalURL` で開く。
- *     href が無いため、中クリック・修飾キー・キーボード操作でも WebView 内外への
- *     ネイティブ遷移は起こらない。
+ *     `data-href` に入れ、クリック/Enter キーのハンドラから `openExternalURL` で開く。
+ *     href が無いため、中クリック・修飾キー操作でも WebView 内外へのネイティブ遷移は
+ *     起こらない。キーボード操作は `role="link"` + `tabindex="0"` で明示的に提供する。
  *  4. **`<img>` を一切生成しない**: DOM へ挿入される前(markdown-it のレンダラ段階)で
  *     プレースホルダ文字列へ変換する。挿入後に置換する方式では、置換前に外部への
  *     画像リクエストが発生しうるため採らない。
@@ -114,7 +114,11 @@ md.renderer.rules.link_open = (tokens, idx, options, _env, self) => {
   const href = token.attrGet('href')
   const safe = safeExternalUrl(typeof href === 'string' ? href : '')
   token.attrs = []
-  if (safe) token.attrSet('data-href', safe)
+  if (safe) {
+    token.attrSet('data-href', safe)
+    token.attrSet('role', 'link')
+    token.attrSet('tabindex', '0')
+  }
   return self.renderToken(tokens, idx, options)
 }
 
@@ -170,11 +174,11 @@ const ALLOWED_TAGS = [
 ]
 
 /**
- * 許可属性(設計 §3.2)。`a` の data-href と、コードブロックの言語 class だけ。
- * DOMPurify の allow-list は要素を区別しないため、要素との対応と値の形は
- * 後段のフック(enforceAttributeAllowList)で厳密化する。
+ * 許可属性(設計 §3.2)。`a` の data-href / role / tabindex と、コードブロックの
+ * 言語 class だけ。DOMPurify の allow-list は要素を区別しないため、要素との対応と
+ * 値の形は後段のフック(enforceAttributeAllowList)で厳密化する。
  */
-const ALLOWED_ATTR = ['data-href', 'class']
+const ALLOWED_ATTR = ['data-href', 'class', 'role', 'tabindex']
 
 const SANITIZE_CONFIG: Config = {
   ALLOWED_TAGS,
@@ -198,13 +202,18 @@ const SANITIZE_CONFIG: Config = {
  * DOMPurify の ALLOWED_ATTR は要素を区別しないため、これが無いと
  * `span[data-href]` や任意の値の class が通ってしまう。ここで
  *  - data-href は `a` のみ、かつ検証済み URL と完全一致するものだけ
+ *  - role / tabindex は `a[data-href]` のキーボード操作に必要な固定値だけ
  *  - class は `code`(コードブロックの言語表示)のみ、かつ `language-…` の形だけ
  * に絞り、それ以外の属性はすべて取り除く。
  */
 export function enforceAttributeAllowList(node: Element): void {
   for (const name of node.getAttributeNames()) {
     const value = node.getAttribute(name) ?? ''
-    if (name === 'data-href' && node.tagName === 'A' && safeExternalUrl(value) === value) continue
+    const href = node.getAttribute('data-href') ?? ''
+    const isSafeAnchor = node.tagName === 'A' && href !== '' && safeExternalUrl(href) === href
+    if (name === 'data-href' && isSafeAnchor) continue
+    if (name === 'role' && isSafeAnchor && value === 'link') continue
+    if (name === 'tabindex' && isSafeAnchor && value === '0') continue
     if (name === 'class' && node.tagName === 'CODE' && ALLOWED_CLASS.test(value)) continue
     node.removeAttribute(name)
   }

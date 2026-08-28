@@ -222,14 +222,19 @@ describe('IssueDetailDialog の Markdown 整形表示', () => {
     mounted.unmount()
   })
 
-  it('整形表示のリンクは href を持たず、クリックで既定ブラウザに渡す', () => {
+  it('整形表示のリンクは href を持たず、クリックと Enter で既定ブラウザに渡す', () => {
     const mounted = mountDialog(markdownDetail)
     const anchor = mounted.host.querySelector('a')
 
     expect(anchor).not.toBeNull()
     expect(anchor?.hasAttribute('href')).toBe(false)
+    expect(anchor?.getAttribute('role')).toBe('link')
+    expect(anchor?.getAttribute('tabindex')).toBe('0')
+
     anchor?.click()
-    expect(opened).toEqual(['https://example.com/issue'])
+    anchor?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+    anchor?.dispatchEvent(new KeyboardEvent('keydown', { key: ' ', bubbles: true }))
+    expect(opened).toEqual(['https://example.com/issue', 'https://example.com/issue'])
     mounted.unmount()
   })
 

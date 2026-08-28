@@ -200,9 +200,28 @@ describe('欠陥注入(すべて無害化する)', () => {
     }
 
     expect(attributesAfter('a', 'data-href', 'https://example.com/')).toBe('https://example.com/')
+    expect(attributesAfter('a', 'role', 'link')).toBeNull()
+    expect(attributesAfter('a', 'tabindex', '0')).toBeNull()
     for (const tag of ['span', 'code', 'p']) {
       expect(attributesAfter(tag, 'data-href', 'https://example.com/'), tag).toBeNull()
     }
+
+    const anchor = document.createElement('a')
+    anchor.setAttribute('data-href', 'https://example.com/')
+    anchor.setAttribute('role', 'link')
+    anchor.setAttribute('tabindex', '0')
+    enforceAttributeAllowList(anchor)
+    expect(anchor.getAttribute('role')).toBe('link')
+    expect(anchor.getAttribute('tabindex')).toBe('0')
+
+    const forged = document.createElement('a')
+    forged.setAttribute('data-href', 'javascript:alert(1)')
+    forged.setAttribute('role', 'link')
+    forged.setAttribute('tabindex', '0')
+    enforceAttributeAllowList(forged)
+    expect(forged.getAttribute('data-href')).toBeNull()
+    expect(forged.getAttribute('role')).toBeNull()
+    expect(forged.getAttribute('tabindex')).toBeNull()
   })
 })
 
@@ -234,8 +253,11 @@ describe('リンク(href を出さず data-href に検証済み URL だけを入
     for (const url of ['https://example.com/a', 'http://example.com/b']) {
       const anchor = renderToDom(`[表示](${url})`).querySelector('a')
       expect(anchor?.getAttribute('data-href')).toBe(url)
-      // href は出力しない(中クリック・修飾キー・キーボード操作でも遷移しない)
+      // href は出力しない(中クリック・修飾キー操作でも遷移しない)
       expect(anchor?.hasAttribute('href')).toBe(false)
+      // キーボード操作は href ではなく role + tabindex + keydown ハンドラで提供する
+      expect(anchor?.getAttribute('role')).toBe('link')
+      expect(anchor?.getAttribute('tabindex')).toBe('0')
     }
   })
 
@@ -252,6 +274,8 @@ describe('リンク(href を出さず data-href に検証済み URL だけを入
       const host = renderToDom(source)
       expect(host.querySelector('[data-href]'), source).toBeNull()
       expect(host.querySelector('[href]'), source).toBeNull()
+      expect(host.querySelector('[role]'), source).toBeNull()
+      expect(host.querySelector('[tabindex]'), source).toBeNull()
       // リンクにならなくても本文の文字は失わない
       expect(host.textContent, source).toContain('危険')
     }
@@ -260,7 +284,7 @@ describe('リンク(href を出さず data-href に検証済み URL だけを入
   it('タイトル付きリンクでも余分な属性を出さない', () => {
     const anchor = renderToDom('[表示](https://example.com/ "説明")').querySelector('a')
     expect(anchor?.getAttribute('data-href')).toBe('https://example.com/')
-    expect(anchor?.getAttributeNames().sort()).toEqual(['data-href'])
+    expect(anchor?.getAttributeNames().sort()).toEqual(['data-href', 'role', 'tabindex'])
   })
 })
 
