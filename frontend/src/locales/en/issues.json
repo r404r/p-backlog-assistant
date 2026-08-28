@@ -123,6 +123,8 @@
       "updated": "Updated",
       "parentIssue": "Parent Issue"
     },
+    "maximize": "Maximize",
+    "restore": "Restore",
     "customFields": "Custom fields",
     "description": "Description",
     "noDescription": "(No description)",

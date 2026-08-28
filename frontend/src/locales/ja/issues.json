@@ -123,6 +123,8 @@
       "updated": "更新日時",
       "parentIssue": "親課題"
     },
+    "maximize": "最大化",
+    "restore": "元のサイズに戻す",
     "customFields": "カスタム属性",
     "description": "詳細",
     "noDescription": "(詳細は入力されていません)",

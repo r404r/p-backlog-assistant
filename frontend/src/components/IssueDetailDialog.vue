@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { computed, ref, toRef } from 'vue'
+import { computed, ref, toRef, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { openExternalURL, type IssueDetail } from '../lib/backend'
+import { loadDetailMaximized, saveDetailMaximized } from '../lib/detailMaximized'
 import { formatDateTime } from '../lib/format'
 import {
   isMarkdownRule,
@@ -60,6 +61,48 @@ const commentNote = computed(() => {
 const commentsFetched = computed(() => (props.detail?.commentsFetchedAt ?? '') !== '')
 
 // ---------------------------------------------------------------------------
+// 最大化 / 復元(設計 §3)
+// ---------------------------------------------------------------------------
+
+/** 最大化中か(true の間だけ .modal に maximized クラスが付く) */
+const maximized = ref(false)
+
+/** 最大化トグルボタン(切替後もフォーカスをここへ留める) */
+const maximizeButton = ref<HTMLButtonElement | null>(null)
+
+/**
+ * 保存済みの状態は**ダイアログを開いた時点**で読む。
+ *
+ * このコンポーネントは閉じている間もマウントされたまま(内側を v-if で出し分ける)
+ * なので、開くたびに読み直さないと別ウィンドウ・別画面での変更を取りこぼす。
+ * マウント時点で既に開いている場合にも効くよう immediate で 1 度走らせる。
+ */
+watch(
+  () => props.open,
+  (open) => {
+    if (open) maximized.value = loadDetailMaximized()
+  },
+  { immediate: true },
+)
+
+/** 現在の状態に対する操作の名前(ボタンのラベル・ツールチップに使う) */
+const maximizeLabel = computed(() =>
+  maximized.value ? t('issues.detail.restore') : t('issues.detail.maximize'),
+)
+
+/**
+ * 最大化 / 復元を切り替える(選択は次回以降にも引き継ぐ)。
+ *
+ * ダブルクリック経由で呼ばれたときもフォーカスをトグルボタンへ移し、
+ * キーボード操作の起点をダイアログ内に保つ(フォーカストラップの外へ出さない)。
+ */
+function toggleMaximized(): void {
+  maximized.value = !maximized.value
+  saveDetailMaximized(maximized.value)
+  maximizeButton.value?.focus()
+}
+
+// ---------------------------------------------------------------------------
 // Markdown の整形表示(設計 §3.3)
 // ---------------------------------------------------------------------------
 
@@ -114,129 +157,162 @@ function openMarkdownLink(event: MouseEvent): void {
     <div
       ref="modal"
       class="modal"
+      :class="{ maximized }"
       role="dialog"
       aria-modal="true"
       aria-labelledby="issue-detail-title"
     >
-      <p v-if="detail" class="notice comment-note">{{ commentNote }}</p>
-      <p
-        v-for="(warning, index) in detail?.warnings ?? []"
-        :key="index"
-        class="notice warn comment-note"
-      >
-        {{ warning }}
-      </p>
+      <!-- ヘッダ。最大化中はここを固定し、下の detail-body だけをスクロールさせる -->
+      <div class="detail-header">
+        <p v-if="detail" class="notice comment-note">{{ commentNote }}</p>
+        <p
+          v-for="(warning, index) in detail?.warnings ?? []"
+          :key="index"
+          class="notice warn comment-note"
+        >
+          {{ warning }}
+        </p>
 
-      <h2 id="issue-detail-title" class="detail-title">
-        <span class="detail-key">{{ issueKey }}</span>
-        <span v-if="detail" class="detail-summary">{{ detail.summary }}</span>
-      </h2>
-
-      <p v-if="loading" class="notice">{{ t('common.state.loading') }}</p>
-      <p v-else-if="error" class="error">{{ error }}</p>
-
-      <template v-else-if="detail">
-        <dl class="detail-grid">
-          <dt>{{ t('issues.detail.field.status') }}</dt>
-          <dd>{{ detail.statusName || '-' }}</dd>
-          <dt>{{ t('issues.detail.field.issueType') }}</dt>
-          <dd>{{ detail.issueTypeName || '-' }}</dd>
-          <dt>{{ t('issues.detail.field.priority') }}</dt>
-          <dd>{{ detail.priorityName || '-' }}</dd>
-          <dt>{{ t('issues.detail.field.assignee') }}</dt>
-          <dd>{{ detail.assigneeName || t('issues.value.unset') }}</dd>
-          <dt>{{ t('issues.detail.field.dueDate') }}</dt>
-          <dd>{{ detail.dueDate || '-' }}</dd>
-          <dt>{{ t('issues.detail.field.created') }}</dt>
-          <dd>{{ formatDateTime(detail.created) || '-' }}</dd>
-          <dt>{{ t('issues.detail.field.updated') }}</dt>
-          <dd>{{ formatDateTime(detail.updated) || '-' }}</dd>
-          <dt>{{ t('issues.detail.field.parentIssue') }}</dt>
-          <dd>{{ detail.parentIssueKey || t('issues.value.none') }}</dd>
-        </dl>
-
-        <template v-if="detail.customFields.length > 0">
-          <h3 class="detail-section">{{ t('issues.detail.customFields') }}</h3>
-          <dl class="detail-grid">
-            <template v-for="(field, index) in detail.customFields" :key="index">
-              <dt>{{ field.name }}</dt>
-              <dd>{{ field.value || t('issues.value.unset') }}</dd>
-            </template>
-          </dl>
-        </template>
-
-        <div class="detail-section-head">
-          <h3 class="detail-section">{{ t('issues.detail.description') }}</h3>
-          <!-- 記法設定が Markdown のときだけ「整形表示 / 原文」を選べる
-               (Backlog 記法・判定不能では切替そのものを出さない) -->
-          <div
-            v-if="markdownAvailable"
-            class="view-toggle"
-            role="group"
-            :aria-label="t('issues.detail.view.label')"
+        <div class="detail-title-row">
+          <!-- ダブルクリックでも最大化を切り替える。`.self` により、タイトルの文字
+               (span)やボタンから上がってきたイベントでは発火しない
+               = 文字を選択するためのダブルクリックで誤爆しない -->
+          <h2 id="issue-detail-title" class="detail-title" @dblclick.self="toggleMaximized">
+            <span class="detail-key">{{ issueKey }}</span>
+            <span v-if="detail" class="detail-summary">{{ detail.summary }}</span>
+          </h2>
+          <!-- アクセシブル名は「今できる操作」(最大化 / 元のサイズに戻す)にする。
+               WAI-ARIA APG のボタンパターンでは、aria-pressed のトグルは名前を固定し、
+               名前を操作名へ切り替える場合は aria-pressed を使わない。併用すると
+               「『元のサイズに戻す』が押されている」と伝わって矛盾するため付けない。 -->
+          <button
+            ref="maximizeButton"
+            type="button"
+            class="maximize-toggle"
+            :aria-label="maximizeLabel"
+            :title="maximizeLabel"
+            @click="toggleMaximized"
           >
-            <button type="button" :aria-pressed="markdownView" @click="setMarkdownView(true)">
-              {{ t('issues.detail.view.formatted') }}
-            </button>
-            <button type="button" :aria-pressed="!markdownView" @click="setMarkdownView(false)">
-              {{ t('issues.detail.view.source') }}
-            </button>
-          </div>
+            <!-- 記号は装飾。意味は aria-label / title(最大化 / 元のサイズに戻す)が担う -->
+            <span aria-hidden="true">{{ maximized ? '❐' : '⛶' }}</span>
+          </button>
         </div>
-        <template v-if="detail.description">
-          <!-- v-html に渡すのは lib/markdown.ts で変換 + DOMPurify のサニタイズを
-               必ず通した HTML だけ(設計 §3.2)。原文をそのまま渡してはならない -->
-          <!-- eslint-disable-next-line vue/no-v-html -->
-          <div v-if="showMarkdown" class="detail-description markdown-body" @click="openMarkdownLink" v-html="renderedDescription"></div>
-          <pre v-else class="detail-description">{{ detail.description }}</pre>
-        </template>
-        <p v-else class="hint">{{ t('issues.detail.noDescription') }}</p>
+      </div>
 
-        <h3 class="detail-section">{{ t('issues.detail.comments') }}</h3>
-        <p v-if="!commentsFetched" class="hint">{{ t('issues.detail.commentsNotFetched') }}</p>
-        <p v-else-if="detail.comments.length === 0" class="hint">
-          {{ t('issues.detail.noComments') }}
-        </p>
-        <ol v-else class="comment-list">
-          <li v-for="(comment, index) in detail.comments" :key="index" class="comment">
-            <p class="comment-meta">
-              <span class="comment-author">
-                {{ comment.authorName || t('issues.detail.unknownAuthor') }}
-              </span>
-              <span class="comment-date">{{ formatDateTime(comment.created) }}</span>
-            </p>
-            <!-- 詳細本文と同じく lib/markdown.ts のサニタイズ済み HTML のみを渡す -->
+      <div class="detail-body">
+        <p v-if="loading" class="notice">{{ t('common.state.loading') }}</p>
+        <p v-else-if="error" class="error">{{ error }}</p>
+
+        <template v-else-if="detail">
+          <dl class="detail-grid">
+            <dt>{{ t('issues.detail.field.status') }}</dt>
+            <dd>{{ detail.statusName || '-' }}</dd>
+            <dt>{{ t('issues.detail.field.issueType') }}</dt>
+            <dd>{{ detail.issueTypeName || '-' }}</dd>
+            <dt>{{ t('issues.detail.field.priority') }}</dt>
+            <dd>{{ detail.priorityName || '-' }}</dd>
+            <dt>{{ t('issues.detail.field.assignee') }}</dt>
+            <dd>{{ detail.assigneeName || t('issues.value.unset') }}</dd>
+            <dt>{{ t('issues.detail.field.dueDate') }}</dt>
+            <dd>{{ detail.dueDate || '-' }}</dd>
+            <dt>{{ t('issues.detail.field.created') }}</dt>
+            <dd>{{ formatDateTime(detail.created) || '-' }}</dd>
+            <dt>{{ t('issues.detail.field.updated') }}</dt>
+            <dd>{{ formatDateTime(detail.updated) || '-' }}</dd>
+            <dt>{{ t('issues.detail.field.parentIssue') }}</dt>
+            <dd>{{ detail.parentIssueKey || t('issues.value.none') }}</dd>
+          </dl>
+
+          <template v-if="detail.customFields.length > 0">
+            <h3 class="detail-section">{{ t('issues.detail.customFields') }}</h3>
+            <dl class="detail-grid">
+              <template v-for="(field, index) in detail.customFields" :key="index">
+                <dt>{{ field.name }}</dt>
+                <dd>{{ field.value || t('issues.value.unset') }}</dd>
+              </template>
+            </dl>
+          </template>
+
+          <div class="detail-section-head">
+            <h3 class="detail-section">{{ t('issues.detail.description') }}</h3>
+            <!-- 記法設定が Markdown のときだけ「整形表示 / 原文」を選べる
+                 (Backlog 記法・判定不能では切替そのものを出さない) -->
+            <div
+              v-if="markdownAvailable"
+              class="view-toggle"
+              role="group"
+              :aria-label="t('issues.detail.view.label')"
+            >
+              <button type="button" :aria-pressed="markdownView" @click="setMarkdownView(true)">
+                {{ t('issues.detail.view.formatted') }}
+              </button>
+              <button type="button" :aria-pressed="!markdownView" @click="setMarkdownView(false)">
+                {{ t('issues.detail.view.source') }}
+              </button>
+            </div>
+          </div>
+          <template v-if="detail.description">
+            <!-- v-html に渡すのは lib/markdown.ts で変換 + DOMPurify のサニタイズを
+                 必ず通した HTML だけ(設計 §3.2)。原文をそのまま渡してはならない -->
             <!-- eslint-disable-next-line vue/no-v-html -->
-            <div v-if="showMarkdown" class="comment-body markdown-body" @click="openMarkdownLink" v-html="renderedComments[index]"></div>
-            <pre v-else class="comment-body">{{ comment.content }}</pre>
-          </li>
-        </ol>
-        <p v-if="commentsFetched && detail.commentsHistoryOnly > 0" class="hint">
-          {{ t('issues.detail.historyOnly', { count: detail.commentsHistoryOnly }) }}
-        </p>
-        <p v-if="detail.commentsTruncated" class="hint warn">
-          {{ t('issues.detail.commentsTruncated') }}
-        </p>
-        <p class="hint detail-note">{{ detailNote }}</p>
-      </template>
+            <div v-if="showMarkdown" class="detail-description markdown-body" @click="openMarkdownLink" v-html="renderedDescription"></div>
+            <pre v-else class="detail-description">{{ detail.description }}</pre>
+          </template>
+          <p v-else class="hint">{{ t('issues.detail.noDescription') }}</p>
 
-      <p v-if="copyError" class="error detail-error">{{ copyError }}</p>
-      <p v-if="refreshError" class="error detail-error">{{ refreshError }}</p>
+          <h3 class="detail-section">{{ t('issues.detail.comments') }}</h3>
+          <p v-if="!commentsFetched" class="hint">{{ t('issues.detail.commentsNotFetched') }}</p>
+          <p v-else-if="detail.comments.length === 0" class="hint">
+            {{ t('issues.detail.noComments') }}
+          </p>
+          <ol v-else class="comment-list">
+            <li v-for="(comment, index) in detail.comments" :key="index" class="comment">
+              <p class="comment-meta">
+                <span class="comment-author">
+                  {{ comment.authorName || t('issues.detail.unknownAuthor') }}
+                </span>
+                <span class="comment-date">{{ formatDateTime(comment.created) }}</span>
+              </p>
+              <!-- 詳細本文と同じく lib/markdown.ts のサニタイズ済み HTML のみを渡す -->
+              <!-- eslint-disable-next-line vue/no-v-html -->
+              <div v-if="showMarkdown" class="comment-body markdown-body" @click="openMarkdownLink" v-html="renderedComments[index]"></div>
+              <pre v-else class="comment-body">{{ comment.content }}</pre>
+            </li>
+          </ol>
+          <p v-if="commentsFetched && detail.commentsHistoryOnly > 0" class="hint">
+            {{ t('issues.detail.historyOnly', { count: detail.commentsHistoryOnly }) }}
+          </p>
+          <p v-if="detail.commentsTruncated" class="hint warn">
+            {{ t('issues.detail.commentsTruncated') }}
+          </p>
+          <p class="hint detail-note">{{ detailNote }}</p>
+        </template>
+      </div>
 
-      <div class="row buttons detail-buttons">
-        <button type="button" :disabled="refreshing || loading || syncing" @click="$emit('refresh')">
-          {{ refreshing ? t('issues.detail.refreshing') : t('issues.detail.refresh') }}
-        </button>
-        <span v-if="refreshing" class="spinner" aria-hidden="true"></span>
-        <button v-if="canCopy" type="button" @click="$emit('copy')">
-          {{ t('issues.detail.copyUrl') }}
-        </button>
-        <button v-if="canCopy" type="button" @click="$emit('openBrowser')">
-          {{ t('issues.detail.openInBrowser') }}
-        </button>
-        <button ref="closeButton" type="button" @click="$emit('close')">
-          {{ t('common.action.close') }}
-        </button>
+      <!-- フッタ。エラーと操作ボタンは最大化中もスクロールさせず常に見える位置に置く -->
+      <div class="detail-footer">
+        <p v-if="copyError" class="error detail-error">{{ copyError }}</p>
+        <p v-if="refreshError" class="error detail-error">{{ refreshError }}</p>
+
+        <div class="row buttons detail-buttons">
+          <button
+            type="button"
+            :disabled="refreshing || loading || syncing"
+            @click="$emit('refresh')"
+          >
+            {{ refreshing ? t('issues.detail.refreshing') : t('issues.detail.refresh') }}
+          </button>
+          <span v-if="refreshing" class="spinner" aria-hidden="true"></span>
+          <button v-if="canCopy" type="button" @click="$emit('copy')">
+            {{ t('issues.detail.copyUrl') }}
+          </button>
+          <button v-if="canCopy" type="button" @click="$emit('openBrowser')">
+            {{ t('issues.detail.openInBrowser') }}
+          </button>
+          <button ref="closeButton" type="button" @click="$emit('close')">
+            {{ t('common.action.close') }}
+          </button>
+        </div>
       </div>
     </div>
   </div>
@@ -264,6 +340,78 @@ function openMarkdownLink(event: MouseEvent): void {
   overflow: auto;
   box-shadow: 0 8px 24px var(--shadow);
   font-size: 0.9rem;
+  transition:
+    width 0.15s ease,
+    height 0.15s ease;
+}
+
+/*
+ * 最大化(設計 §3)。
+ *
+ * padding・border 込みで寸法を決めるため box-sizing: border-box にし、
+ * ヘッダ・フッタ固定 + 可変領域だけスクロールの flex 縦積みにする。
+ * max-height は 100%(= オーバーレイの内容ボックス)で上書きする。85vh の解除が
+ * 目的だが、none にするとオーバーレイの padding(1rem)の分だけはみ出し得るため、
+ * 幅の max-width: 100% と対にして「必ず画面内に収まる」ことを保証する。
+ */
+.modal.maximized {
+  box-sizing: border-box;
+  width: 96vw;
+  height: 96vh;
+  max-width: 100%;
+  max-height: 100%;
+  /* スクロールは detail-body だけが担当する(モーダル自身は動かさない) */
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+/*
+ * ヘッダ・フッタは「基本は中身なりの高さ、上限を超えたら自分の中でスクロール」。
+ *
+ * ヘッダには件数の決まっていない警告、フッタには折り返し得るエラー文とボタン群が
+ * 入る。両方を縮小不可(flex: 0 0 auto)にすると、狭小ウィンドウ・200% ズームで
+ * 合計高さが画面を超えたときに可変領域が高さ 0 まで潰れ、しかもモーダル自身は
+ * overflow: hidden のため固定領域も読めなくなる(レビュー 1 回目 指摘 1)。
+ * 上限を 40% ずつに切り、超えた分は各領域内のスクロールへ退避させることで、
+ * 可変領域には必ず 20% 以上が残る。
+ */
+.modal.maximized .detail-header {
+  flex: 0 1 auto;
+  min-height: 0;
+  max-height: 40%;
+  overflow-y: auto;
+}
+
+.modal.maximized .detail-footer {
+  flex: 0 1 auto;
+  min-height: 0;
+  max-height: 40%;
+  overflow-y: auto;
+}
+
+/* 可変領域。min-height: 0 が無いと flex 項目が中身の高さまで伸びてスクロールしない */
+.modal.maximized .detail-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+/*
+ * 最大化中は内側の高さ制限を外す。
+ * detail-body のスクロールと本文・コメントのスクロールが重なると
+ * 二重スクロールになり、広げた意味も無くなるため。
+ */
+.modal.maximized .detail-description,
+.modal.maximized .comment-list {
+  max-height: none;
+  overflow: visible;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .modal {
+    transition: none;
+  }
 }
 
 .notice {
@@ -297,6 +445,13 @@ function openMarkdownLink(event: MouseEvent): void {
   margin: 0.5rem 0 0.75rem;
 }
 
+/* タイトルと最大化トグルを 1 行に並べる(トグルは常に右端) */
+.detail-title-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+}
+
 .detail-title {
   display: flex;
   align-items: baseline;
@@ -304,6 +459,41 @@ function openMarkdownLink(event: MouseEvent): void {
   gap: 0.5rem;
   font-size: 1.05rem;
   margin: 0 0 0.75rem;
+  /* 余白部分がダブルクリックの当たり判定になるため、行いっぱいまで広げる */
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* 最大化 / 復元のトグル。押されている(最大化中)ときは塗りで示す */
+.maximize-toggle {
+  flex: 0 0 auto;
+  margin: 0;
+  padding: 0.1rem 0.45rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--surface);
+  color: var(--text-muted);
+  font-size: 0.95rem;
+  line-height: 1.2;
+  cursor: pointer;
+}
+
+.maximize-toggle:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+/* 最大化中であることを見た目でも示す(状態は aria ではなくラベルの文言が伝える) */
+.modal.maximized .maximize-toggle {
+  background: var(--accent-emphasis);
+  border-color: var(--accent-emphasis);
+  color: var(--on-accent);
+}
+
+.modal.maximized .maximize-toggle:hover {
+  background: var(--accent-emphasis-hover);
+  border-color: var(--accent-emphasis-hover);
+  color: var(--on-accent);
 }
 
 .detail-key {
