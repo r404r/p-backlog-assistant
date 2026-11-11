@@ -6,6 +6,11 @@ import {
   STORAGE_MODES,
   type AppVersion,
   type Backend,
+  type WikiQuery,
+  type WikiList,
+  type WikiPage,
+  type WikiSyncResult,
+  type WikiExportEstimate,
   type BulkImportResult,
   type BulkJobRow,
   type BulkJobRowDetail,
@@ -40,6 +45,26 @@ function normalizeStorageMode(value: unknown): StorageMode {
 
 /** Wails が window に注入する Go 側 App メソッド群(実行時参照) */
 export interface WailsApp {
+  ListWikis(profile: string, query: WikiQuery): Promise<WikiList>
+  SyncWikis(
+    profile: string,
+    projectId: number,
+    runId: string,
+  ): Promise<WikiSyncResult>
+  RefreshWiki(
+    profile: string,
+    projectId: number,
+    id: number,
+  ): Promise<WikiPage>
+  PrepareWikiExport(
+    profile: string,
+    projectId: number,
+    subtree: string,
+    syncFirst: boolean,
+    runId: string,
+  ): Promise<WikiExportEstimate>
+  ExportWiki(profile: string, runId: string): Promise<ExportResult>
+  CancelWikiExport(profile: string, runId: string): Promise<void>
   ListProfiles(): Promise<Profile[]>
   SaveProfile(input: ProfileInput): Promise<Profile>
   DeleteProfile(id: string, deleteLocalData: boolean): Promise<void>
@@ -194,6 +219,15 @@ export function createWailsBackend(app: WailsApp): Backend {
   // Go の nil スライス / nil マップは JSON null として届くため、配列・オブジェクトは
   // ここで必ず正規化する(初回起動時の ListProfiles null で画面が真っ白になった実績あり)
   return {
+    listWikis: (profile, query) => app.ListWikis(profile, query),
+    syncWikis: (profile, projectId, runId) =>
+      app.SyncWikis(profile, projectId, runId),
+    refreshWiki: (profile, projectId, id) =>
+      app.RefreshWiki(profile, projectId, id),
+    prepareWikiExport: (profile, projectId, subtree, syncFirst, runId) =>
+      app.PrepareWikiExport(profile, projectId, subtree, syncFirst, runId),
+    exportWiki: (profile, runId) => app.ExportWiki(profile, runId),
+    cancelWikiExport: (profile, runId) => app.CancelWikiExport(profile, runId),
     listProfiles: async () => (await app.ListProfiles()) ?? [],
     saveProfile: (input) => app.SaveProfile(input),
     deleteProfile: (id, deleteLocalData) => app.DeleteProfile(id, deleteLocalData),

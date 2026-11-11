@@ -27,6 +27,7 @@ import jaIssues from '../locales/ja/issues.json'
 import jaSettings from '../locales/ja/settings.json'
 import jaSync from '../locales/ja/sync.json'
 import jaUsers from '../locales/ja/users.json'
+import jaWiki from '../locales/ja/wiki.json'
 
 import enAbout from '../locales/en/about.json'
 import enApp from '../locales/en/app.json'
@@ -36,6 +37,7 @@ import enIssues from '../locales/en/issues.json'
 import enSettings from '../locales/en/settings.json'
 import enSync from '../locales/en/sync.json'
 import enUsers from '../locales/en/users.json'
+import enWiki from '../locales/en/wiki.json'
 
 /** 実際に表示できる言語(モード 'system' はこのどちらかへ解決される) */
 export type Language = 'ja' | 'en'
@@ -53,6 +55,7 @@ export const CATALOG_NAMESPACES = [
   'settings',
   'sync',
   'users',
+  'wiki',
 ] as const
 
 /** 日本語カタログ(正)。名前空間はファイル名と 1 対 1 で対応する */
@@ -65,6 +68,7 @@ const ja = {
   settings: jaSettings,
   sync: jaSync,
   users: jaUsers,
+  wiki: jaWiki,
 }
 
 /** カタログのスキーマ(日本語カタログから導出する) */
@@ -80,6 +84,7 @@ const en: LocaleCatalog = {
   settings: enSettings,
   sync: enSync,
   users: enUsers,
+  wiki: enWiki,
 }
 
 /** 全言語のカタログ。localeCatalog.test.ts はここを読んでキー集合を突き合わせる */

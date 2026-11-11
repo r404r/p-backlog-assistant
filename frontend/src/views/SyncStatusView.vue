@@ -56,6 +56,7 @@ const selectionGuard = useProjectSelectionGuard()
 const DATA_KIND_LABEL_KEYS: Record<string, string> = {
   projects: 'sync.dataKind.projects',
   issues: 'sync.dataKind.issues',
+  wikis: 'sync.dataKind.wikis',
   users: 'sync.dataKind.users',
   teams: 'sync.dataKind.teams',
   project_users: 'sync.dataKind.projectUsers',

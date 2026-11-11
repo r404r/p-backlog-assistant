@@ -19,7 +19,9 @@
     "syncStatus": "Sync Status",
     "syncStatusShort": "Sy",
     "about": "About",
-    "aboutShort": "Ab"
+    "aboutShort": "Ab",
+    "wiki": "Wiki",
+    "wikiShort": "W"
   },
   "fatalError": {
     "title": "An error occurred while displaying this screen",

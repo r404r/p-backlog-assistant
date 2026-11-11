@@ -54,6 +54,8 @@ const CONVERTED_FILES: string[] = [
   'src/views/SettingsView.vue',
   'src/views/SyncStatusView.vue',
   'src/views/UsersView.vue',
+  'src/views/WikiView.vue',
+  'src/components/WikiTree.vue',
 ]
 
 /**

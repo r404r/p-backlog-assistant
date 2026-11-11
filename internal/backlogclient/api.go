@@ -148,6 +148,11 @@ func setIfNotEmpty(v url.Values, key, value string) {
 // raw_json を保持する必要がある取得はこちらを使う。
 // 送信は既存 transport(レート制限・429 リトライ・401/403 正規化・マスク)を経由する。
 func (c *Client) rawGet(ctx context.Context, path string, q url.Values) ([]byte, error) {
+	return c.rawGetChecked(ctx, path, q, false)
+}
+
+// Wiki では HTTP 400 内の機能・操作権限不足も縮退対象として扱う。
+func (c *Client) rawGetChecked(ctx context.Context, path string, q url.Values, wikiPermissions bool) ([]byte, error) {
 	if q == nil {
 		q = url.Values{}
 	}
@@ -169,6 +174,20 @@ func (c *Client) rawGet(ctx context.Context, path string, q url.Values) ([]byte,
 		return nil, fmt.Errorf("%w: GET %s", ErrNotFound, MaskAPIKey(path))
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		if wikiPermissions && resp.StatusCode == http.StatusBadRequest {
+			var envelope struct {
+				Errors []struct {
+					Code int `json:"code"`
+				} `json:"errors"`
+			}
+			if json.Unmarshal(body, &envelope) == nil {
+				for _, e := range envelope.Errors {
+					if e.Code == 2 || e.Code == 5 {
+						return nil, ErrPermissionDenied
+					}
+				}
+			}
+		}
 		// レスポンス本文は課題本文を含み得るためエラーへ載せない
 		return nil, fmt.Errorf("Backlog API がエラーを返しました(HTTP %d): GET %s", resp.StatusCode, MaskAPIKey(path))
 	}

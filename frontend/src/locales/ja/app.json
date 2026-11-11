@@ -19,7 +19,9 @@
     "syncStatus": "同期状態",
     "syncStatusShort": "同",
     "about": "アプリ情報",
-    "aboutShort": "情"
+    "aboutShort": "情",
+    "wiki": "Wiki",
+    "wikiShort": "W"
   },
   "fatalError": {
     "title": "画面の表示中にエラーが発生しました",

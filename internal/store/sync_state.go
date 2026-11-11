@@ -7,6 +7,7 @@ import (
 
 // データ種別(sync_state.data_kind)。
 const (
+	DataKindWikis    = "wikis"
 	DataKindIssues   = "issues"
 	DataKindProjects = "projects"
 	DataKindUsers    = "users"

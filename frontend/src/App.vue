@@ -12,6 +12,7 @@ import {
 } from './lib/sidebarWidth'
 import SettingsView from './views/SettingsView.vue'
 import IssuesView from './views/IssuesView.vue'
+import WikiView from './views/WikiView.vue'
 import BulkUpdateView from './views/BulkUpdateView.vue'
 import UsersView from './views/UsersView.vue'
 import SyncStatusView from './views/SyncStatusView.vue'
@@ -19,7 +20,7 @@ import AboutView from './views/AboutView.vue'
 
 const { t } = useI18n()
 
-type ScreenId = 'settings' | 'issues' | 'bulkUpdate' | 'users' | 'syncStatus' | 'about'
+type ScreenId = 'wiki' | 'settings' | 'issues' | 'bulkUpdate' | 'users' | 'syncStatus' | 'about'
 
 interface Screen {
   id: ScreenId
@@ -35,6 +36,7 @@ interface Screen {
 const screens = computed<Screen[]>(() => [
   { id: 'settings', label: t('app.nav.settings'), short: t('app.nav.settingsShort'), component: SettingsView },
   { id: 'issues', label: t('app.nav.issues'), short: t('app.nav.issuesShort'), component: IssuesView },
+  { id: 'wiki', label: t('app.nav.wiki'), short: t('app.nav.wikiShort'), component: WikiView },
   { id: 'bulkUpdate', label: t('app.nav.bulkUpdate'), short: t('app.nav.bulkUpdateShort'), component: BulkUpdateView },
   { id: 'users', label: t('app.nav.users'), short: t('app.nav.usersShort'), component: UsersView },
   { id: 'syncStatus', label: t('app.nav.syncStatus'), short: t('app.nav.syncStatusShort'), component: SyncStatusView },
