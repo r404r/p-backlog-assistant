@@ -136,6 +136,13 @@ func (c *Client) DownloadWikiAttachment(ctx context.Context, wikiID, attachmentI
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
+		// transport のエラー文には URL が含まれるため、分類だけを引き継ぐ。
+		switch {
+		case errors.Is(err, ErrUnauthorized):
+			return fmt.Errorf("添付の取得に失敗しました(HTTP 401): %w", ErrUnauthorized)
+		case errors.Is(err, ErrPermissionDenied):
+			return fmt.Errorf("添付の取得に失敗しました(HTTP 403): %w", ErrPermissionDenied)
+		}
 		return errors.New("添付の通信に失敗しました")
 	}
 	defer resp.Body.Close()

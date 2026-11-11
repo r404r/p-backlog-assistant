@@ -253,6 +253,11 @@ func ExportWiki(ctx context.Context, o WikiExportOptions, downloader WikiDownloa
 	if _, err := os.Lstat(final); !errors.Is(err, os.ErrNotExist) {
 		return "", errors.New("出力先が既に存在します")
 	}
+	// Windows では開いたルートハンドルがディレクトリの rename を妨げる。
+	// 異常経路の defer は残し、公開前に明示的に閉じる。
+	if err := root.Close(); err != nil {
+		return "", fmt.Errorf("一時ディレクトリを閉じられません: %w", err)
+	}
 	if err := os.Rename(tmp, final); err != nil {
 		return "", err
 	}
@@ -261,5 +266,16 @@ func ExportWiki(ctx context.Context, o WikiExportOptions, downloader WikiDownloa
 
 // WikiSubtree はページ名の成分境界で選択する。類似プレフィックスは含めない。
 func WikiSubtree(name, subtree string) bool {
-	return subtree == "" || name == subtree || strings.HasPrefix(name, subtree+"/")
+	// ツリーと同じく空成分だけを無視する。「.」「..」等の論理名は保持する。
+	split := func(path string) []string { return strings.FieldsFunc(path, func(r rune) bool { return r == '/' }) }
+	pageParts, subtreeParts := split(name), split(subtree)
+	if len(subtreeParts) > len(pageParts) {
+		return false
+	}
+	for i, part := range subtreeParts {
+		if pageParts[i] != part {
+			return false
+		}
+	}
+	return true
 }

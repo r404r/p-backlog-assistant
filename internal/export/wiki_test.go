@@ -146,3 +146,25 @@ func TestWikiExportSubtreeBoundary(t *testing.T) {
 		}
 	}
 }
+
+func TestWikiSubtreeIgnoresEmptyComponents(t *testing.T) {
+	for _, tc := range []struct {
+		name, subtree string
+		want          bool
+	}{
+		{"a//b", "a/b", true},
+		{"a//b/c", "a/b", true},
+		{"/x/y", "x", true},
+		{"a/b", "/a//b/", true},
+		{"a/bc", "a/b", false},
+		{"a//bc", "a/b", false},
+		{"a", "a/b", false},
+		{"a/b", "/", true},
+	} {
+		t.Run(tc.name+" in "+tc.subtree, func(t *testing.T) {
+			if got := WikiSubtree(tc.name, tc.subtree); got != tc.want {
+				t.Fatalf("WikiSubtree(%q, %q) = %v, want %v", tc.name, tc.subtree, got, tc.want)
+			}
+		})
+	}
+}

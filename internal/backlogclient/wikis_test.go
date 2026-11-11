@@ -120,3 +120,32 @@ func TestWikiDownloadInterrupted(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestWikiDownloadPermissionErrors(t *testing.T) {
+	for _, tc := range []struct {
+		status int
+		want   error
+	}{
+		{http.StatusUnauthorized, ErrUnauthorized},
+		{http.StatusForbidden, ErrPermissionDenied},
+	} {
+		t.Run(fmt.Sprint(tc.status), func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(tc.status)
+				fmt.Fprint(w, "private error body")
+			}))
+			defer srv.Close()
+			var dst strings.Builder
+			err := newFakeClient(srv.URL).DownloadWikiAttachment(context.Background(), 1, 2, &dst)
+			if !errors.Is(err, tc.want) || !strings.Contains(err.Error(), fmt.Sprintf("HTTP %d", tc.status)) {
+				t.Fatalf("error = %v, want HTTP %d and %v", err, tc.status, tc.want)
+			}
+			if dst.Len() != 0 {
+				t.Fatal("wrote error body")
+			}
+			if strings.Contains(err.Error(), "DUMMY-KEY") || strings.Contains(err.Error(), srv.URL) || strings.Contains(err.Error(), "private error body") {
+				t.Fatal("error contains request or response details")
+			}
+		})
+	}
+}
