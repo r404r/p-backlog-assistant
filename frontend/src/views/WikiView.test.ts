@@ -5,10 +5,12 @@ import { createMockBackend } from '../lib/backend/mock'
 import type { WikiPage } from '../lib/backend'
 import { activeIssueSync, endIssueSync } from '../lib/syncState'
 import WikiView from './WikiView.vue'
-const holder = vi.hoisted(() => ({ backend: null as unknown }))
+import { wikiMarkdownFixture } from '../../test/fixtures/wikiMarkdownFixture'
+const holder = vi.hoisted(() => ({ backend: null as unknown, openExternal: vi.fn() }))
 vi.mock('../lib/backend', async (original) => ({
   ...(await original<typeof import('../lib/backend')>()),
   getBackend: () => holder.backend,
+  openExternalURL: holder.openExternal,
 }))
 let mounted: MountedApp | undefined
 async function flush() {
@@ -16,6 +18,7 @@ async function flush() {
 }
 afterEach(() => {
   mounted?.unmount()
+  holder.openExternal.mockClear()
   if (activeIssueSync.value) endIssueSync(activeIssueSync.value.runId)
 })
 it('browses cached pages, searches locally and confirms export with sync enabled', async () => {
@@ -24,7 +27,7 @@ it('browses cached pages, searches locally and confirms export with sync enabled
     id: 1,
     projectId: 101,
     name: 'Guide/Start',
-    content: '# Hello\n<script>bad()</script>',
+    content: `# Hello\n<script>bad()</script>\n\n${wikiMarkdownFixture}`,
     created: '',
     updated: 'T1',
     contentUpdated: 'T1',
@@ -87,6 +90,24 @@ it('browses cached pages, searches locally and confirms export with sync enabled
     'Hello',
   )
   expect(mounted.host.querySelector('script')).toBeNull()
+  const preview = mounted.host.querySelector('.wiki-preview.markdown-body')!
+  expect(preview.querySelectorAll('th')).toHaveLength(3)
+  expect(preview.querySelectorAll('td')).toHaveLength(3)
+  expect(preview.querySelector('img, script, input, [href], [src]')).toBeNull()
+  const link = preview.querySelector('a')!
+  link.click()
+  link.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+  link.dispatchEvent(new KeyboardEvent('keydown', { key: ' ', bubbles: true }))
+  expect(holder.openExternal.mock.calls).toEqual([
+    ['https://example.com/guide'], ['https://example.com/guide'],
+  ])
+  const toggle = mounted.host.querySelector<HTMLInputElement>('.wiki-detail input[type="checkbox"]')!
+  toggle.click()
+  await flush()
+  expect(mounted.host.querySelector('pre.wiki-preview')?.textContent).toBe(p.content)
+  toggle.click()
+  await flush()
+  expect(mounted.host.querySelectorAll('.wiki-preview th')).toHaveLength(3)
   const input = mounted.host.querySelector<HTMLInputElement>(
     '[data-testid="wiki-keyword"]',
   )!

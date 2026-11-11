@@ -315,6 +315,10 @@ The API key is not stored in any of the files above; it is stored only in the OS
 4. Projects configured for Markdown support the Formatted view toggle. Backlog or unknown formatting is displayed as source text without conversion. Images are not loaded, and external links open in your default browser. Copy page URL copies a link to the original page.
 5. Fetch latest updates only the selected page and its attachment metadata. It does not advance the project's last sync time. Failed content fetches retain the previous content and are retried on the next sync.
 
+Formatted display is shared by Wiki pages, issue details, and comments. It preserves single line breaks and uses consistent spacing for headings, paragraphs, and lists. Tables have borders; wide tables and code blocks scroll horizontally. For older template tables whose separator row has too few columns, the display fills in the missing separators when the header and the next data row have matching column counts (put a blank line before the table). Source text and exported files remain unchanged.
+
+Image and attachment references (`![image][...]`, `#image(...)`, and `#attach(...)`) remain text rather than becoming images or download links. Task lists display `[ ]` / `[x]` as text and cannot be toggled. Code preserves its original spaces and line breaks without syntax highlighting. Raw HTML is displayed as text and is never executed.
+
 #### Export with attachments
 
 1. Sync before export is on by default. Press Export project, or select a branch in the tree and press Export selected subtree. Search conditions do not limit the export; all pages in the selected subtree are included.

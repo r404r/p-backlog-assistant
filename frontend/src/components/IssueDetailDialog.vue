@@ -573,10 +573,13 @@ function openMarkdownLinkByKeyboard(event: KeyboardEvent): void {
   background: var(--bg-muted);
   font-family: inherit;
   font-size: 0.85rem;
-  white-space: pre-wrap;
   word-break: break-word;
   max-height: 240px;
   overflow: auto;
+}
+
+pre.detail-description {
+  white-space: pre-wrap;
 }
 
 .detail-section-head {
@@ -619,97 +622,6 @@ function openMarkdownLinkByKeyboard(event: KeyboardEvent): void {
   background: var(--accent-emphasis);
   border-color: var(--accent-emphasis);
   color: var(--on-accent);
-}
-
-/* 整形表示した本文。色はすべてトークン経由でダークモードに追従させる */
-.markdown-body {
-  white-space: normal;
-}
-
-.markdown-body :deep(> *:first-child) {
-  margin-top: 0;
-}
-
-.markdown-body :deep(> *:last-child) {
-  margin-bottom: 0;
-}
-
-.markdown-body :deep(h1),
-.markdown-body :deep(h2),
-.markdown-body :deep(h3),
-.markdown-body :deep(h4),
-.markdown-body :deep(h5),
-.markdown-body :deep(h6) {
-  margin: 0.8rem 0 0.4rem;
-  font-size: 0.95rem;
-  line-height: 1.4;
-}
-
-.markdown-body :deep(p) {
-  margin: 0.4rem 0;
-}
-
-.markdown-body :deep(ul),
-.markdown-body :deep(ol) {
-  margin: 0.4rem 0;
-  padding-left: 1.4rem;
-}
-
-.markdown-body :deep(blockquote) {
-  margin: 0.4rem 0;
-  padding: 0.1rem 0.75rem;
-  border-left: 3px solid var(--border);
-  color: var(--text-muted);
-}
-
-.markdown-body :deep(hr) {
-  border: none;
-  border-top: 1px solid var(--border);
-  margin: 0.8rem 0;
-}
-
-.markdown-body :deep(code) {
-  font-family: monospace;
-  font-size: 0.85em;
-  background: var(--bg-hover);
-  border-radius: 3px;
-  padding: 0.05rem 0.25rem;
-}
-
-.markdown-body :deep(pre) {
-  margin: 0.4rem 0;
-  padding: 0.5rem 0.6rem;
-  background: var(--bg-hover);
-  border-radius: 4px;
-  overflow-x: auto;
-}
-
-.markdown-body :deep(pre code) {
-  background: none;
-  padding: 0;
-}
-
-.markdown-body :deep(table) {
-  border-collapse: collapse;
-  margin: 0.4rem 0;
-}
-
-.markdown-body :deep(th),
-.markdown-body :deep(td) {
-  border: 1px solid var(--border);
-  padding: 0.2rem 0.5rem;
-  text-align: left;
-}
-
-.markdown-body :deep(th) {
-  background: var(--bg-hover);
-}
-
-/* リンクは href を持たない(クリックで既定ブラウザへ渡す)ためカーソルを明示する */
-.markdown-body :deep(a[data-href]) {
-  color: var(--accent-fg);
-  text-decoration: underline;
-  cursor: pointer;
 }
 
 .detail-note {
@@ -755,8 +667,11 @@ function openMarkdownLinkByKeyboard(event: KeyboardEvent): void {
   margin: 0;
   font-family: inherit;
   font-size: 0.85rem;
-  white-space: pre-wrap;
   word-break: break-word;
+}
+
+pre.comment-body {
+  white-space: pre-wrap;
 }
 
 .detail-error {
