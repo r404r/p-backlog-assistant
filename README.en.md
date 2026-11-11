@@ -35,6 +35,13 @@ See the [User Guide](docs/USER_GUIDE.en.md) for installation steps, how to use e
 - For projects that use **Markdown formatting**, the description and comments are shown **rendered** (headings, lists, tables, code, links). You can switch between "Formatted" and "Source". Images are not displayed - their URLs are shown as text - and projects that use Backlog formatting keep the previous plain display
 - **Excel export** (selectable columns, up to 1,000,000 matching rows; above that the export fails with an error instead of producing a file). Custom field columns and the parent issue key column can also be selected
 
+### Wiki
+- Sync each project with a dedicated Sync Wiki button, separately from issues. Only new or changed page content is fetched; projects without Wiki show Wiki disabled
+- Browse a hierarchy based on `/`, search page names and content locally (Japanese and multiple words with AND/OR), and view tags, authors, attachments, and the last Wiki sync time
+- Preview Markdown according to the project's formatting rule, view source text, fetch an individual page again, and copy its URL
+- Export a project or selected subtree with page content, attachments, `index.xlsx`, and `manifest.json`. Review counts, size, and estimated time before starting; cancel the export or inspect individual attachment failures in the index
+- Wiki editing and creation are outside this version's scope. Attachment bodies are downloaded during export and are not stored in the database
+
 ### Bulk Update & Add
 
 - Excel template export (existing issues plus `base_updated` for conflict detection, with the project ID embedded to prevent writing to the wrong project). You can **narrow the exported issues with search conditions** (keyword AND / OR, created/updated date range, status, assignee); with no conditions, all issues are exported

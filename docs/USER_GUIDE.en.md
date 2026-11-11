@@ -14,6 +14,7 @@ This is the usage guide for Backlog Assistant, a desktop app that extracts and b
   - [3.3 User Export](#33-user-export)
   - [3.4 Sync Status](#34-sync-status)
   - [3.5 About](#35-about)
+  - [3.6 Wiki](#36-wiki)
 - [4. Rules for filling in the Excel template](#4-rules-for-filling-in-the-excel-template)
 - [5. Data and security](#5-data-and-security)
 - [6. Troubleshooting / FAQ](#6-troubleshooting--faq)
@@ -26,13 +27,15 @@ This is the usage guide for Backlog Assistant, a desktop app that extracts and b
 
 The app caches Backlog issues and user information in a **local SQLite database** and lets you search, filter, and export that cache to Excel. The only screen that writes to Backlog is "Bulk Update & Add"; searching and exporting never change anything in Backlog.
 
-There are three main use cases.
+The main use cases are:
 
 | What you want to do | Screen to use |
 |---|---|
-| Filter issues by conditions and export them to Excel | Issues |
+| Filter issues by conditions and export them to Excel | Wiki | Sync, browse, search, and export Wiki pages with attachments |
+| Issues |
 | Apply edits made in Excel to many issues at once, or add many issues at once | Bulk Update & Add |
 | Export users, teams, and project membership to Excel | User Export |
+| Search, browse, and back up Wiki pages with attachments | Wiki |
 
 ### Requirements
 
@@ -57,7 +60,7 @@ The interface is available in Japanese and English, and you can switch it on the
 
 ### Layout
 
-The sidebar on the left switches between six screens. The `≡` button at the top left collapses the sidebar, and the collapsed state is remembered on the next launch. The current version is shown at the bottom of the sidebar (hidden while collapsed).
+The sidebar on the left switches between seven screens. The `≡` button at the top left collapses the sidebar, and the collapsed state is remembered on the next launch. The current version is shown at the bottom of the sidebar (hidden while collapsed).
 
 Drag the right edge of the sidebar to adjust its width between 140 and 360 px. Dragging it below 120 px collapses it, and dragging right while collapsed expands it again. Double-click the right edge to restore the default width (200 px). The adjusted width is also remembered on the next launch.
 
@@ -301,6 +304,26 @@ Check the version, contact, and license, see where data is stored on this comput
 - **Operation log**: the output path. Attaching it to a bug report speeds up the investigation.
 
 The API key is not stored in any of the files above; it is stored only in the OS keychain.
+
+---
+
+### 3.6 Wiki
+
+1. Open Wiki in the sidebar, choose a project, and press Sync Wiki. Wiki synchronization is manual and separate from automatic issue synchronization. Projects with Wiki turned off (including a missing setting), or without Wiki permission, show Wiki disabled.
+2. The tree uses `/` in page names. Select a page to view its content, tags, creation/update authors and times, and attachment names and sizes. The last Wiki sync time is separate from the issue sync time.
+3. Search page names and content locally. Separate words with standard or full-width spaces, choose All words (AND) or Any word (OR), then press Search or Enter. Japanese and one- or two-character terms are supported. Searching does not call the API.
+4. Projects configured for Markdown support the Formatted view toggle. Backlog or unknown formatting is displayed as source text without conversion. Images are not loaded, and external links open in your default browser. Copy page URL copies a link to the original page.
+5. Fetch latest updates only the selected page and its attachment metadata. It does not advance the project's last sync time. Failed content fetches retain the previous content and are retried on the next sync.
+
+#### Export with attachments
+
+1. Sync before export is on by default. Press Export project, or select a branch in the tree and press Export selected subtree. Search conditions do not limit the export; all pages in the selected subtree are included.
+2. Review the page count, attachment count, total bytes, and estimated time. Actual time depends on your connection and rate limits. Check warnings about unsynced data or missing content. Pages without fetched content are exported as empty files and marked in the index (the Japanese status is “本文未取得”).
+3. Press Start export and choose the destination folder in the OS dialog. The confirmed snapshot is exported to `<projectKey>-wiki-<timestamp>/` (a numeric suffix is added if that folder already exists). Markdown projects use `.md` files under `pages/`; other projects use `.txt`. Attachments are saved under `attachments/<wikiId>/`.
+4. `index.xlsx` and `manifest.json` record page IDs, original names, actual output paths, tags, update times, attachment counts and sizes, content status, and attachment failure reasons. The manifest also includes attachment paths and results, schema version, and app version. Unsafe characters, reserved names, case/normalization collisions, and file/folder collisions are resolved to safe names. Links inside page content are not rewritten.
+5. Attachment redirects are not followed. A 3xx, 4xx, 5xx, interrupted transfer, or size mismatch is recorded as an individual attachment failure while the rest continue. Check the index even after the completion message. You can cancel during preparation or export. Cancellation or an overall failure removes the temporary directory and leaves no incomplete final folder.
+
+Wiki is for browsing and backup in this version. Single-page editing, creation, attachment uploads, and automatic periodic Wiki synchronization are not included.
 
 ---
 

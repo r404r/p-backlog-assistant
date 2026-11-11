@@ -1,6 +1,8 @@
 // Wails外（vite dev・テスト）で使う状態付き開発backend。
 // 疑似データとBackend実装だけを所有し、公開経路は../backend.tsへ委ねる。
 
+import { globalTranslate } from '../format'
+
 import type {
   Backend,
   BulkJobRow,
@@ -659,6 +661,30 @@ export function createMockBackend(): Backend {
   }
 
   return {
+    listWikis: async () => ({ pages: [], disabled: false, lastSyncedAt: '' }),
+    syncWikis: async () => ({
+      mode: 'incremental',
+      fetched: 0,
+      upserted: 0,
+      deleted: 0,
+      warnings: [],
+      durationMs: 0,
+      disabled: false,
+    }),
+    refreshWiki: async () => {
+      throw new Error(globalTranslate('wiki.mockUnavailable'))
+    },
+    prepareWikiExport: async () => ({
+      pages: 0,
+      attachments: 0,
+      bytes: 0,
+      estimatedSeconds: 0,
+      missingContent: 0,
+      lastSyncedAt: '',
+      warnings: [],
+    }),
+    exportWiki: async () => ({ path: '', rows: 0, unverifiable: 0 }),
+    cancelWikiExport: async () => {},
     async listProfiles() {
       await delay(100)
       return profiles.map((p) => ({ ...p }))

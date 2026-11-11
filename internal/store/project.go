@@ -120,6 +120,19 @@ func DeleteProjectsNotIn(ctx context.Context, q dbtx, keepIDs []int64) (int, err
 	if len(keepIDs) > 0 {
 		notIn = " WHERE id NOT IN (" + strings.Join(placeholders, ",") + ")"
 	}
+	if _, err := q.ExecContext(ctx, `DELETE FROM wiki_attachments WHERE wiki_id IN (SELECT id FROM wikis WHERE project_id IN (SELECT id FROM projects`+notIn+`))`, args...); err != nil {
+		return 0, err
+	}
+	if _, err := q.ExecContext(ctx, `DELETE FROM wikis WHERE project_id IN (SELECT id FROM projects`+notIn+`)`, args...); err != nil {
+		return 0, err
+	}
+	metaWhere := ""
+	if len(keepIDs) > 0 {
+		metaWhere = " AND CAST(substr(key,15) AS INTEGER) NOT IN (" + strings.Join(placeholders, ",") + ")"
+	}
+	if _, err := q.ExecContext(ctx, `DELETE FROM meta WHERE key GLOB 'wiki_disabled_*'`+metaWhere, args...); err != nil {
+		return 0, err
+	}
 	res, err := q.ExecContext(ctx, `DELETE FROM projects`+notIn, args...)
 	if err != nil {
 		return 0, err

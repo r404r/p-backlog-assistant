@@ -59,7 +59,9 @@ type clientEntry struct {
 
 // ProfileService は接続プロファイル関連のユースケースを担う。
 type ProfileService struct {
-	cfg *config.Manager
+	cfg         *config.Manager
+	wikiMu      sync.Mutex
+	wikiExports map[string]*wikiExportRun
 	// newClient はテスト差し替え用のファクトリ。
 	newClient func(spaceURL, apiKey string) (connector, error)
 	// removeDB はローカル DB 削除処理(テスト差し替え用)。

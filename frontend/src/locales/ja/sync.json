@@ -7,7 +7,8 @@
     "issues": "課題",
     "users": "ユーザ",
     "teams": "チーム",
-    "projectUsers": "プロジェクト参加ユーザ"
+    "projectUsers": "プロジェクト参加ユーザ",
+    "wikis": "Wiki"
   },
   "project": {
     "whole": "(スペース全体)",

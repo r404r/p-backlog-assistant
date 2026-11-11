@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"testing"
+	"time"
 )
 
 // createLegacyDB は指定バージョンまでのマイグレーションだけを適用した DB を作る
@@ -174,7 +175,7 @@ func TestMigrate_V3ToV4_CoercesUnknownStatus(t *testing.T) {
 	db := createLegacyDB(t, path, 3)
 	seedV3Reference(t, db)
 	mustExec(t, db, `INSERT INTO jobs (id, kind, project_id, source_file, source_hash, created_at, status)
-		VALUES (1, 'bogus-kind', 1, 'bulk.xlsx', 'h', '2026-08-01T00:00:00Z', 'bogus-status')`)
+		VALUES (1, 'bogus-kind', 1, 'bulk.xlsx', 'h', ?, 'bogus-status')`, time.Now().UTC().Format(time.RFC3339))
 	mustExec(t, db, `INSERT INTO job_rows (job_id, row_no, issue_key, payload, base_updated, status, result_issue_id, error)
 		VALUES (1, 2, NULL, NULL, NULL, 'bogus-row-status', NULL, NULL)`)
 	if err := db.Close(); err != nil {

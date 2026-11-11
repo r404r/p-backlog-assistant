@@ -746,7 +746,71 @@ export interface StorageInfo {
 // バックエンドインターフェース
 // ---------------------------------------------------------------------------
 
+export interface WikiAttachment {
+  id: number
+  wikiId: number
+  name: string
+  size: number
+}
+export interface WikiPage {
+  id: number
+  projectId: number
+  name: string
+  content: string
+  created: string
+  updated: string
+  contentUpdated: string
+  contentFetchedAt: string
+  tags: string[]
+  createdUser: string
+  updatedUser: string
+  textFormattingRule: string
+  attachments: WikiAttachment[]
+}
+export interface WikiQuery {
+  projectId: number
+  keyword: string
+  keywordMode: 'and' | 'or'
+}
+export interface WikiList {
+  pages: WikiPage[]
+  disabled: boolean
+  lastSyncedAt: string
+}
+export interface WikiSyncResult extends SyncResult {
+  disabled: boolean
+}
+export interface WikiExportEstimate {
+  pages: number
+  attachments: number
+  bytes: number
+  estimatedSeconds: number
+  missingContent: number
+  lastSyncedAt: string
+  warnings: string[]
+}
+
 export interface Backend {
+  listWikis(profileId: string, query: WikiQuery): Promise<WikiList>
+  syncWikis(
+    profileId: string,
+    projectId: number,
+    runId: string,
+  ): Promise<WikiSyncResult>
+  refreshWiki(
+    profileId: string,
+    projectId: number,
+    id: number,
+  ): Promise<WikiPage>
+  prepareWikiExport(
+    profileId: string,
+    projectId: number,
+    subtree: string,
+    syncFirst: boolean,
+    runId: string,
+  ): Promise<WikiExportEstimate>
+  exportWiki(profileId: string, runId: string): Promise<ExportResult>
+  cancelWikiExport(profileId: string, runId: string): Promise<void>
   /** 保存済みプロファイル一覧を返す */
   listProfiles(): Promise<Profile[]>
   /**

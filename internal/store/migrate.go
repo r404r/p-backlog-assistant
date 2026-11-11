@@ -314,6 +314,17 @@ var migrations = [][]string{
 		END`,
 		`INSERT INTO issues_fts(issues_fts) VALUES ('rebuild')`,
 	},
+	// v7: Wiki 本文・添付メタデータと全文検索。
+	{
+		`CREATE TABLE wikis (id INTEGER PRIMARY KEY, project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE, name TEXT NOT NULL, content TEXT, search_text TEXT, tags_json TEXT NOT NULL DEFAULT '', created TEXT NOT NULL DEFAULT '', updated TEXT NOT NULL DEFAULT '', content_updated TEXT NOT NULL DEFAULT '', raw_json TEXT NOT NULL DEFAULT '', list_fetched_at TEXT, content_fetched_at TEXT, deleted INTEGER NOT NULL DEFAULT 0 CHECK(deleted IN (0,1)))`,
+		`CREATE INDEX idx_wikis_project_name ON wikis(project_id,name)`,
+		`CREATE INDEX idx_wikis_project_updated ON wikis(project_id,updated)`,
+		`CREATE TABLE wiki_attachments (wiki_id INTEGER NOT NULL REFERENCES wikis(id) ON DELETE CASCADE, id INTEGER NOT NULL, name TEXT NOT NULL, size INTEGER NOT NULL DEFAULT 0 CHECK(size >= 0), created TEXT NOT NULL DEFAULT '', raw_json TEXT NOT NULL DEFAULT '', PRIMARY KEY(wiki_id,id))`,
+		`CREATE VIRTUAL TABLE wikis_fts USING fts5(search_text,content='wikis',content_rowid='id',tokenize='trigram')`,
+		`CREATE TRIGGER wikis_fts_ai AFTER INSERT ON wikis BEGIN INSERT INTO wikis_fts(rowid,search_text) VALUES(new.id,new.search_text); END`,
+		`CREATE TRIGGER wikis_fts_ad AFTER DELETE ON wikis BEGIN INSERT INTO wikis_fts(wikis_fts,rowid,search_text) VALUES('delete',old.id,old.search_text); END`,
+		`CREATE TRIGGER wikis_fts_au AFTER UPDATE ON wikis BEGIN INSERT INTO wikis_fts(wikis_fts,rowid,search_text) VALUES('delete',old.id,old.search_text); INSERT INTO wikis_fts(rowid,search_text) VALUES(new.id,new.search_text); END`,
+	},
 }
 
 // LatestSchemaVersion は最新スキーマバージョン。
