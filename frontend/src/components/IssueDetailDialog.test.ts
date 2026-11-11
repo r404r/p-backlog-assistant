@@ -8,6 +8,7 @@ import {
   resetDetailMaximizedStorageState,
 } from '../lib/detailMaximized'
 import { DETAIL_MARKDOWN_KEY } from '../lib/markdown'
+import { wikiMarkdownFixture } from '../../test/fixtures/wikiMarkdownFixture'
 import { mountWithI18n } from '../lib/testing/mountWithI18n'
 import IssueDetailDialog from './IssueDetailDialog.vue'
 
@@ -179,6 +180,28 @@ describe('IssueDetailDialog の Markdown 整形表示', () => {
     // 記法のままの原文は出さない
     expect(mounted.host.textContent).not.toContain('# 詳細の見出し')
     mounted.unmount()
+  })
+
+  it('Wiki と同じ表・改行・安全性を本文とコメントに適用する', () => {
+    const source = `${wikiMarkdownFixture}\n\n<img src=x onerror="alert(1)">`
+    const mounted = mountDialog(detailWith({
+      textFormattingRule: 'markdown',
+      description: source,
+      comments: [{ authorName: '投稿者', content: source, created: '' }],
+    }))
+    try {
+      for (const selector of ['.detail-description', '.comment-body']) {
+        const body = mounted.host.querySelector(selector)!
+        expect(body.classList.contains('markdown-body')).toBe(true)
+        expect(body.querySelectorAll('th')).toHaveLength(3)
+        expect(body.querySelectorAll('td')).toHaveLength(3)
+        expect(body.querySelectorAll('p > br')).toHaveLength(3)
+        expect(body.querySelector('pre code')?.textContent).toContain('\n\nconsole.log')
+        expect(body.querySelector('img, script, input, [href], [src], [onerror]')).toBeNull()
+      }
+    } finally {
+      mounted.unmount()
+    }
   })
 
   it('backlog 記法・判定不能のプロジェクトはプレーン表示のまま', () => {

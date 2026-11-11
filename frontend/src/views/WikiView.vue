@@ -519,7 +519,7 @@ async function exportNow() {
 .wiki-detail {
   min-width: 0;
 }
-.wiki-preview {
+.wiki-detail > pre {
   overflow-wrap: anywhere;
   white-space: pre-wrap;
 }

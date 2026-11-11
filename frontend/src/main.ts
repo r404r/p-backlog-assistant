@@ -4,6 +4,7 @@ import {i18n} from './lib/i18n'
 import {initLanguage} from './lib/language'
 import {initTheme} from './lib/theme'
 import './style.css';
+import './markdown.css'
 
 // テーマの初期化はマウント前に 1 回だけ行う(初期化の所有者は main.ts)。
 // prepaint.js が付けた data-theme をここで解決し直して上書きする。

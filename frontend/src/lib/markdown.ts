@@ -18,12 +18,14 @@
  *     プレースホルダ文字列へ変換する。挿入後に置換する方式では、置換前に外部への
  *     画像リクエストが発生しうるため採らない。
  *
- * 対応構文は **CommonMark + table + strikethrough + linkify** に固定する
- * (markdown-it の標準機能のみ。タスクリスト・脚注・絵文字等のプラグインは
+ * 対応構文は **CommonMark + table + strikethrough + linkify** と、区切り列が不足する
+ * 旧テンプレートの表。単一改行は Backlog に合わせて br にする。
+ * (タスクリスト・脚注・絵文字等のプラグインは
  * 対象外)。コードブロックはエスケープ表示のみで、シンタックスハイライトはしない。
  */
 import DOMPurify, { type Config } from 'dompurify'
 import MarkdownIt from 'markdown-it'
+import { useBacklogTables } from './backlogTables'
 
 // ---------------------------------------------------------------------------
 // 記法設定
@@ -88,16 +90,18 @@ export function markdownLinkHref(target: EventTarget | null): string {
 /**
  * markdown-it 本体。
  *
- * 既定プリセット = CommonMark + table + strikethrough。ここに linkify を足した
- * ものが対応構文のすべてで、プラグインは 1 つも読み込まない。
+ * 既定プリセット = CommonMark + table + strikethrough に linkify と改行を追加。
+ * 旧テンプレートの表は useBacklogTables で限定的に補う。外部プラグインは使わない。
  * `html: false` により生 HTML はタグとして解釈されない。
  */
 const md = new MarkdownIt({
   html: false,
   linkify: true,
-  breaks: false,
+  breaks: true,
   typographer: false,
 })
+
+md.use(useBacklogTables)
 
 /** コードブロックの言語名に付く class の接頭辞(許可する class はこの形だけ) */
 const LANG_PREFIX = 'language-'

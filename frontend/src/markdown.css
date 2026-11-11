@@ -1,0 +1,119 @@
+/* Wiki・課題詳細・コメント共通。原文の pre-wrap を整形表示へ持ち込まない。 */
+div.markdown-body {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  line-height: 1.6;
+}
+
+div.markdown-body :is(h1, h2, h3, h4, h5, h6) {
+  margin: 1em 0 0.4em;
+  line-height: 1.35;
+}
+
+div.markdown-body h1 { font-size: 1.6em; }
+div.markdown-body h2 { font-size: 1.35em; }
+div.markdown-body h3 { font-size: 1.15em; }
+div.markdown-body h4 { font-size: 1.05em; }
+div.markdown-body h5 { font-size: 1em; }
+div.markdown-body h6 { font-size: 0.95em; }
+
+.markdown-body p {
+  margin: 0.5em 0;
+}
+
+.markdown-body :is(ul, ol) {
+  margin: 0.5em 0;
+  padding-left: 1.5em;
+}
+
+.markdown-body li + li {
+  margin-top: 0.2em;
+}
+
+.markdown-body li > p {
+  margin: 0;
+}
+
+.markdown-body li > p + p {
+  margin-top: 0.4em;
+}
+
+.markdown-body li > :is(ul, ol) {
+  margin: 0.2em 0;
+}
+
+.markdown-body blockquote {
+  margin: 0.6em 0;
+  padding: 0.1em 0.8em;
+  border-left: 3px solid var(--border);
+  color: var(--text-muted);
+}
+
+.markdown-body hr {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 1em 0;
+}
+
+.markdown-body code {
+  font-family: monospace;
+  font-size: 0.9em;
+  background: var(--bg-hover);
+  border-radius: 3px;
+  padding: 0.05em 0.25em;
+}
+
+.markdown-body pre {
+  margin: 0.6em 0;
+  padding: 0.6em 0.8em;
+  background: var(--bg-hover);
+  border-radius: 4px;
+  overflow-x: auto;
+  white-space: pre;
+  overflow-wrap: normal;
+}
+
+.markdown-body pre code {
+  background: none;
+  padding: 0;
+}
+
+.markdown-body table {
+  display: block;
+  width: max-content;
+  max-width: 100%;
+  overflow-x: auto;
+  border-collapse: collapse;
+  margin: 0.6em 0;
+}
+
+.markdown-body :is(th, td) {
+  border: 1px solid var(--border);
+  padding: 0.3em 0.6em;
+  text-align: left;
+  min-width: 5em;
+}
+
+.markdown-body th {
+  background: var(--bg-hover);
+}
+
+/* href を持たないリンクもクリックと Enter で既定ブラウザへ渡す。 */
+.markdown-body a[data-href] {
+  color: var(--accent-fg);
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.markdown-body a[data-href]:focus-visible {
+  outline: 2px solid var(--accent-fg);
+  outline-offset: 2px;
+}
+
+div.markdown-body > :first-child {
+  margin-top: 0;
+}
+
+div.markdown-body > :last-child {
+  margin-bottom: 0;
+}
