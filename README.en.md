@@ -40,7 +40,8 @@ See the [User Guide](docs/USER_GUIDE.en.md) for installation steps, how to use e
 - Browse a hierarchy based on `/`, search page names and content locally (Japanese and multiple words with AND/OR), and view tags, authors, attachments, and the last Wiki sync time
 - Preview Markdown according to the project's formatting rule, view source text, fetch an individual page again, and copy its URL
 - Export a project or selected subtree with page content, attachments, `index.xlsx`, and `manifest.json`. Review counts, size, and estimated time before starting; cancel the export or inspect individual attachment failures in the index
-- Wiki editing and creation are outside this version's scope. Attachment bodies are downloaded during export and are not stored in the database
+- Edit a single page name and content, or create a page. Switch between text and preview; confirm before leaving unsaved changes. Conflicts offer reload, copy, or explicitly confirmed overwrite. Email notifications default to off
+- Uncertain saves are checked through reads without resending. Uncertain creation attempts remain recorded across restarts to prevent duplicates. Attachment bodies are downloaded during export and are not stored in the database
 
 ### Bulk Update & Add
 

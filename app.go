@@ -18,6 +18,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	wailsruntime "github.com/wailsapp/wails/v2/pkg/runtime"
 
@@ -28,9 +29,12 @@ import (
 
 // App は Wails バインディングの薄い層。ロジックは internal/service に置く。
 type App struct {
-	ctx      context.Context
-	profiles *service.ProfileService
-	initErr  error
+	ctx                 context.Context
+	profiles            *service.ProfileService
+	initErr             error
+	wikiWindowMu        sync.Mutex
+	wikiDirty, wikiBusy bool
+	wikiLanguage        string
 	// log は動作ログ。初期化に失敗した場合は nil のまま(全メソッドが nil セーフ)。
 	log *applog.Logger
 }

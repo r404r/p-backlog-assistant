@@ -21,9 +21,10 @@ type WikiPage struct {
 	Attachments        []store.WikiAttachment `json:"attachments"`
 }
 type WikiList struct {
-	Pages        []WikiPage `json:"pages"`
-	Disabled     bool       `json:"disabled"`
-	LastSyncedAt string     `json:"lastSyncedAt"`
+	Pages              []WikiPage `json:"pages"`
+	Disabled           bool       `json:"disabled"`
+	LastSyncedAt       string     `json:"lastSyncedAt"`
+	TextFormattingRule string     `json:"textFormattingRule"`
 }
 type WikiExportEstimate struct {
 	Pages            int      `json:"pages"`
@@ -80,6 +81,7 @@ func (s *ProfileService) wikiListLocked(ctx context.Context, profile string, f s
 			TextFormattingRule string `json:"textFormattingRule"`
 		}
 		_ = json.Unmarshal([]byte(raw), &project)
+		out.TextFormattingRule = project.TextFormattingRule
 		state, err := store.GetSyncState(ctx, tx, store.DataKindWikis, f.ProjectID)
 		if err != nil {
 			return err

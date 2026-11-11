@@ -15,15 +15,16 @@ import (
 
 // Wiki は一覧・詳細の共通メタデータ。本文は詳細応答のみが持つ。
 type Wiki struct {
-	ID          int64            `json:"id"`
-	ProjectID   int64            `json:"projectId"`
-	Name        string           `json:"name"`
-	Content     string           `json:"content"`
-	Created     string           `json:"created"`
-	Updated     string           `json:"updated"`
-	TagsJSON    string           `json:"tagsJson"`
-	RawJSON     string           `json:"rawJson"`
-	Attachments []WikiAttachment `json:"attachments"`
+	ID            int64            `json:"id"`
+	ProjectID     int64            `json:"projectId"`
+	Name          string           `json:"name"`
+	Content       string           `json:"content"`
+	Created       string           `json:"created"`
+	Updated       string           `json:"updated"`
+	TagsJSON      string           `json:"tagsJson"`
+	RawJSON       string           `json:"rawJson"`
+	CreatedUserID int64            `json:"createdUserId"`
+	Attachments   []WikiAttachment `json:"attachments"`
 }
 type WikiAttachment struct {
 	ID      int64  `json:"id"`
@@ -43,6 +44,9 @@ func parseWiki(body []byte, detail bool) (*Wiki, error) {
 		Updated     string            `json:"updated"`
 		Tags        json.RawMessage   `json:"tags"`
 		Attachments []json.RawMessage `json:"attachments"`
+		CreatedUser struct {
+			ID int64 `json:"id"`
+		} `json:"createdUser"`
 	}
 	if err := json.Unmarshal(body, &raw); err != nil {
 		return nil, errors.New("Wiki 応答を解析できません")
@@ -51,6 +55,7 @@ func parseWiki(body []byte, detail bool) (*Wiki, error) {
 		return nil, errors.New("Wiki 応答が不正です")
 	}
 	p := &Wiki{ID: raw.ID, ProjectID: raw.ProjectID, Name: *raw.Name, Created: raw.Created, Updated: raw.Updated, TagsJSON: string(raw.Tags), RawJSON: string(body), Attachments: []WikiAttachment{}}
+	p.CreatedUserID = raw.CreatedUser.ID
 	if raw.Content != nil {
 		p.Content = *raw.Content
 	}

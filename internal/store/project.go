@@ -137,6 +137,9 @@ func DeleteProjectsNotIn(ctx context.Context, q dbtx, keepIDs []int64) (int, err
 	if err != nil {
 		return 0, err
 	}
+	if _, clearErr := q.ExecContext(ctx, `DELETE FROM meta WHERE key GLOB 'wiki_create_*' AND CAST(substr(key,13) AS INTEGER) NOT IN (SELECT id FROM projects)`); clearErr != nil {
+		return 0, clearErr
+	}
 	n, err := res.RowsAffected()
 	if err != nil {
 		return 0, err

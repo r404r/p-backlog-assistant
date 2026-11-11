@@ -111,8 +111,9 @@ func main() {
 		StartHidden:      true,
 		OnStartup:        startupWithWindowShow(shower, app.startup, windowShowTimeout),
 		// prepaint スクリプトの実行後に発火するため、この時点でテーマは確定している
-		OnDomReady: func(ctx context.Context) { shower.Show(ctx) },
-		OnShutdown: app.shutdown,
+		OnDomReady:    func(ctx context.Context) { shower.Show(ctx) },
+		OnShutdown:    app.shutdown,
+		OnBeforeClose: app.beforeClose,
 		Bind: []interface{}{
 			app,
 		},

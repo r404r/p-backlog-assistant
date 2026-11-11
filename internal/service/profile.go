@@ -62,6 +62,7 @@ type ProfileService struct {
 	cfg         *config.Manager
 	wikiMu      sync.Mutex
 	wikiExports map[string]*wikiExportRun
+	wikiEdits   map[string]*wikiEditSession
 	// newClient はテスト差し替え用のファクトリ。
 	newClient func(spaceURL, apiKey string) (connector, error)
 	// removeDB はローカル DB 削除処理(テスト差し替え用)。

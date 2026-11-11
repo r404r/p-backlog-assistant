@@ -59,6 +59,9 @@ func TestWikiV6UpgradeSearchAndPrune(t *testing.T) {
 		t.Fatalf("deleted search=%v %v", gotRows, err)
 	}
 	// FK 無効でも子の添付と FTS を取り残さない。
+	if err := st.SetMeta("wiki_create_1_example", "private draft"); err != nil {
+		t.Fatal(err)
+	}
 	mustExec(t, st.DB(), `PRAGMA foreign_keys=OFF`)
 	if _, err := DeleteProjectsNotIn(ctx, st.DB(), nil); err != nil {
 		t.Fatal(err)
@@ -69,5 +72,8 @@ func TestWikiV6UpgradeSearchAndPrune(t *testing.T) {
 		if n != 0 {
 			t.Fatal(table, n)
 		}
+	}
+	if marker, err := st.GetMeta("wiki_create_1_example"); err != nil || marker != "" {
+		t.Fatal("pending creation retained", marker, err)
 	}
 }
