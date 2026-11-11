@@ -28,7 +28,7 @@ const { t } = useI18n()
         {{ node.label || t('wiki.unnamed') }}
       </button>
       <WikiTree
-        v-if="node.children.length && !node.pageIds.length"
+        v-if="node.children.length"
         :nodes="node.children"
         :selected-id="selectedId"
         :disabled="disabled"
