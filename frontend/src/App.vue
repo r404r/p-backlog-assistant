@@ -13,6 +13,7 @@ import {
 import SettingsView from './views/SettingsView.vue'
 import IssuesView from './views/IssuesView.vue'
 import WikiView from './views/WikiView.vue'
+import { canLeaveCurrentView } from './lib/navigationGuard'
 import BulkUpdateView from './views/BulkUpdateView.vue'
 import UsersView from './views/UsersView.vue'
 import SyncStatusView from './views/SyncStatusView.vue'
@@ -171,6 +172,11 @@ function resetSidebarWidth(): void {
 // ウィザード表示になる。他画面は接続先プロファイルが無いと何も表示できないため、
 // プロファイル有無に関わらず接続設定を初期表示とする。
 const current = ref<ScreenId>('settings')
+async function navigate(id: ScreenId) {
+  if (id === current.value || !(await canLeaveCurrentView())) return
+  current.value = id
+  fatalError.value = ''
+}
 
 // アプリのバージョン(サイドバーのフッタ表示。取得失敗時は非表示のまま)
 const appVersion = ref('')
@@ -213,7 +219,7 @@ onErrorCaptured((err) => {
             :class="{ active: current === s.id }"
             :title="s.label"
             :aria-label="s.label"
-            @click="((current = s.id), (fatalError = ''))"
+            @click="navigate(s.id)"
           >
             {{ collapsed ? s.short : s.label }}
           </button>

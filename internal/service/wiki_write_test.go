@@ -14,6 +14,7 @@ type wikiWriter struct {
 	*fakeConnector
 	remote                      backlogclient.Wiki
 	getErr                      error
+	listErr                     error
 	writeErr                    error
 	apply                       bool
 	gets, patches, posts, lists int
@@ -27,7 +28,7 @@ func (f *wikiWriter) GetWiki(context.Context, int64) (*backlogclient.Wiki, error
 }
 func (f *wikiWriter) GetWikis(context.Context, int64) ([]backlogclient.Wiki, error) {
 	f.lists++
-	return f.candidates, nil
+	return f.candidates, f.listErr
 }
 func (f *wikiWriter) UpdateWiki(_ context.Context, _ int64, in backlogclient.WikiWrite) (*backlogclient.Wiki, error) {
 	f.patches++
@@ -157,6 +158,8 @@ func TestWikiCreateUncertainMatchesEveryFieldAndNeverResends(t *testing.T) {
 				f.remote.Name = "Other"
 			case "detail failure":
 				f.getErr = errors.New("offline")
+			case "list failure":
+				f.listErr = errors.New("offline")
 			}
 			in := WikiCreateInput{ProjectID: 1, Name: "Guide/New", Content: "new"}
 			r, err := s.CreateWiki(ctx, id, in)
@@ -170,11 +173,62 @@ func TestWikiCreateUncertainMatchesEveryFieldAndNeverResends(t *testing.T) {
 			if mode != "match" {
 				// セッションを捨てても送信前マーカーはローカル DB に残る。
 				s.wikiEdits = nil
+				s.closeStore(id)
 				r, err = s.CreateWiki(ctx, id, in)
 				if err != nil || r.Status != "uncertain" || f.posts != 1 {
 					t.Fatal("resent", r, err, f.posts)
 				}
 			}
 		})
+	}
+}
+
+func TestWikiCreateDoesNotClaimChangedDraftWasSaved(t *testing.T) {
+	s, id, f := wikiWriteSetup(t)
+	ctx := context.Background()
+	f.apply = false
+	f.writeErr = &backlogclient.UncertainError{Op: "create", Err: context.DeadlineExceeded}
+	in := WikiCreateInput{ProjectID: 1, Name: "Guide/New", Content: "first draft"}
+	r, err := s.CreateWiki(ctx, id, in)
+	if err != nil || r.Status != "uncertain" {
+		t.Fatal(r, err)
+	}
+	f.remote.Name = in.Name
+	f.remote.Content = in.Content
+	f.candidates = []backlogclient.Wiki{f.remote}
+	in.Content = "different draft"
+	r, err = s.CreateWiki(ctx, id, in)
+	if err != nil || r.Status != "uncertain" || f.posts != 1 {
+		t.Fatal("changed draft lost or resent", r, err, f.posts)
+	}
+}
+func TestWikiCreateSuccessAndLocalDuplicate(t *testing.T) {
+	s, id, f := wikiWriteSetup(t)
+	ctx := context.Background()
+	in := WikiCreateInput{ProjectID: 1, Name: "Guide/New", Content: "new"}
+	r, err := s.CreateWiki(ctx, id, in)
+	if err != nil || r.Status != "saved" || r.Page.Content != "new" {
+		t.Fatal(r, err)
+	}
+	r, err = s.CreateWiki(ctx, id, in)
+	if err != nil || r.Status != "duplicate" || f.posts != 1 {
+		t.Fatal(r, err, f.posts)
+	}
+}
+func TestWikiSavePreflightFailureAndUnconfirmedOverwrite(t *testing.T) {
+	s, id, f := wikiWriteSetup(t)
+	ctx := context.Background()
+	edit, err := s.BeginWikiEdit(ctx, id, 1, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := WikiSaveInput{Token: edit.Token, Name: "Guide/New", Content: "new", Overwrite: true}
+	if _, err = s.SaveWikiEdit(ctx, id, input); err == nil || f.patches != 0 {
+		t.Fatal("unconfirmed overwrite sent")
+	}
+	input.Overwrite = false
+	f.getErr = errors.New("offline")
+	if _, err = s.SaveWikiEdit(ctx, id, input); err == nil || f.patches != 0 {
+		t.Fatal("preflight failure ignored")
 	}
 }

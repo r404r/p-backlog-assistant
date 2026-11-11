@@ -776,6 +776,7 @@ export interface WikiList {
   pages: WikiPage[]
   disabled: boolean
   lastSyncedAt: string
+  textFormattingRule?: string
 }
 export interface WikiSyncResult extends SyncResult {
   disabled: boolean
@@ -790,7 +791,33 @@ export interface WikiExportEstimate {
   warnings: string[]
 }
 
+export interface WikiEdit {
+  token: string
+  baselineUpdated: string
+  page: WikiPage
+}
+export interface WikiSaveInput {
+  token: string
+  name: string
+  content: string
+  mailNotify: boolean
+  overwrite: boolean
+}
+export interface WikiCreateInput {
+  projectId: number
+  name: string
+  content: string
+  mailNotify: boolean
+}
+export interface WikiWriteResult {
+  status: 'saved' | 'conflict' | 'uncertain' | 'not_saved' | 'duplicate'
+  page: WikiPage | null
+}
 export interface Backend {
+  beginWikiEdit(profile: string, projectId: number, id: number): Promise<WikiEdit>
+  saveWikiEdit(profile: string, input: WikiSaveInput): Promise<WikiWriteResult>
+  createWiki(profile: string, input: WikiCreateInput): Promise<WikiWriteResult>
+  setWikiWindowState(dirty: boolean, busy: boolean, language: string): Promise<void>
   listWikis(profileId: string, query: WikiQuery): Promise<WikiList>
   syncWikis(
     profileId: string,

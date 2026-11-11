@@ -3,6 +3,7 @@
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import WikiTree from '../components/WikiTree.vue'
+import WikiEditor from '../components/WikiEditor.vue'
 import {
   getBackend,
   newSyncRunId,
@@ -69,9 +70,50 @@ const cancelRequested = ref(false)
 const runId = ref(''),
   progress = ref<SyncProgress | null>(null)
 const dialog = ref<HTMLElement | null>(null)
+const editor = ref<InstanceType<typeof WikiEditor> | null>(null)
+const projectFormatting = ref('')
+const editing = ref(false), editingId = ref(0), writingBusy = ref(false)
+const editorGeneration = ref(0)
+const editorParents = computed(() => {
+  const paths = new Set<string>()
+  for (const p of pages.value) {
+    const parts = p.name.split('/')
+    for (let i = 1; i <= parts.length; i++) paths.add(parts.slice(0, i).join('/'))
+  }
+  if (selectedPath.value) paths.add(selectedPath.value)
+  return [...paths].sort()
+})
+async function leaveEditor() {
+  if (!editing.value) return true
+  if (!editor.value || !(await editor.value.canLeave())) return false
+  editing.value = false
+  writingBusy.value = false
+  return true
+}
+async function openEditor(create: boolean) {
+  if (locked.value || disabled.value || !selectedProjectId.value || !(await leaveEditor())) return
+  editingId.value = create ? 0 : selectedId.value
+  editorGeneration.value++
+  editing.value = true
+  error.value = notice.value = ''
+}
+async function wikiSaved(page: WikiPage) {
+  editing.value = false
+  writingBusy.value = false
+  // 検索条件を維持する。名前変更で検索から外れても保存済みページは表示する。
+  pages.value = [...pages.value.filter(p => p.id !== page.id), page]
+  selectedId.value = page.id
+  selectedPath.value = page.name
+  notice.value = t('wiki.saved')
+}
+async function changeProject(event: Event) {
+  const select = event.target as HTMLSelectElement
+  if (locked.value || !(await leaveEditor())) { select.value = String(selectedProjectId.value); return }
+  selectedProjectId.value = Number(select.value)
+}
 const dialogOpen = computed(() => estimate.value !== null)
 const locked = computed(
-  () => initializing.value || busy.value || issueSyncRunning.value,
+  () => initializing.value || busy.value || writingBusy.value || issueSyncRunning.value,
 )
 const tree = computed(() => buildWikiTree(pages.value))
 const selected = computed(() =>
@@ -129,6 +171,7 @@ async function load() {
   })
   if (!alive || sequence !== request || pid !== selectedProjectId.value) return
   pages.value = result.pages
+  projectFormatting.value = result.textFormattingRule ?? result.pages[0]?.textFormattingRule ?? ''
   disabled.value = result.disabled
   lastSynced.value = result.lastSyncedAt
   if (!pages.value.some((p) => p.id === selectedId.value)) {
@@ -137,7 +180,7 @@ async function load() {
   }
 }
 async function search() {
-  if (locked.value) return
+  if (locked.value || !(await leaveEditor())) return
   error.value = ''
   try {
     await load()
@@ -149,8 +192,8 @@ function keywordEnter(event: KeyboardEvent) {
   event.preventDefault()
   if (!event.isComposing) void search()
 }
-function select(path: string, id: number) {
-  if (locked.value) return
+async function select(path: string, id: number) {
+  if (locked.value || !(await leaveEditor())) return
   selectedPath.value = path
   selectedId.value = id
   formatted.value = true
@@ -199,7 +242,7 @@ onUnmounted(() => {
   if (estimate.value && !exporting.value) finishRun(runId.value)
 })
 async function sync() {
-  if (locked.value || !selectedProjectId.value) return
+  if (locked.value || !selectedProjectId.value || !(await leaveEditor())) return
   const id = startRun()
   try {
     await runSharedProjectRefresh(profile.value, () =>
@@ -227,7 +270,7 @@ async function sync() {
   }
 }
 async function refresh() {
-  if (locked.value || !selected.value) return
+  if (locked.value || !selected.value || !(await leaveEditor())) return
   const id = startRun()
   try {
     await backend.refreshWiki(
@@ -262,7 +305,7 @@ function openLink(event: MouseEvent | KeyboardEvent) {
   }
 }
 async function prepare(subtree: string) {
-  if (locked.value || !selectedProjectId.value) return
+  if (locked.value || !selectedProjectId.value || !(await leaveEditor())) return
   const id = startRun()
   preparing.value = true
   try {
@@ -332,7 +375,7 @@ async function exportNow() {
     <p v-if="!profile && !initializing">{{ t('wiki.noProfile') }}</p>
     <div class="toolbar">
       <label>{{ t('wiki.project') }}
-        <select v-model="selectedProjectId" :disabled="locked">
+        <select :value="selectedProjectId" :disabled="locked" @change="changeProject">
           <option v-for="p in projects" :key="p.id" :value="p.id">
             {{ p.projectKey }} — {{ p.name }}
           </option>
@@ -366,6 +409,7 @@ async function exportNow() {
       {{ t('wiki.cancel') }}
     </button>
     <div class="toolbar">
+      <button :disabled="locked || disabled || !selectedProjectId" @click="openEditor(true)">{{ t('wiki.newPage') }}</button>
       <label><input v-model="syncFirst" type="checkbox" :disabled="locked" />{{
         t('wiki.syncFirst')
       }}</label>
@@ -394,9 +438,25 @@ async function exportNow() {
     </div>
     <div class="wiki-layout" :class="{ 'panel-collapsed': panelCollapsed }">
       <div class="wiki-content">
-        <article v-if="selected" class="wiki-detail">
+        <WikiEditor
+          v-if="editing"
+          :key="editorGeneration"
+          ref="editor"
+          :profile="profile"
+          :project-id="selectedProjectId"
+          :page-id="editingId"
+          :parent-path="selectedPath"
+          :parents="editorParents"
+          :text-formatting-rule="projectFormatting"
+          @saved="wikiSaved"
+          @cancel="editing = false; writingBusy = false"
+          @error="error = $event"
+          @busy="writingBusy = $event"
+        />
+        <article v-else-if="selected" class="wiki-detail">
           <h2>{{ selected.name }}</h2>
           <div class="toolbar">
+            <button :disabled="locked || disabled" @click="openEditor(false)">{{ t('wiki.edit') }}</button>
             <button :disabled="locked" @click="refresh">
               {{ t('wiki.refresh') }}
             </button><button :disabled="!spaceURL" @click="copy">

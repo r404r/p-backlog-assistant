@@ -76,3 +76,17 @@ func TestWikiInvalidWriteResponseIsUncertain(t *testing.T) {
 		}
 	}
 }
+
+func TestWikiInterruptedResponseIsNotResent(t *testing.T) {
+	calls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		w.Header().Set("Content-Length", "1000")
+		fmt.Fprint(w, `{"id":10`)
+	}))
+	defer srv.Close()
+	_, err := newFakeClient(srv.URL).CreateWiki(context.Background(), 1, WikiWrite{Name: "Guide/New", Content: "sample"})
+	if !IsUncertain(err) || calls != 1 {
+		t.Fatal(err, calls)
+	}
+}

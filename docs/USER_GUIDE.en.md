@@ -327,7 +327,16 @@ Image and attachment references (`![image][...]`, `#image(...)`, and `#attach(..
 4. `index.xlsx` and `manifest.json` record page IDs, original names, actual output paths, tags, update times, attachment counts and sizes, content status, and attachment failure reasons. The manifest also includes attachment paths and results, schema version, and app version. Unsafe characters, reserved names, case/normalization collisions, and file/folder collisions are resolved to safe names. Links inside page content are not rewritten.
 5. Attachment redirects are not followed. A 3xx, 4xx, 5xx, interrupted transfer, or size mismatch is recorded as an individual attachment failure while the rest continue. Check the index even after the completion message. You can cancel during preparation or export. Cancellation or an overall failure removes the temporary directory and leaves no incomplete final folder.
 
-Wiki is for browsing and backup in this version. Single-page editing, creation, attachment uploads, and automatic periodic Wiki synchronization are not included.
+#### Single-page editing and creation
+
+1. Select a page and press Edit. Editing starts only after fetching its latest details successfully. Change its name and content, and switch between Text and Preview. Markdown uses the same sanitized rendering as browsing; Backlog notation is displayed as source. Changing a name containing `/` moves the page in the hierarchy.
+2. Save checks the update time again immediately before writing. If the page changed after editing began, a dialog shows its latest remote name, content, and update information. Choose Discard and reload latest, Copy my content, or Overwrite after confirmation. Copy includes your page name and content. Overwrite requires a separate confirmation. Changes are never silently overwritten when a conflict is detected, although another person's update between the final check and the write cannot be completely prevented.
+3. New page opens a dialog for choosing the parent hierarchy and entering the name and content. With a parent selected, the full name is `parent/child`. Locally cached duplicate names are rejected. If the API rejects an unsynced duplicate or other input, synchronize and inspect the page.
+4. Send email notifications defaults to off for both editing and creation. Leaving an unsaved draft by changing page, project, or screen, cancelling, or quitting requires confirmation. Navigation and quitting are blocked while a request is in progress.
+5. A timeout or other uncertain result is never automatically resent. For editing, the page is fetched again: matching name and content confirm success; a mismatch keeps the draft unsaved and asks you to check before explicitly retrying. If checking also fails, inputs are locked and Check result performs reads only.
+6. Uncertain creation is confirmed only when there is exactly one same-name candidate and its details match the project, name, creator, and content sent. No candidates, multiple candidates, failed reads, or mismatches remain uncertain and never trigger another POST. Use Check result or inspect Backlog. The attempt is recorded before sending and survives application restarts. A different body under the same name also cannot trigger a resend, so use the original name and content when checking after a restart. Check the original page before creating another one under a different name.
+
+Deleting pages, editing tags, uploading attachments, bulk Wiki writes, and automatic periodic Wiki synchronization are not included.
 
 ---
 

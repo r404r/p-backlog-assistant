@@ -661,6 +661,10 @@ export function createMockBackend(): Backend {
   }
 
   return {
+    beginWikiEdit: async () => { throw new Error(globalTranslate('wiki.mockUnavailable')) },
+    saveWikiEdit: async () => { throw new Error(globalTranslate('wiki.mockUnavailable')) },
+    createWiki: async () => { throw new Error(globalTranslate('wiki.mockUnavailable')) },
+    setWikiWindowState: async () => {},
     listWikis: async () => ({ pages: [], disabled: false, lastSyncedAt: '' }),
     syncWikis: async () => ({
       mode: 'incremental',

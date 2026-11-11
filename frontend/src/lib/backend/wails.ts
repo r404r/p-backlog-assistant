@@ -9,6 +9,10 @@ import {
   type WikiQuery,
   type WikiList,
   type WikiPage,
+  type WikiEdit,
+  type WikiSaveInput,
+  type WikiCreateInput,
+  type WikiWriteResult,
   type WikiSyncResult,
   type WikiExportEstimate,
   type BulkImportResult,
@@ -45,6 +49,10 @@ function normalizeStorageMode(value: unknown): StorageMode {
 
 /** Wails が window に注入する Go 側 App メソッド群(実行時参照) */
 export interface WailsApp {
+  BeginWikiEdit(profile: string, projectId: number, id: number): Promise<WikiEdit>
+  SaveWikiEdit(profile: string, input: WikiSaveInput): Promise<WikiWriteResult>
+  CreateWiki(profile: string, input: WikiCreateInput): Promise<WikiWriteResult>
+  SetWikiWindowState(dirty: boolean, busy: boolean, language: string): Promise<void>
   ListWikis(profile: string, query: WikiQuery): Promise<WikiList>
   SyncWikis(
     profile: string,
@@ -219,6 +227,10 @@ export function createWailsBackend(app: WailsApp): Backend {
   // Go の nil スライス / nil マップは JSON null として届くため、配列・オブジェクトは
   // ここで必ず正規化する(初回起動時の ListProfiles null で画面が真っ白になった実績あり)
   return {
+    beginWikiEdit: (profile, projectId, id) => app.BeginWikiEdit(profile, projectId, id),
+    saveWikiEdit: (profile, input) => app.SaveWikiEdit(profile, input),
+    createWiki: (profile, input) => app.CreateWiki(profile, input),
+    setWikiWindowState: (dirty, busy, language) => app.SetWikiWindowState(dirty, busy, language),
     listWikis: (profile, query) => app.ListWikis(profile, query),
     syncWikis: (profile, projectId, runId) =>
       app.SyncWikis(profile, projectId, runId),
