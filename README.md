@@ -149,7 +149,7 @@ E:\BacklogAssistant\                   ← USB メモリなど、実行ファイ
 
 ## 開発
 
-必要環境: Go 1.25+ / Node.js 20.19+(または 22.13+ / 24+)/ Wails CLI v2.13
+必要環境: Go 1.26.x / Node.js 20.19+(または 22.13+ / 24+)/ Wails CLI v2.13
 
 ```sh
 # テスト(全パッケージ)

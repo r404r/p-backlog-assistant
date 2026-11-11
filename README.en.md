@@ -155,7 +155,7 @@ E:\BacklogAssistant\                   <- folder holding the executable (a USB d
 
 ## Development
 
-Requirements: Go 1.25+ / Node.js 20.19+ (or 22.13+ / 24+) / Wails CLI v2.13
+Requirements: Go 1.26.x / Node.js 20.19+ (or 22.13+ / 24+) / Wails CLI v2.13
 
 ```sh
 # Tests (all packages)
