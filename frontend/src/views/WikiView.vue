@@ -59,6 +59,7 @@ const selectedId = ref(0),
 const estimate = ref<WikiExportEstimate | null>(null),
   exporting = ref(false),
   preparing = ref(false)
+const cancelRequested = ref(false)
 const runId = ref(''),
   progress = ref<SyncProgress | null>(null)
 const dialog = ref<HTMLElement | null>(null)
@@ -91,6 +92,7 @@ useModalFocus(dialog, dialogOpen, {
 function startRun() {
   const id = newSyncRunId()
   runId.value = id
+  cancelRequested.value = false
   progress.value = null
   beginIssueSync(profile.value, selectedProjectId.value, id)
   busy.value = true
@@ -262,6 +264,10 @@ async function prepare(subtree: string) {
       await runSharedProjectRefresh(profile.value, () =>
         backend.syncProjects(profile.value),
       )
+    if (!alive || cancelRequested.value) {
+      finishRun(id)
+      return
+    }
     const result = await backend.prepareWikiExport(
       profile.value,
       selectedProjectId.value,
@@ -269,7 +275,7 @@ async function prepare(subtree: string) {
       syncFirst.value,
       id,
     )
-    if (!alive) {
+    if (!alive || cancelRequested.value) {
       await backend.cancelWikiExport(profile.value, id)
       finishRun(id)
       return
@@ -286,6 +292,7 @@ async function prepare(subtree: string) {
   }
 }
 async function cancelExport() {
+  cancelRequested.value = true
   const id = runId.value
   try {
     await backend.cancelWikiExport(profile.value, id)
@@ -298,7 +305,7 @@ async function cancelExport() {
   }
 }
 async function exportNow() {
-  if (!estimate.value || exporting.value) return
+  if (!estimate.value || exporting.value || cancelRequested.value) return
   const id = runId.value
   exporting.value = true
   try {

@@ -140,3 +140,41 @@ it('shows disabled Wiki without triggering a Wiki sync on mount', async () => {
   expect(mounted.host.textContent).toContain('Wiki disabled')
   expect(b.syncWikis).not.toHaveBeenCalled()
 })
+
+it('cancels preparation while a project refresh is still pending', async () => {
+  const b = createMockBackend()
+  b.getActiveProfile = async () => 'p'
+  b.listProfiles = async () => []
+  b.listProjects = async () => [
+    {
+      id: 101,
+      name: 'Sample',
+      projectKey: 'SAMPLE',
+      lastSyncedAt: '',
+      syncStateUnknown: false,
+    },
+  ]
+  b.syncProjects = async () => {}
+  b.listWikis = async () => ({ pages: [], disabled: false, lastSyncedAt: '' })
+  b.prepareWikiExport = vi.fn(b.prepareWikiExport)
+  holder.backend = b
+  mounted = mountWithI18n(WikiView, { locale: 'en' })
+  await flush()
+  let release!: () => void
+  b.syncProjects = () =>
+    new Promise<void>((resolve) => {
+      release = resolve
+    })
+  const button = (text: string) =>
+    Array.from(mounted!.host.querySelectorAll('button')).find(
+      (el) => el.textContent?.trim() === text,
+    )!
+  button('Export project').click()
+  await flush()
+  button('Cancel').click()
+  await flush()
+  release()
+  await flush()
+  expect(b.prepareWikiExport).not.toHaveBeenCalled()
+  expect(activeIssueSync.value).toBeNull()
+})
