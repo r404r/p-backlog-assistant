@@ -36,9 +36,15 @@ import {
   shouldSkipProjectRefreshFor,
 } from '../lib/projectRefresh'
 import { useModalFocus } from '../lib/modalFocus'
+import { loadWikiPanelCollapsed, saveWikiPanelCollapsed } from '../lib/wikiPanel'
 
 const { t } = useI18n()
 const backend = getBackend()
+const panelCollapsed = ref(loadWikiPanelCollapsed())
+function togglePanel() {
+  panelCollapsed.value = !panelCollapsed.value
+  saveWikiPanelCollapsed(panelCollapsed.value)
+}
 const profile = ref(''),
   spaceURL = ref('')
 const projects = ref<Project[]>([]),
@@ -376,30 +382,100 @@ async function exportNow() {
         {{ t('wiki.exportSubtree') }}
       </button>
     </div>
-    <div class="wiki-layout">
-      <aside :aria-label="t('wiki.tree')">
-        <form @submit.prevent="search">
-          <label>{{ t('wiki.keyword')
+    <div class="wiki-panel-toolbar">
+      <button
+        type="button"
+        :aria-expanded="!panelCollapsed"
+        aria-controls="wiki-search-panel"
+        @click="togglePanel"
+      >
+        {{ panelCollapsed ? t('wiki.showPanel') : t('wiki.hidePanel') }}
+      </button>
+    </div>
+    <div class="wiki-layout" :class="{ 'panel-collapsed': panelCollapsed }">
+      <div class="wiki-content">
+        <article v-if="selected" class="wiki-detail">
+          <h2>{{ selected.name }}</h2>
+          <div class="toolbar">
+            <button :disabled="locked" @click="refresh">
+              {{ t('wiki.refresh') }}
+            </button><button :disabled="!spaceURL" @click="copy">
+              {{ t('wiki.copy') }}
+            </button>
+            <label v-if="isMarkdownRule(selected.textFormattingRule)"><input v-model="formatted" type="checkbox" />{{
+              t('wiki.formatted')
+            }}</label>
+          </div>
+          <dl>
+            <dt>{{ t('wiki.tags') }}</dt>
+            <dd>{{ selected.tags.join(', ') }}</dd>
+            <dt>{{ t('wiki.created') }}</dt>
+            <dd>
+              {{ selected.createdUser }} {{ formatDateTime(selected.created) }}
+            </dd>
+            <dt>{{ t('wiki.updated') }}</dt>
+            <dd>
+              {{ selected.updatedUser }} {{ formatDateTime(selected.updated) }}
+            </dd>
+          </dl>
+          <p v-if="!selected.contentFetchedAt">{{ t('wiki.missingBody') }}</p>
+          <p v-else-if="selected.contentUpdated !== selected.updated">
+            {{ t('wiki.staleBody') }}
+          </p>
+          <!-- 既存の markdown-it + DOMPurify の許可リストを再利用する。 -->
+          <!-- eslint-disable vue/no-v-html -->
+          <div
+            v-if="html"
+            class="wiki-preview markdown-body"
+            @click="openLink"
+            @keydown="openLink"
+            v-html="html"
+          />
+          <!-- eslint-enable vue/no-v-html -->
+          <pre v-else class="wiki-preview">{{ selected.content }}</pre>
+          <h3>{{ t('wiki.attachments') }}</h3>
+          <ul>
+            <li v-for="a in selected.attachments" :key="a.id">
+              {{ a.name }} ({{ a.size }} {{ t('wiki.bytes') }})
+            </li>
+          </ul>
+        </article>
+        <p v-else>{{ t('wiki.choosePage') }}</p>
+      </div>
+      <aside
+        id="wiki-search-panel"
+        :hidden="panelCollapsed"
+        :aria-label="t('wiki.panel')"
+      >
+        <h2 class="wiki-panel-title">{{ t('wiki.panel') }}</h2>
+        <form class="wiki-search" @submit.prevent="search">
+          <label class="wiki-keyword">{{ t('wiki.keyword')
           }}<input
             v-model="keyword"
             data-testid="wiki-keyword"
             :disabled="locked"
             @keydown.enter="keywordEnter"
           /></label>
-          <label><input
-            v-model="keywordMode"
-            type="radio"
-            value="and"
-            :disabled="locked"
-          />{{ t('wiki.and') }}</label>
-          <label><input
-            v-model="keywordMode"
-            type="radio"
-            value="or"
-            :disabled="locked"
-          />{{ t('wiki.or') }}</label>
-          <button :disabled="locked">{{ t('wiki.search') }}</button>
+          <fieldset class="wiki-search-modes">
+            <legend>{{ t('wiki.searchMode') }}</legend>
+            <label><input
+              v-model="keywordMode"
+              type="radio"
+              name="wiki-keyword-mode"
+              value="and"
+              :disabled="locked"
+            />{{ t('wiki.and') }}</label>
+            <label><input
+              v-model="keywordMode"
+              type="radio"
+              name="wiki-keyword-mode"
+              value="or"
+              :disabled="locked"
+            />{{ t('wiki.or') }}</label>
+          </fieldset>
+          <button type="submit" :disabled="locked">{{ t('wiki.search') }}</button>
         </form>
+        <h3 class="wiki-tree-title">{{ t('wiki.tree') }}</h3>
         <WikiTree
           :nodes="tree"
           :selected-id="selectedId"
@@ -411,53 +487,6 @@ async function exportNow() {
           {{ t('wiki.subtree', { path: selectedPath }) }}
         </p>
       </aside>
-      <article v-if="selected" class="wiki-detail">
-        <h2>{{ selected.name }}</h2>
-        <div class="toolbar">
-          <button :disabled="locked" @click="refresh">
-            {{ t('wiki.refresh') }}
-          </button><button :disabled="!spaceURL" @click="copy">
-            {{ t('wiki.copy') }}
-          </button>
-          <label v-if="isMarkdownRule(selected.textFormattingRule)"><input v-model="formatted" type="checkbox" />{{
-            t('wiki.formatted')
-          }}</label>
-        </div>
-        <dl>
-          <dt>{{ t('wiki.tags') }}</dt>
-          <dd>{{ selected.tags.join(', ') }}</dd>
-          <dt>{{ t('wiki.created') }}</dt>
-          <dd>
-            {{ selected.createdUser }} {{ formatDateTime(selected.created) }}
-          </dd>
-          <dt>{{ t('wiki.updated') }}</dt>
-          <dd>
-            {{ selected.updatedUser }} {{ formatDateTime(selected.updated) }}
-          </dd>
-        </dl>
-        <p v-if="!selected.contentFetchedAt">{{ t('wiki.missingBody') }}</p>
-        <p v-else-if="selected.contentUpdated !== selected.updated">
-          {{ t('wiki.staleBody') }}
-        </p>
-        <!-- 既存の markdown-it + DOMPurify の許可リストを再利用する。 -->
-        <!-- eslint-disable vue/no-v-html -->
-        <div
-          v-if="html"
-          class="wiki-preview markdown-body"
-          @click="openLink"
-          @keydown="openLink"
-          v-html="html"
-        />
-        <!-- eslint-enable vue/no-v-html -->
-        <pre v-else class="wiki-preview">{{ selected.content }}</pre>
-        <h3>{{ t('wiki.attachments') }}</h3>
-        <ul>
-          <li v-for="a in selected.attachments" :key="a.id">
-            {{ a.name }} ({{ a.size }} {{ t('wiki.bytes') }})
-          </li>
-        </ul>
-      </article>
-      <p v-else>{{ t('wiki.choosePage') }}</p>
     </div>
     <div v-if="estimate" class="wiki-modal-backdrop">
       <div
@@ -508,13 +537,69 @@ async function exportNow() {
 }
 .wiki-layout {
   display: grid;
-  grid-template-columns: minmax(220px, 28%) 1fr;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 20rem);
   gap: 1.5rem;
+}
+.wiki-layout.panel-collapsed {
+  grid-template-columns: minmax(0, 1fr);
+}
+.wiki-panel-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  margin: 0.8rem 0;
 }
 .wiki-layout aside {
   min-width: 0;
-  border-right: 1px solid var(--border);
-  padding-right: 1rem;
+  border-left: 1px solid var(--border);
+  padding-left: 1rem;
+  overflow-wrap: anywhere;
+}
+.wiki-panel-title {
+  font-size: 1rem;
+  margin: 0 0 1rem;
+}
+.wiki-tree-title {
+  font-size: 1rem;
+  margin: 1rem 0 0.5rem;
+}
+.wiki-search,
+.wiki-keyword {
+  display: grid;
+  gap: 0.5rem;
+  min-width: 0;
+}
+.wiki-search {
+  margin-bottom: 1rem;
+}
+.wiki-keyword input {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+}
+.wiki-search-modes {
+  display: grid;
+  gap: 0.4rem;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  min-width: 0;
+}
+.wiki-search-modes legend {
+  margin-bottom: 0.4rem;
+}
+.wiki-search-modes label {
+  display: flex;
+  align-items: baseline;
+  gap: 0.4rem;
+}
+.wiki-search-modes input {
+  flex: 0 0 auto;
+  margin: 0;
+}
+.wiki-content {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  overflow-x: auto;
 }
 .wiki-detail {
   min-width: 0;
@@ -555,12 +640,17 @@ async function exportNow() {
 }
 @media (max-width: 760px) {
   .wiki-layout {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 42%);
+    gap: 0.75rem;
   }
   .wiki-layout aside {
-    border-right: 0;
-    border-bottom: 1px solid var(--border);
-    padding-bottom: 1rem;
+    padding-left: 0.75rem;
+  }
+  .wiki-detail dl {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .wiki-detail dd {
+    margin-bottom: 0.5rem;
   }
 }
 </style>
