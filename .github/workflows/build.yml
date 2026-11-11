@@ -41,8 +41,19 @@ jobs:
           go vet ./internal/...
           go test -count=1 ./internal/...
 
+  test-export-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version: '1.26.x'
+          cache: true
+      - name: Windows のエクスポートテスト
+        run: go test -count=1 ./internal/export/...
+
   build:
-    needs: test
+    needs: [test, test-export-windows]
     strategy:
       fail-fast: false
       matrix:
