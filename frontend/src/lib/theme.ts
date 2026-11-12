@@ -44,8 +44,8 @@ export const THEME_MODES: readonly ThemeMode[] = ['system', 'light', 'dark'] as 
  * 値の一致は styleTokens.test.ts が検査する。
  */
 export const THEME_BACKGROUND_RGB: Record<Theme, [number, number, number]> = {
-  light: [255, 255, 255],
-  dark: [13, 17, 23],
+  light: [248, 245, 236],
+  dark: [15, 15, 15],
 }
 
 /** OS の外観設定を問い合わせるメディアクエリ */
@@ -165,6 +165,7 @@ export function applyTheme(theme: Theme): void {
   const root = document.documentElement
   root.setAttribute('data-theme', theme)
   root.style.colorScheme = theme
+  root.style.backgroundColor = `rgb(${THEME_BACKGROUND_RGB[theme].join(", ")})`
   syncNativeBackground(theme)
 }
 

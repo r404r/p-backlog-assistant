@@ -309,9 +309,7 @@ describe('Pop の形状と配色', () => {
     })
     it(`${name}: 焦点と状態の輪郭は隣接背景に 3:1 を満たす`, () => {
       for (const fg of ['--focus-ring', '--border']) {
-        for (const bg of [...BG_TOKENS, '--frame-bg', '--accent-emphasis', '--warning-bg', '--success-bg', '--danger-bg', '--danger-bg-hover', '--danger-bg-subtle']) {
-          // 黄色の主ボタン上には outline-offset により画布色の隙間がある。
-          if (fg === '--focus-ring' && bg === '--accent-emphasis') continue
+        for (const bg of [...BG_TOKENS, '--frame-bg', '--warning-bg', '--success-bg', '--danger-bg', '--danger-bg-hover', '--danger-bg-subtle']) {
           expect(contrast(tokens.get(fg)!, tokens.get(bg)!), `${fg} / ${bg}`).toBeGreaterThanOrEqual(3)
         }
       }

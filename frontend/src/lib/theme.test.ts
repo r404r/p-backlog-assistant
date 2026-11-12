@@ -698,7 +698,7 @@ describe('prepaint.js(起動時のちらつき対策)', () => {
     expect(runPrepaint({ stored: 'dark', matchMedia: 'light' })).toEqual({
       theme: 'dark',
       colorScheme: 'dark',
-      background: 'rgb(15, 15, 15)',
+      background: '#0f0f0f',
     })
   })
 
@@ -706,7 +706,7 @@ describe('prepaint.js(起動時のちらつき対策)', () => {
     expect(runPrepaint({ stored: 'light', matchMedia: 'dark' })).toEqual({
       theme: 'light',
       colorScheme: 'light',
-      background: 'rgb(248, 245, 236)',
+      background: '#f8f5ec',
     })
   })
 
@@ -727,7 +727,7 @@ describe('prepaint.js(起動時のちらつき対策)', () => {
     expect(runPrepaint({ storageThrows: true, matchMedia: 'dark' })).toEqual({
       theme: 'light',
       colorScheme: 'light',
-      background: 'rgb(248, 245, 236)',
+      background: '#f8f5ec',
     })
   })
 
@@ -735,7 +735,7 @@ describe('prepaint.js(起動時のちらつき対策)', () => {
     expect(runPrepaint({ stored: 'system', matchMedia: 'absent' })).toEqual({
       theme: 'light',
       colorScheme: 'light',
-      background: 'rgb(248, 245, 236)',
+      background: '#f8f5ec',
     })
   })
 
@@ -743,7 +743,7 @@ describe('prepaint.js(起動時のちらつき対策)', () => {
     expect(runPrepaint({ stored: 'system', matchMedia: 'throws' })).toEqual({
       theme: 'light',
       colorScheme: 'light',
-      background: 'rgb(248, 245, 236)',
+      background: '#f8f5ec',
     })
   })
 
@@ -752,7 +752,7 @@ describe('prepaint.js(起動時のちらつき対策)', () => {
       for (const matchMedia of ['dark', 'light', 'absent', 'throws'] as const) {
         for (const storageThrows of [true, false]) {
           const result = runPrepaint({ stored, matchMedia, storageThrows })
-          expect(result.background).toBe(result.theme === 'dark' ? 'rgb(15, 15, 15)' : 'rgb(248, 245, 236)')
+          expect(result.background).toBe(result.theme === 'dark' ? '#0f0f0f' : '#f8f5ec')
         }
       }
     }

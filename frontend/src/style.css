@@ -1,135 +1,129 @@
-/*
- * デザイントークンと基本スタイル。
- *
- * 色は全て意味単位のカスタムプロパティ(トークン)へ集約し、
- * ライトは :root、ダークは :root[data-theme="dark"] で定義する。
- * data-theme はアプリ側(public/prepaint.js と src/lib/theme.ts)が
- * 必ず 'light' | 'dark' のどちらかを確定させて付与するため、
- * ダークの定義を @media (prefers-color-scheme) と二重管理しない。
- *
- * ライト値は「ダークモード対応前の見た目をそのまま維持する」ことを最優先に、
- * 既存のハードコード色をそのまま採用している。用途が違う色は同じ値でも
- * 別トークンに分けてある(例: --bg と --surface、--accent-fg と --accent-emphasis)。
- * 特に「暗い背景の上に置く文字」と「白文字を載せる塗り背景」は
- * 同じ色ではコントラスト(AA)を満たせないため、fg 系と emphasis 系を必ず分ける。
- *
- * トークン集合の一致・未定義参照・色の残存・コントラスト(AA)は
- * src/lib/styleTokens.test.ts が継続的に検査する。
- */
+/* Pop の色・形状を一括定義する。明暗の集合・参照・対比度は静的テストで検査する。 */
 
 :root {
-  /* ネイティブ描画(スクロールバー・フォームコントロール・select のドロップダウン)を追従させる */
   color-scheme: light;
-
-  /* 面 */
-  --bg: #ffffff;
+  --bg: #f8f5ec;
   --surface: #ffffff;
-  --bg-muted: #f6f8fa;
-  --bg-hover: #eaeef2;
-
-  /* 文字 */
-  --text: #1f2328;
-  --text-muted: #57606a;
-  --text-faint: #8c959f;
-
-  /* 罫線・つまみ */
-  --border: #d0d7de;
-  --handle-hover-bg: #bcc7d1;
-
-  /* 強調(リンク・主ボタン) */
-  --accent-fg: #0b5cad;
-  --accent-fg-hover: #094c8f;
-  --accent-emphasis: #0b5cad;
-  --accent-emphasis-hover: #094c8f;
-  --accent-muted: #7fa8cf;
-  --on-accent: #ffffff;
-
-  /* 選択・状態の面 */
-  --nav-active-bg: #dbe9f6;
-  --status-info-bg: #ddebf7;
-  --selection-bg: #eef6ff;
-
-  /* 警告 */
-  --warning-text: #9a6700;
-  --warning-bg: #fff8e1;
-  --warning-border: #e6c96a;
-
-  /* 成功 */
-  --success-text: #1a7f37;
-  --success-bg: #e9f5ec;
-  --success-border: #7fbf90;
-
-  /* エラー */
-  --danger-text: #b52a2a;
-  --danger-emphasis-text: #d1242f;
-  --danger-strong: #8a2420;
-  --danger-bg: #fdeceb;
-  --danger-bg-hover: #fbeaea;
-  --danger-bg-subtle: #fff5f5;
-  --danger-border: #e2a09b;
-  --danger-border-muted: #d0a0a0;
-
-  /* 幕・影(半透明。テーマで暗さだけを変える) */
-  --overlay: rgba(0, 0, 0, 0.35);
-  --shadow: rgba(0, 0, 0, 0.2);
-  --shadow-subtle: rgba(0, 0, 0, 0.15);
+  --bg-muted: #f0ecdf;
+  --bg-hover: #e7e1d1;
+  --text: #20201c;
+  --text-muted: #555249;
+  --text-faint: #625f56;
+  --border: #20201c;
+  --handle-hover-bg: #b4aa91;
+  --accent-fg: #20201c;
+  --accent-fg-hover: #34332c;
+  --accent-emphasis: #f2cf45;
+  --accent-emphasis-hover: #f2cf45;
+  --accent-muted: #d6c685;
+  --on-accent: #20201c;
+  --nav-active-bg: #f7e8a5;
+  --status-info-bg: #ece7d7;
+  --selection-bg: #f9efc9;
+  --warning-text: #765000;
+  --warning-bg: #fff4cd;
+  --warning-border: #94733a;
+  --success-text: #206035;
+  --success-bg: #e5f2e8;
+  --success-border: #548263;
+  --danger-text: #9f2b32;
+  --danger-emphasis-text: #a32630;
+  --danger-strong: #792128;
+  --danger-bg: #fbe7e7;
+  --danger-bg-hover: #f5dddd;
+  --danger-bg-subtle: #fff1ef;
+  --danger-border: #b76568;
+  --danger-border-muted: #c38b8a;
+  --overlay: #00000059;
+  --shadow: #20201c;
+  --frame-bg: #eee7d7;
+  --grid-border: #d5cebd;
+  --focus-ring: #20201c;
+  --floating-shadow-color: #20201c;
+  --radius-ui: 4px;
+  --radius-code: 2px;
+  --radius-circle: 50%;
+  --radius-none: 0;
+  --radius-segment-start: 4px 0 0 4px;
+  --radius-segment-end: 0 4px 4px 0;
+  --shadow-none: none;
+  --shadow-card: 2px 2px 0 var(--shadow);
+  --shadow-menu: 4px 4px 0 var(--floating-shadow-color);
+  --shadow-dialog: 6px 6px 0 var(--floating-shadow-color);
+  --shadow-button-hover: 3px 3px 0 var(--floating-shadow-color);
+  --heading-weight: 800;
+  --subheading-weight: 700;
+  --strong-weight: 700;
+  --border-width: 1px;
+  --divider-width: 2px;
+  --quote-border-width: 4px;
+  --focus-width: 3px;
+  --focus-offset: 3px;
+  --button-lift: -2px;
+  --motion-duration: 120ms;
 }
 
 :root[data-theme="dark"] {
   color-scheme: dark;
-
-  /* 面 */
-  --bg: #0d1117;
-  --surface: #161b22;
-  --bg-muted: #161b22;
-  --bg-hover: #21262d;
-
-  /* 文字 */
-  --text: #e6edf3;
-  --text-muted: #9198a1;
-  --text-faint: #8b949e;
-
-  /* 罫線・つまみ */
-  --border: #30363d;
-  --handle-hover-bg: #3d444d;
-
-  /* 強調(リンク・主ボタン) */
-  --accent-fg: #6cb6ff;
-  --accent-fg-hover: #8cc2ff;
-  --accent-emphasis: #1f6feb;
-  --accent-emphasis-hover: #1158c7;
-  --accent-muted: #2f5787;
-  --on-accent: #ffffff;
-
-  /* 選択・状態の面 */
-  --nav-active-bg: #0f2440;
-  --status-info-bg: #0f2440;
-  --selection-bg: #0e1e33;
-
-  /* 警告 */
-  --warning-text: #d29922;
-  --warning-bg: #27211a;
-  --warning-border: #9e6a03;
-
-  /* 成功 */
-  --success-text: #3fb950;
-  --success-bg: #132a1a;
-  --success-border: #2ea043;
-
-  /* エラー */
-  --danger-text: #f47067;
-  --danger-emphasis-text: #ff7b72;
-  --danger-strong: #ff938a;
-  --danger-bg: #2d1a1c;
-  --danger-bg-hover: #3a2022;
-  --danger-bg-subtle: #231518;
-  --danger-border: #6e2a2f;
-  --danger-border-muted: #5c2326;
-
-  /* 幕・影(暗い地の上では影が見えにくいため幕だけ濃くする) */
-  --overlay: rgba(0, 0, 0, 0.6);
-  --shadow: rgba(0, 0, 0, 0.2);
-  --shadow-subtle: rgba(0, 0, 0, 0.15);
+  --bg: #0f0f0f;
+  --surface: #1c1c1c;
+  --bg-muted: #242424;
+  --bg-hover: #303030;
+  --text: #f6f3e8;
+  --text-muted: #cbc6b8;
+  --text-faint: #b2ad9f;
+  --border: #e9e4d6;
+  --handle-hover-bg: #625d50;
+  --accent-fg: #f6f3e8;
+  --accent-fg-hover: #ffffff;
+  --accent-emphasis: #f2cf45;
+  --accent-emphasis-hover: #f2cf45;
+  --accent-muted: #716733;
+  --on-accent: #20201c;
+  --nav-active-bg: #38331f;
+  --status-info-bg: #29271f;
+  --selection-bg: #322e20;
+  --warning-text: #f1d478;
+  --warning-bg: #302919;
+  --warning-border: #ae9654;
+  --success-text: #89d5a0;
+  --success-bg: #1c3023;
+  --success-border: #5c9c6d;
+  --danger-text: #ffaba6;
+  --danger-emphasis-text: #ffb9b2;
+  --danger-strong: #ffd0c9;
+  --danger-bg: #371f23;
+  --danger-bg-hover: #43262a;
+  --danger-bg-subtle: #2d1b1f;
+  --danger-border: #ac6866;
+  --danger-border-muted: #8e5b5d;
+  --overlay: #00000099;
+  --shadow: #e9e4d6;
+  --frame-bg: #000000;
+  --grid-border: #514c41;
+  --focus-ring: #f2cf45;
+  --floating-shadow-color: #f2cf45;
+  --radius-ui: 4px;
+  --radius-code: 2px;
+  --radius-circle: 50%;
+  --radius-none: 0;
+  --radius-segment-start: 4px 0 0 4px;
+  --radius-segment-end: 0 4px 4px 0;
+  --shadow-none: none;
+  --shadow-card: 2px 2px 0 var(--shadow);
+  --shadow-menu: 4px 4px 0 var(--floating-shadow-color);
+  --shadow-dialog: 6px 6px 0 var(--floating-shadow-color);
+  --shadow-button-hover: 3px 3px 0 var(--floating-shadow-color);
+  --heading-weight: 800;
+  --subheading-weight: 700;
+  --strong-weight: 700;
+  --border-width: 1px;
+  --divider-width: 2px;
+  --quote-border-width: 4px;
+  --focus-width: 3px;
+  --focus-offset: 3px;
+  --button-lift: -2px;
+  --motion-duration: 120ms;
 }
 
 html,
@@ -156,23 +150,23 @@ body {
 /* 成功・失敗・警告をまとめる結果パネル。複数画面と共通コンポーネントで使用する。 */
 .result {
   margin-top: 0.75rem;
-  border-radius: 4px;
+  border-radius: var(--radius-ui);
   padding: 0.6rem 0.9rem;
   font-size: 0.9rem;
 }
 
 .result.ok {
   background: var(--success-bg);
-  border: 1px solid var(--success-border);
+  border: var(--border-width) solid var(--success-border);
 }
 
 .result.ng {
   background: var(--danger-bg);
-  border: 1px solid var(--danger-border);
+  border: var(--border-width) solid var(--danger-border);
 }
 
 .result-title {
-  font-weight: 600;
+  font-weight: var(--strong-weight);
   margin: 0 0 0.3rem;
 }
 
@@ -189,8 +183,8 @@ body {
 /* メイン画面で共通のボタン。サイドバーのナビゲーションボタンには適用しない。 */
 .content button {
   padding: 0.4rem 0.9rem;
-  border: 1px solid var(--border);
-  border-radius: 4px;
+  border: var(--border-width) solid var(--border);
+  border-radius: var(--radius-ui);
   background: var(--bg-muted);
   color: var(--text);
   font-size: 0.9rem;
@@ -208,7 +202,7 @@ body {
 
 .content button.primary {
   background: var(--accent-emphasis);
-  border-color: var(--accent-emphasis);
+  border-color: var(--border);
   color: var(--on-accent);
 }
 
@@ -217,18 +211,21 @@ body {
 }
 
 .content h1 {
+  font-weight: var(--heading-weight);
   font-size: 1.4rem;
   margin: 0 0 1rem;
 }
 
 .content h2 {
+  font-weight: var(--heading-weight);
   font-size: 1.05rem;
   margin: 0 0 0.75rem;
 }
 
 .content .panel {
-  border: 1px solid var(--border);
-  border-radius: 6px;
+  box-shadow: var(--shadow-card);
+  border: var(--border-width) solid var(--border);
+  border-radius: var(--radius-ui);
   padding: 1rem 1.25rem;
   margin-bottom: 1.25rem;
   background: var(--surface);
@@ -245,4 +242,64 @@ body {
 .content .row.buttons {
   margin-top: 0.75rem;
   margin-bottom: 0;
+}
+
+.content :is(h3, h4, h5, h6) {
+  font-weight: var(--subheading-weight);
+}
+
+.content button.primary {
+  box-shadow: var(--shadow-none);
+  transition: transform var(--motion-duration), box-shadow var(--motion-duration);
+}
+
+.content button.primary:hover:not(:disabled) {
+  transform: translate(var(--button-lift), var(--button-lift));
+  box-shadow: var(--shadow-button-hover);
+}
+
+.content button.primary:active:not(:disabled) {
+  transform: none;
+  box-shadow: var(--shadow-none);
+}
+
+:is(button, input, select, textarea, a, [tabindex]):focus-visible {
+  outline: var(--focus-width) solid var(--focus-ring);
+  outline-offset: var(--focus-offset);
+}
+
+/* データ表の外周と内部罫線を分離する。 */
+.content table {
+  border: var(--border-width) solid var(--border);
+}
+
+.content :is(button.link, button.issue-key, a.link),
+.markdown-body a[data-href] {
+  color: var(--accent-fg);
+  font-weight: var(--strong-weight);
+  text-decoration: underline;
+  text-decoration-color: var(--accent-emphasis);
+  text-decoration-thickness: 3px;
+  text-underline-offset: 3px;
+}
+
+.content :is(button.link, button.issue-key, a.link):hover,
+.markdown-body a[data-href]:hover {
+  color: var(--accent-fg-hover);
+  text-decoration-color: var(--accent-fg-hover);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .content button.primary,
+  .content button.primary:hover:not(:disabled),
+  .content button.primary:active:not(:disabled) {
+    transform: none;
+    transition: none;
+  }
+
+  .content .spinner,
+  .modal {
+    animation: none;
+    transition: none;
+  }
 }

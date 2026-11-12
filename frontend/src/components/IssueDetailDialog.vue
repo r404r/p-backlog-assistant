@@ -341,13 +341,14 @@ function openMarkdownLinkByKeyboard(event: KeyboardEvent): void {
 }
 
 .modal {
+  border: var(--border-width) solid var(--border);
   background: var(--surface);
-  border-radius: 6px;
+  border-radius: var(--radius-ui);
   padding: 1.25rem 1.5rem;
   width: min(720px, 92vw);
   max-height: 85vh;
   overflow: auto;
-  box-shadow: 0 8px 24px var(--shadow);
+  box-shadow: var(--shadow-dialog);
   font-size: 0.9rem;
   transition:
     width 0.15s ease,
@@ -370,6 +371,8 @@ function openMarkdownLinkByKeyboard(event: KeyboardEvent): void {
  * 極端な場合に中身が切れて操作できなくなる。
  */
 .modal.maximized {
+  border-radius: var(--radius-none);
+  box-shadow: var(--shadow-none);
   box-sizing: border-box;
   width: 96vw;
   height: 96vh;
@@ -435,6 +438,8 @@ function openMarkdownLinkByKeyboard(event: KeyboardEvent): void {
  */
 @media (max-height: 30rem) {
   .modal.maximized {
+  border-radius: var(--radius-none);
+  box-shadow: var(--shadow-none);
     display: block;
     height: auto;
   }
@@ -453,8 +458,8 @@ function openMarkdownLinkByKeyboard(event: KeyboardEvent): void {
 
 .notice {
   background: var(--bg-muted);
-  border: 1px solid var(--border);
-  border-radius: 4px;
+  border: var(--border-width) solid var(--border);
+  border-radius: var(--radius-ui);
   padding: 0.5rem 0.75rem;
   font-size: 0.85rem;
   color: var(--text-muted);
@@ -506,8 +511,8 @@ function openMarkdownLinkByKeyboard(event: KeyboardEvent): void {
   flex: 0 0 auto;
   margin: 0;
   padding: 0.1rem 0.45rem;
-  border: 1px solid var(--border);
-  border-radius: 4px;
+  border: var(--border-width) solid var(--border);
+  border-radius: var(--radius-ui);
   background: var(--surface);
   color: var(--text-muted);
   font-size: 0.95rem;
@@ -523,13 +528,13 @@ function openMarkdownLinkByKeyboard(event: KeyboardEvent): void {
 /* 最大化中であることを見た目でも示す(状態は aria ではなくラベルの文言が伝える) */
 .modal.maximized .maximize-toggle {
   background: var(--accent-emphasis);
-  border-color: var(--accent-emphasis);
+  border-color: var(--border);
   color: var(--on-accent);
 }
 
 .modal.maximized .maximize-toggle:hover {
   background: var(--accent-emphasis-hover);
-  border-color: var(--accent-emphasis-hover);
+  border-color: var(--border);
   color: var(--on-accent);
 }
 
@@ -556,7 +561,7 @@ function openMarkdownLinkByKeyboard(event: KeyboardEvent): void {
 }
 
 .detail-grid dt {
-  font-weight: 600;
+  font-weight: var(--strong-weight);
   color: var(--text-muted);
 }
 
@@ -568,8 +573,8 @@ function openMarkdownLinkByKeyboard(event: KeyboardEvent): void {
 .detail-description {
   margin: 0;
   padding: 0.6rem 0.75rem;
-  border: 1px solid var(--border);
-  border-radius: 4px;
+  border: var(--border-width) solid var(--border);
+  border-radius: var(--radius-ui);
   background: var(--bg-muted);
   font-family: inherit;
   font-size: 0.85rem;
@@ -600,7 +605,7 @@ pre.detail-description {
   font-size: 0.75rem;
   padding: 0.15rem 0.6rem;
   margin: 0;
-  border: 1px solid var(--border);
+  border: var(--border-width) solid var(--border);
   background: var(--surface);
   color: var(--text);
   cursor: pointer;
@@ -611,16 +616,16 @@ pre.detail-description {
 }
 
 .view-toggle button:first-child {
-  border-radius: 4px 0 0 4px;
+  border-radius: var(--radius-segment-start);
 }
 
 .view-toggle button:last-child {
-  border-radius: 0 4px 4px 0;
+  border-radius: var(--radius-segment-end);
 }
 
 .view-toggle button[aria-pressed='true'] {
   background: var(--accent-emphasis);
-  border-color: var(--accent-emphasis);
+  border-color: var(--border);
   color: var(--on-accent);
 }
 
@@ -638,8 +643,8 @@ pre.detail-description {
   padding: 0;
   max-height: 16rem;
   overflow-y: auto;
-  border: 1px solid var(--border);
-  border-radius: 4px;
+  border: var(--border-width) solid var(--border);
+  border-radius: var(--radius-ui);
 }
 
 .comment {
@@ -647,7 +652,7 @@ pre.detail-description {
 }
 
 .comment + .comment {
-  border-top: 1px solid var(--border);
+  border-top: var(--border-width) solid var(--border);
 }
 
 .comment-meta {
@@ -660,7 +665,7 @@ pre.detail-description {
 }
 
 .comment-author {
-  font-weight: 600;
+  font-weight: var(--strong-weight);
 }
 
 .comment-body {
@@ -689,7 +694,7 @@ pre.comment-body {
   height: 14px;
   border: 2px solid var(--border);
   border-top-color: var(--accent-fg);
-  border-radius: 50%;
+  border-radius: var(--radius-circle);
   animation: spin 0.8s linear infinite;
 }
 

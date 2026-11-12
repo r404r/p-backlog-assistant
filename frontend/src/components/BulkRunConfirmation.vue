@@ -32,9 +32,9 @@ const { t } = useI18n()
 <style scoped>
 .confirm {
   margin-top: 0.75rem;
-  border: 1px solid var(--warning-border);
+  border: var(--border-width) solid var(--warning-border);
   background: var(--warning-bg);
-  border-radius: 4px;
+  border-radius: var(--radius-ui);
   padding: 0.75rem 0.9rem;
   font-size: 0.9rem;
 }

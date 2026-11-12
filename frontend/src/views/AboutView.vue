@@ -310,7 +310,7 @@ function openLink(url: string): void {
 }
 
 .info dt {
-  font-weight: 600;
+  font-weight: var(--strong-weight);
   color: var(--text-muted);
 }
 
@@ -382,7 +382,7 @@ function openLink(url: string): void {
 
 .db-name {
   display: block;
-  font-weight: 600;
+  font-weight: var(--strong-weight);
 }
 
 .db-path {

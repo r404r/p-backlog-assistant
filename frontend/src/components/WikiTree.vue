@@ -51,7 +51,8 @@ const { t } = useI18n()
   margin: 0.2rem 0;
 }
 .wiki-tree button[aria-pressed='true'] {
-  font-weight: bold;
-  border-color: var(--accent-fg);
+  font-weight: var(--strong-weight);
+  border-color: var(--border);
+  background: var(--selection-bg);
 }
 </style>

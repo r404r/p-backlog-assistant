@@ -169,8 +169,8 @@ function jobRowIssueLabel(row: BulkJobRowDetail): string {
 <style scoped>
 .notice {
   background: var(--bg-muted);
-  border: 1px solid var(--border);
-  border-radius: 4px;
+  border: var(--border-width) solid var(--border);
+  border-radius: var(--radius-ui);
   padding: 0.5rem 0.75rem;
   font-size: 0.85rem;
   color: var(--text-muted);
@@ -197,8 +197,8 @@ button.inline {
 .table-wrap {
   max-height: 420px;
   overflow: auto;
-  border: 1px solid var(--border);
-  border-radius: 4px;
+  border: var(--border-width) solid var(--border);
+  border-radius: var(--radius-ui);
   margin-top: 0.75rem;
 }
 
@@ -210,7 +210,7 @@ table {
 
 th,
 td {
-  border-bottom: 1px solid var(--border);
+  border-bottom: var(--border-width) solid var(--grid-border);
   padding: 0.35rem 0.6rem;
   text-align: left;
   vertical-align: top;
@@ -218,7 +218,7 @@ td {
 
 th {
   background: var(--bg-muted);
-  font-weight: 600;
+  font-weight: var(--strong-weight);
   position: sticky;
   top: 0;
   z-index: 1;
@@ -235,9 +235,9 @@ td.num {
 .badge {
   display: inline-block;
   padding: 0.05rem 0.4rem;
-  border-radius: 999px;
+  border-radius: var(--radius-ui);
   font-size: 0.75rem;
-  border: 1px solid var(--border);
+  border: var(--border-width) solid var(--border);
   background: var(--bg-muted);
 }
 
@@ -249,7 +249,7 @@ td.num {
 
 .badge.sending {
   background: var(--status-info-bg);
-  border-color: var(--accent-muted);
+  border-color: var(--border);
   color: var(--accent-fg);
 }
 
@@ -296,8 +296,8 @@ td.actions button {
 
 .detail-table {
   background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 4px;
+  border: var(--border-width) solid var(--border);
+  border-radius: var(--radius-ui);
   font-size: 0.8rem;
 }
 

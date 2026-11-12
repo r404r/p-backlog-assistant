@@ -274,8 +274,8 @@ onErrorCaptured((err) => {
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
-  background: var(--bg-muted);
-  border-right: 1px solid var(--border);
+  background: var(--frame-bg);
+  border-right: var(--border-width) solid var(--border);
   padding: 1rem 0;
   box-sizing: border-box;
   overflow: hidden;
@@ -319,7 +319,7 @@ onErrorCaptured((err) => {
 
 /* ドラッグ中はカーソルがハンドルから外れてもハイライトを維持する */
 .layout.resizing .resize-handle {
-  background: var(--accent-emphasis);
+  background: var(--border);
 }
 
 /* ドラッグ中の文字列選択・カーソルのちらつきを抑える */
@@ -352,7 +352,7 @@ onErrorCaptured((err) => {
 }
 
 .app-title {
-  font-weight: 700;
+  font-weight: var(--strong-weight);
   font-size: 1rem;
   padding: 0 1rem 1rem;
   color: var(--text);
@@ -396,8 +396,8 @@ onErrorCaptured((err) => {
 
 .sidebar li button.active {
   background: var(--nav-active-bg);
-  font-weight: 600;
-  border-right: 3px solid var(--accent-emphasis);
+  font-weight: var(--strong-weight);
+  border-right: 3px solid var(--border);
 }
 
 /* 残り幅を全て使う。min-width: 0 が無いと中身の広いテーブルで
@@ -426,8 +426,8 @@ onErrorCaptured((err) => {
   margin: 24px;
   padding: 16px 20px;
   /* 罫線にも文字と同じ強調色を使う(変換前からこの色だったため踏襲する) */
-  border: 1px solid var(--danger-emphasis-text);
-  border-radius: 6px;
+  border: var(--border-width) solid var(--danger-emphasis-text);
+  border-radius: var(--radius-ui);
   background: var(--danger-bg-subtle);
   color: var(--text);
 }
@@ -440,8 +440,8 @@ onErrorCaptured((err) => {
   font-family: monospace;
   white-space: pre-wrap;
   background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 4px;
+  border: var(--border-width) solid var(--border);
+  border-radius: var(--radius-ui);
   padding: 8px;
 }
 </style>

@@ -560,16 +560,16 @@ async function runProjectSync() {
 
 .mock-note {
   background: var(--warning-bg);
-  border: 1px solid var(--warning-border);
-  border-radius: 4px;
+  border: var(--border-width) solid var(--warning-border);
+  border-radius: var(--radius-ui);
   padding: 0.5rem 0.75rem;
   font-size: 0.85rem;
 }
 
 .notice {
   background: var(--bg-muted);
-  border: 1px solid var(--border);
-  border-radius: 4px;
+  border: var(--border-width) solid var(--border);
+  border-radius: var(--radius-ui);
   padding: 0.5rem 0.75rem;
   font-size: 0.85rem;
   color: var(--text-muted);
@@ -595,18 +595,18 @@ table {
 
 th,
 td {
-  border: 1px solid var(--border);
+  border: var(--border-width) solid var(--grid-border);
   padding: 0.4rem 0.6rem;
   text-align: left;
 }
 
 th {
   background: var(--bg-muted);
-  font-weight: 600;
+  font-weight: var(--strong-weight);
 }
 
 .row > label {
-  font-weight: 600;
+  font-weight: var(--strong-weight);
   font-size: 0.9rem;
   min-width: 6rem;
 }
@@ -622,8 +622,8 @@ th {
 
 select {
   padding: 0.4rem 0.5rem;
-  border: 1px solid var(--border);
-  border-radius: 4px;
+  border: var(--border-width) solid var(--border);
+  border-radius: var(--radius-ui);
   font-size: 0.9rem;
   background: var(--bg);
   color: var(--text);
@@ -640,7 +640,7 @@ select:disabled {
   height: 14px;
   border: 2px solid var(--border);
   border-top-color: var(--accent-fg);
-  border-radius: 50%;
+  border-radius: var(--radius-circle);
   animation: spin 0.8s linear infinite;
 }
 
@@ -693,7 +693,7 @@ select:disabled {
 }
 .rate-table th,
 .rate-table td {
-  border: 1px solid var(--border);
+  border: var(--border-width) solid var(--border);
   padding: 6px 12px;
   text-align: left;
 }
@@ -702,7 +702,7 @@ select:disabled {
 }
 .rate-low {
   color: var(--danger-emphasis-text);
-  font-weight: 600;
+  font-weight: var(--strong-weight);
 }
 .rate-unknown {
   color: var(--text-muted);

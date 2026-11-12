@@ -46,6 +46,7 @@
     var root = document.documentElement;
     root.setAttribute('data-theme', theme);
     root.style.colorScheme = theme;
+    root.style.backgroundColor = theme === 'dark' ? '#0f0f0f' : '#f8f5ec';
   } catch {
     // ここまで失敗する場合は打つ手が無い(アプリ起動後に theme.ts が再試行する)
   }

@@ -1488,16 +1488,16 @@ async function exportExcel() {
 
 .mock-note {
   background: var(--warning-bg);
-  border: 1px solid var(--warning-border);
-  border-radius: 4px;
+  border: var(--border-width) solid var(--warning-border);
+  border-radius: var(--radius-ui);
   padding: 0.5rem 0.75rem;
   font-size: 0.85rem;
 }
 
 .notice {
   background: var(--bg-muted);
-  border: 1px solid var(--border);
-  border-radius: 4px;
+  border: var(--border-width) solid var(--border);
+  border-radius: var(--radius-ui);
   padding: 0.5rem 0.75rem;
   font-size: 0.85rem;
   color: var(--text-muted);
@@ -1510,7 +1510,7 @@ async function exportExcel() {
 }
 
 .row > label {
-  font-weight: 600;
+  font-weight: var(--strong-weight);
   font-size: 0.9rem;
   min-width: 6rem;
 }
@@ -1533,8 +1533,8 @@ input[type='text'],
 input[type='date'],
 select {
   padding: 0.4rem 0.5rem;
-  border: 1px solid var(--border);
-  border-radius: 4px;
+  border: var(--border-width) solid var(--border);
+  border-radius: var(--radius-ui);
   font-size: 0.9rem;
   background: var(--bg);
   color: var(--text);
@@ -1583,7 +1583,7 @@ button.link {
   height: 14px;
   border: 2px solid var(--border);
   border-top-color: var(--accent-fg);
-  border-radius: 50%;
+  border-radius: var(--radius-circle);
   animation: spin 0.8s linear infinite;
 }
 
@@ -1614,15 +1614,15 @@ button.link {
 
 .summary {
   font-size: 0.9rem;
-  font-weight: 600;
+  font-weight: var(--strong-weight);
   margin: 0 0 0.5rem;
 }
 
 .table-wrap {
   max-height: 420px;
   overflow: auto;
-  border: 1px solid var(--border);
-  border-radius: 4px;
+  border: var(--border-width) solid var(--border);
+  border-radius: var(--radius-ui);
 }
 
 table {
@@ -1633,7 +1633,7 @@ table {
 
 th,
 td {
-  border-bottom: 1px solid var(--border);
+  border-bottom: var(--border-width) solid var(--grid-border);
   padding: 0.35rem 0.6rem;
   text-align: left;
   vertical-align: top;
@@ -1641,7 +1641,7 @@ td {
 
 th {
   background: var(--bg-muted);
-  font-weight: 600;
+  font-weight: var(--strong-weight);
   position: sticky;
   top: 0;
   z-index: 1;
@@ -1724,13 +1724,13 @@ button.copy-icon:hover:not(:disabled) {
   transform: translateX(-50%);
   margin: 0;
   padding: 0.5rem 1rem;
-  border: 1px solid var(--success-border);
-  border-radius: 999px;
+  border: var(--border-width) solid var(--success-border);
+  border-radius: var(--radius-ui);
   background: var(--success-bg);
   color: var(--success-text);
   font-size: 0.85rem;
   white-space: nowrap;
-  box-shadow: 0 4px 12px var(--shadow-subtle);
+  box-shadow: var(--shadow-menu);
   /* 表の固定ヘッダ(z-index: 1)と課題詳細のポップアップ(z-index: 100)より
      手前に出す(ポップアップの「URL をコピー」の結果が隠れないように)。
      クリックは下の要素へ通す */
