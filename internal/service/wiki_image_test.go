@@ -4,6 +4,7 @@ import (
 	"backlog-assistant/internal/backlogclient"
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -16,6 +17,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"backlog-assistant/internal/store"
 )
 
 func TestNormalizeWikiImage(t *testing.T) {
@@ -58,6 +61,7 @@ type imageConnector struct {
 	peak        atomic.Int32
 	entered     chan struct{}
 	release     chan struct{}
+	stream      func(io.Writer) error
 }
 
 func (c *imageConnector) DownloadWikiAttachment(ctx context.Context, wikiID, attachmentID int64, dst io.Writer) error {
@@ -82,6 +86,9 @@ func (c *imageConnector) DownloadWikiAttachment(ctx context.Context, wikiID, att
 	}
 	if c.downloadErr != nil {
 		return c.downloadErr
+	}
+	if c.stream != nil {
+		return c.stream(dst)
 	}
 	_, err := dst.Write(c.data)
 	return err
@@ -293,5 +300,85 @@ func TestWikiImageCancelledCallerDoesNotReadNetwork(t *testing.T) {
 	r, err := s.GetWikiAttachmentImage(ctx, id, in)
 	if err != nil || r.Code != "cancelled" || c.calls.Load() != 0 {
 		t.Fatal(r.Code, err)
+	}
+}
+
+func TestWikiImageConcurrentRequestsWithoutSync(t *testing.T) {
+	s, id, _, in := wikiImageSetup(t)
+	for round := 0; round < 50; round++ {
+		start := make(chan struct{})
+		out := make(chan *WikiImageResult, 2)
+		for _, attachment := range []int64{7, 8} {
+			go func(attachment int64) {
+				<-start
+				input := in
+				input.AttachmentID = attachment
+				r, _ := s.GetWikiAttachmentImage(context.Background(), id, input)
+				out <- r
+			}(attachment)
+		}
+		close(start)
+		for range 2 {
+			r := <-out
+			if r == nil || r.Code != "" {
+				t.Errorf("round %d: unexpected result %+v without sync", round, r)
+			}
+		}
+	}
+	s.CancelWikiImageLoads(id, in.RequestID)
+}
+
+func TestWikiImageStreamStopsAtLimit(t *testing.T) {
+	s, id, c, in := wikiImageSetup(t)
+	const chunkSize = 64 << 10
+	written, attempted := 0, 0
+	var writeErr error
+	c.stream = func(dst io.Writer) error {
+		chunk := make([]byte, chunkSize)
+		for attempted < 64<<20 {
+			attempted += len(chunk)
+			n, err := dst.Write(chunk)
+			written += n
+			if err != nil {
+				writeErr = err
+				return err
+			}
+		}
+		return nil
+	}
+	r, err := s.GetWikiAttachmentImage(context.Background(), id, in)
+	if err != nil || r.Code != "too_large" || !errors.Is(writeErr, errImageLimit) {
+		t.Fatalf("code=%s err=%v writeErr=%v", r.Code, err, writeErr)
+	}
+	if written != wikiImageLimit || attempted != wikiImageLimit+chunkSize {
+		t.Fatalf("stream did not stop at limit: written=%d attempted=%d", written, attempted)
+	}
+}
+
+func TestWikiImageLocalAttachmentRejectedWithoutNetwork(t *testing.T) {
+	s, id, c, in := wikiImageSetup(t)
+	ctx := context.Background()
+	st, err := s.storeForProfile(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 要求IDと同名の添付を別Wikiへ移し、要求Wikiには別IDの添付だけを残す。
+	err = st.WithTx(ctx, func(tx *sql.Tx) error {
+		if err := store.UpsertWikiList(ctx, tx, &store.Wiki{ID: 11, ProjectID: 1, Name: "Other", Updated: "T1", TagsJSON: "[]", RawJSON: `{}`}, "now"); err != nil {
+			return err
+		}
+		_, err := tx.ExecContext(ctx, `UPDATE wiki_attachments SET wiki_id=11 WHERE wiki_id=10 AND id=7`)
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	beforeGets, beforeCalls := c.gets, c.calls.Load()
+	r, err := s.GetWikiAttachmentImage(ctx, id, in)
+	if err != nil || r.Code != "not_own_attachment" {
+		t.Fatalf("code=%s err=%v", r.Code, err)
+	}
+	if c.gets != beforeGets || c.calls.Load() != beforeCalls {
+		t.Fatal("local rejection made a detail or download request")
 	}
 }

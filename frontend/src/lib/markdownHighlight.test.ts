@@ -8,6 +8,7 @@ describe('固定言語のWorker高亮',()=>{
   const host=document.createElement('div');host.innerHTML=doc.render({highlights:new Map([[0,highlightCode(source+'\n',language)]])})
   expect(host.querySelector('code')?.textContent).toBe(source+'\n')
   expect(host.querySelector('code span')).not.toBeNull()
+  expect(host.querySelector('code span[class^="md-syntax-"]')).not.toBeNull()
   expect(host.querySelector('img,script,[src],[style]')).toBeNull()
  })
  it.each([['js','javascript'],['ts','typescript'],['sh','bash'],['shell','bash'],['py','python'],['html','xml'],['yml','yaml'],['md','markdown'],['unknown','text'],['text','text'],['','text']])('alias %s', (alias,want)=>expect(codeLanguage(alias)).toBe(want))

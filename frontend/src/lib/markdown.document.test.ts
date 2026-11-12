@@ -167,6 +167,30 @@ describe('Wiki の参照解決と閉じた許可リスト', () => {
     expect(d.imageSlots).toHaveLength(0)
     expect(parseHTML(d.render()).querySelector('img,[src]')).toBeNull()
   })
+  it.each(['#image(日本語.png)', '#image(7)', '![image][日本語.png]'])(
+    '他Wikiの同名・同ID添付はローカルで拒否する: %s', (source) => {
+      const d = prepareMarkdownDocument(source, {
+        ...context,
+        page: page({ attachments: [{ id: 7, wikiId: 2, name: '日本語.png', size: 20 }] }),
+      })
+      expect(d.imageSlots).toHaveLength(1)
+      expect(d.imageSlots[0].code).toBe('not_own_attachment')
+      expect(d.imageSlots[0].attachmentId).toBe(0)
+      expect(parseHTML(d.render()).querySelector('img,[src]')).toBeNull()
+    },
+  )
+  it.each(['https://example.invalid/pixel', 'data:image/png;base64,AA', 'javascript:alert(1)'])(
+    '登録済みでもblob以外は要素・属性の両hookで拒否する: %s', (url) => {
+      const d = withWiki('#image(7)')
+      const state = { images: new Map([[0, d.registerImage(0, { url, width: 4, height: 3 })]]) }
+      expect(parseHTML(d.render(state)).querySelector('img,[src]')).toBeNull()
+      const host = parseHTML('<span class="md-image-slot" data-md-image="0"><img alt="" width="4" height="3"></span>')
+      const img = host.querySelector('img')!
+      img.setAttribute('src', url)
+      enforceDocumentAttributes(img, d, state)
+      expect(img.hasAttribute('src')).toBe(false)
+    },
+  )
   it('自己生成blobと寸法の完全一致だけを許可し失効した画像を残さない', () => {
     const d = withWiki('#image(7)'),
       state = {
