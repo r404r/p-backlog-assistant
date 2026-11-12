@@ -224,11 +224,18 @@ func (s *ProfileService) GetWikiAttachmentImage(ctx context.Context, profile str
 	}
 	// ローカルの所属と記法を通信前に確認する。
 	s.profileMu.RLock()
-	if !s.syncMu.TryLock() {
+	// profileMu → imageMu → syncMu(TryLockのみ)の順で稼働状態を確認する。
+	// 画像要求同士の確認を直列化し、互いを同期中と誤認しない。
+	s.imageMu.Lock()
+	busy := !s.syncMu.TryLock()
+	if !busy {
+		s.syncMu.Unlock()
+	}
+	s.imageMu.Unlock()
+	if busy {
 		s.profileMu.RUnlock()
 		return imageFailure("busy"), nil
 	}
-	s.syncMu.Unlock()
 	list, err := s.wikiListLocked(ctx, profile, store.WikiFilter{ProjectID: in.ProjectID})
 	var page *WikiPage
 	if err == nil && !list.Disabled {
