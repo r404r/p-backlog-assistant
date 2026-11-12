@@ -3,35 +3,118 @@ import { defineComponent, h, nextTick, ref } from 'vue'
 import { mountWithI18n, type MountedApp } from '../lib/testing/mountWithI18n'
 import { buildWikiTree } from '../lib/wikiTree'
 import WikiTree from './WikiTree.vue'
-
 let mounted: MountedApp | undefined
-
 afterEach(() => mounted?.unmount())
-
-it('renders and selects descendants when their ancestors are also pages', async () => {
-  const nodes = buildWikiTree([
-    { id: 1, name: 'a' },
-    { id: 2, name: 'a/b' },
-    { id: 3, name: 'a/b/c' },
-  ])
-  const selectedId = ref(1)
-  const select = vi.fn((_path: string, id: number) => {
-    selectedId.value = id
-  })
-  mounted = mountWithI18n(defineComponent({
-    setup: () => () => h(WikiTree, {
-      nodes,
-      selectedId: selectedId.value,
-      disabled: false,
-      onSelect: select,
-    }),
+function renderTree(props: () => InstanceType<typeof WikiTree>['$props']) {
+  return mountWithI18n(defineComponent({ setup: () => () => h(WikiTree, props()) }))
+}
+function open(disabled = false) {
+  const nodes = buildWikiTree([{ id: 1, name: 'a' }, { id: 2, name: 'a/b' }, { id: 3, name: 'folder/c' }])
+  const collapsed = ref(new Set<string>())
+  const selected = ref('p:1')
+  const select = vi.fn((_path: string, id: number) => { selected.value = `p:${id}` })
+  mounted = renderTree(() => ({
+    nodes, selectedId: 1, disabled, collapsed: collapsed.value, selectedRowKey: selected.value,
+    onSelect: select,
+    onToggle: (key: string) => {
+      const next = new Set(collapsed.value)
+      if (next.has(key)) next.delete(key); else next.add(key)
+      collapsed.value = next
+    },
   }))
-
-  const buttons = Array.from(mounted.host.querySelectorAll('button'))
-  expect(buttons.map(button => button.textContent?.trim())).toEqual(['a', 'b', 'c'])
-  buttons[1]!.click()
+  return { host: mounted.host, select, collapsed }
+}
+function key(el: Element, value: string) {
+  el.dispatchEvent(new KeyboardEvent('keydown', { key: value, bubbles: true, cancelable: true }))
+}
+it('distinguishes the current page from selected hierarchy and labels folders and descendants', async () => {
+  const { host, select } = open()
+  const rows = host.querySelectorAll<HTMLElement>('[role=treeitem]')
+  expect(rows.length).toBe(4)
+  expect(rows[0]!.getAttribute('aria-current')).toBe('page')
+  expect(rows[0]!.getAttribute('aria-expanded')).toBe('true')
+  expect(rows[1]!.hasAttribute('aria-expanded')).toBe(false)
+  rows[1]!.querySelector<HTMLElement>('.wiki-node-name')!.click()
   await nextTick()
-  expect(select).toHaveBeenCalledExactlyOnceWith('a/b', 2)
-  expect(buttons[1]!.getAttribute('aria-pressed')).toBe('true')
-  expect(buttons[0]!.getAttribute('aria-pressed')).toBe('false')
+  expect(select).toHaveBeenCalledExactlyOnceWith('a/b', 2, 'p:2')
+  expect(rows[1]!.getAttribute('aria-selected')).toBe('true')
+  expect(rows[0]!.getAttribute('aria-current')).toBe('page')
+})
+it('collapses by arrow without selecting, moves focus with arrows and type-ahead, activates once', async () => {
+  const { host, select } = open()
+  const row = host.querySelector<HTMLElement>('[role=treeitem]')!
+  row.focus()
+  key(row, 'ArrowLeft')
+  await nextTick()
+  expect(host.querySelectorAll('[role=treeitem]')).toHaveLength(3)
+  expect(select).not.toHaveBeenCalled()
+  key(row, 'ArrowRight')
+  await nextTick()
+  key(row, 'ArrowRight')
+  await nextTick()
+  expect((document.activeElement as HTMLElement).dataset.rowKey).toBe('p:2')
+  key(document.activeElement!, 'f')
+  await nextTick()
+  expect(document.activeElement?.textContent).toContain('folder')
+  key(document.activeElement!, ' ')
+  await nextTick()
+  expect(select).toHaveBeenCalledTimes(1)
+  expect(host.querySelectorAll('[tabindex="0"]')).toHaveLength(1)
+})
+it('rejects pointer and keyboard changes while disabled', async () => {
+  const { host, select, collapsed } = open(true)
+  const row = host.querySelector<HTMLElement>('[role=treeitem]')!
+  key(row, 'Enter'); key(row, 'ArrowLeft')
+  row.querySelector<HTMLElement>('.wiki-node-name')!.click()
+  await nextTick()
+  expect(select).not.toHaveBeenCalled()
+  expect(collapsed.value.size).toBe(0)
+  expect(row.getAttribute('aria-disabled')).toBe('true')
+})
+it('keeps duplicate pages distinct, restores ancestor focus, and supports Home/End', async () => {
+  const nodes = ref(buildWikiTree([{ id: 1, name: 'a' }, { id: 2, name: 'a/child' }, { id: 3, name: 'a/child' }]))
+  const collapsed = ref(new Set<string>())
+  mounted = renderTree(() => ({ nodes: nodes.value, selectedId: 3, selectedRowKey: 'p:2', collapsed: collapsed.value, disabled: false }))
+  let rows = mounted.host.querySelectorAll<HTMLElement>('[role=treeitem]')
+  expect(rows[1]!.getAttribute('aria-setsize')).toBe('2')
+  expect(rows[2]!.getAttribute('aria-current')).toBe('page')
+  expect(rows[1]!.getAttribute('aria-selected')).toBe('true')
+  expect(rows[2]!.getAttribute('aria-selected')).toBe('false')
+  rows[0]!.focus(); key(rows[0]!, 'End'); await nextTick()
+  expect((document.activeElement as HTMLElement).dataset.rowKey).toBe('p:3')
+  nodes.value = buildWikiTree([{ id: 3, name: 'a/renamed' }, { id: 1, name: 'a' }])
+  await nextTick()
+  expect((document.activeElement as HTMLElement).dataset.rowKey).toBe('p:3')
+  collapsed.value = new Set(['["a"]']); await nextTick(); await nextTick()
+  expect((document.activeElement as HTMLElement).dataset.rowKey).toBe('p:1')
+  rows = mounted.host.querySelectorAll<HTMLElement>('[role=treeitem]')
+  key(rows[0]!, 'Home'); await nextTick()
+  expect(rows[0]!.tabIndex).toBe(0)
+})
+
+it('shows duplicate IDs with a number sign while preserving the accessible label', () => {
+  const nodes = buildWikiTree([{ id: 1, name: 'a' }, { id: 2, name: 'a' }, { id: 3, name: 'a/child' }])
+  mounted = renderTree(() => ({ nodes, selectedId: 1, disabled: false }))
+  const ids = mounted.host.querySelectorAll('.wiki-node-id')
+  expect([...ids].map(el => el.textContent)).toEqual(['#1', '#2'])
+  expect(ids[0]!.getAttribute('aria-label')).toBe('同名ページ ID: 1')
+  expect(mounted.host.querySelector('.wiki-node-count')?.textContent).toBe('1')
+})
+it.each([['É', 'é'], ['Ａ', 'ａ']])('folds ASCII only during type-ahead (%s / %s)', async (upper, lower) => {
+  const nodes = buildWikiTree([{ id: 1, name: upper }, { id: 2, name: lower }, { id: 3, name: 'A' }, { id: 4, name: 'a' }])
+  mounted = renderTree(() => ({ nodes, selectedId: 0, disabled: false }))
+  const row = mounted.host.querySelector<HTMLElement>('[data-row-key="p:1"]')!
+  row.focus()
+  key(row, lower); await nextTick()
+  expect((document.activeElement as HTMLElement).dataset.rowKey).toBe('p:2')
+  key(document.activeElement!, lower); await nextTick()
+  expect((document.activeElement as HTMLElement).dataset.rowKey).toBe('p:2')
+})
+it('ignores keyCode 229 even when isComposing is false', async () => {
+  const { host } = open()
+  const row = host.querySelector<HTMLElement>('[role=treeitem]')!
+  row.focus()
+  row.dispatchEvent(new KeyboardEvent('keydown', { key: 'f', keyCode: 229, isComposing: false, bubbles: true }))
+  await nextTick()
+  expect(document.activeElement).toBe(row)
 })

@@ -66,7 +66,7 @@ it('places the search panel after the content with an accessible native toggle',
 
 it('collapses and expands while retaining the selected page and search controls', async () => {
   const host = await open()
-  const start = Array.from(host.querySelectorAll('button')).find((b) => b.textContent?.trim() === 'Start')!
+  const start = Array.from(host.querySelectorAll<HTMLElement>('button, .wiki-node-name')).find((b) => b.textContent?.trim() === 'Start')!
   start.click()
   const keyword = host.querySelector<HTMLInputElement>('[data-testid="wiki-keyword"]')!
   keyword.value = 'Sample'
@@ -87,7 +87,7 @@ it('collapses and expands while retaining the selected page and search controls'
   expect(host.querySelector<HTMLElement>('#wiki-search-panel')?.hidden).toBe(false)
   expect(host.querySelector<HTMLInputElement>('[data-testid="wiki-keyword"]')?.value).toBe('Sample')
   expect(host.querySelector<HTMLInputElement>('input[value="or"]')?.checked).toBe(true)
-  expect(start.getAttribute('aria-pressed')).toBe('true')
+  expect(start.closest('[role=treeitem]')?.getAttribute('aria-current')).toBe('page')
 })
 
 it('persists the preference across view visits and a fresh module session', async () => {
