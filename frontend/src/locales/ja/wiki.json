@@ -81,5 +81,36 @@
   "confirmChange": "変更の確認",
   "keepEditing": "編集を続ける",
   "discardChanges": "変更を破棄",
-  "confirmOverwrite": "ページを上書き"
+  "confirmOverwrite": "ページを上書き",
+  "render": {
+    "copy": "コピー",
+    "copied": "コードをコピーしました",
+    "copyFailed": "コピーできませんでした",
+    "missing": "見つかりません（未同期の可能性）",
+    "ambiguous": "同名が複数あります",
+    "image": "添付画像",
+    "table": "表（左右にスクロールできます）",
+    "large": "大きなページのため原文表示です",
+    "renderLarge": "整形表示する（画像・高亮なし）",
+    "cancelImages": "画像取得を中止",
+    "retry": "{name} を再試行",
+    "toc": "このページの目次",
+    "more": "さらに表示",
+    "noHeadings": "見出しがありません",
+    "tocUnavailable": "原文・編集時は目次を表示しません",
+    "imageErrors": {
+      "not_found": "見つかりません",
+      "not_own_attachment": "このWikiの添付ではありません",
+      "stale": "本文を再取得してください",
+      "unauthorized": "認証が必要です",
+      "forbidden": "権限がありません",
+      "unsupported_type": "非対応形式です",
+      "too_large": "サイズまたは表示容量の上限を超えています",
+      "invalid_image": "画像を確認できません",
+      "timeout": "時間切れです",
+      "cancelled": "取得を中止しました",
+      "network": "画像を取得できません",
+      "busy": "処理中です。終了後に再試行してください"
+    }
+  }
 }

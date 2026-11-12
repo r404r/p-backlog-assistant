@@ -81,5 +81,36 @@
   "confirmChange": "Confirm changes",
   "keepEditing": "Keep editing",
   "discardChanges": "Discard changes",
-  "confirmOverwrite": "Overwrite page"
+  "confirmOverwrite": "Overwrite page",
+  "render": {
+    "copy": "Copy",
+    "copied": "Code copied",
+    "copyFailed": "Could not copy code",
+    "missing": "Not found (possibly not synced)",
+    "ambiguous": "Multiple pages have this name",
+    "image": "Attachment image",
+    "table": "Table (scroll horizontally)",
+    "large": "Large page: showing source",
+    "renderLarge": "Format page (without images or highlighting)",
+    "cancelImages": "Cancel image loading",
+    "retry": "Retry {name}",
+    "toc": "On this page",
+    "more": "Show more",
+    "noHeadings": "No headings",
+    "tocUnavailable": "Contents are available in formatted view",
+    "imageErrors": {
+      "not_found": "Not found",
+      "not_own_attachment": "Not an attachment of this Wiki",
+      "stale": "Refresh the page first",
+      "unauthorized": "Authentication required",
+      "forbidden": "Permission denied",
+      "unsupported_type": "Unsupported image format",
+      "too_large": "Image or display budget exceeded",
+      "invalid_image": "Invalid image",
+      "timeout": "Timed out",
+      "cancelled": "Cancelled",
+      "network": "Image unavailable",
+      "busy": "Busy; retry when the operation finishes"
+    }
+  }
 }

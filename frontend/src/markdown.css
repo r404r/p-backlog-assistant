@@ -125,3 +125,42 @@ div.markdown-body > :last-child {
 
 div.markdown-body :is(h1, h2) { font-weight: var(--heading-weight); }
 div.markdown-body :is(h3, h4, h5, h6) { font-weight: var(--subheading-weight); }
+
+/* Pop 配色は共有tokenのみを使い、外部の高亮テーマを読み込まない。 */
+div.markdown-body h1 {font-size:1.8em;}
+div.markdown-body h2 {font-size:1.5em;border-bottom:var(--divider-width) solid var(--border);padding-bottom:0.25em;}
+div.markdown-body h3 {font-size:1.25em;}
+div.markdown-body h4 {font-size:1.1em;}
+.markdown-body p {margin:0.65em 0;}
+.markdown-body blockquote {background:var(--bg-muted);border-radius:var(--radius-code);}
+.markdown-body tbody tr:nth-child(odd) {background:var(--surface);}
+.markdown-body tbody tr:nth-child(even) {background:var(--bg);}
+.markdown-body tbody tr:hover {background:var(--bg-hover);}
+.markdown-body a:is([data-href],[data-md-wiki]) {
+ color:var(--accent-fg);text-decoration:underline;text-decoration-color:var(--accent-emphasis);
+ text-decoration-thickness:0.2em;text-underline-offset:0.2em;font-weight:var(--strong-weight);cursor:pointer;
+}
+.markdown-body :is(a,button,table):focus-visible {outline:var(--focus-width) solid var(--focus-ring);outline-offset:var(--focus-offset);}
+.markdown-body pre {position:relative;padding-top:0;}
+.markdown-body pre code {display:block;padding-block:0.7em;}
+.markdown-body .md-code-language {display:inline-block;color:var(--text-muted);font-size:0.85em;padding-block:0.5em;}
+.markdown-body pre button {float:right;font-size:0.85em;margin-block:0.3em;background:var(--bg-muted);color:var(--text);}
+.markdown-body pre button:hover {background:var(--bg-hover);}
+.markdown-body .md-syntax-keyword,.markdown-body .md-syntax-literal {color:var(--warning-text);}
+.markdown-body .md-syntax-string {color:var(--success-text);}
+.markdown-body .md-syntax-number {color:var(--danger-text);}
+.markdown-body .md-syntax-comment {color:var(--text-muted);}
+.markdown-body :is(.md-syntax-title,.md-syntax-attr,.md-syntax-meta) {color:var(--text);}
+.markdown-body .md-syntax-title {font-weight:var(--strong-weight);}
+.markdown-body .md-task {font-weight:var(--strong-weight);margin-right:0.35em;}
+.markdown-body .md-image-slot {display:inline-block;max-width:100%;padding:0.4em;background:var(--bg-muted);color:var(--text-muted);border:var(--border-width) solid var(--border);border-radius:var(--radius-ui);white-space:normal;}
+.markdown-body img {max-inline-size:100%;height:auto;display:block;}
+div.markdown-wiki {max-width:78ch;margin-inline:auto;line-height:1.75;}
+div.markdown-comment {line-height:1.55;}
+.markdown-comment p {margin:0.4em 0;}
+.markdown-status {font-size:0.85em;color:var(--text-muted);}
+.markdown-status:empty {display:none;}
+.markdown-source {white-space:pre-wrap;overflow-wrap:anywhere;}
+.markdown-image-actions {display:flex;flex-wrap:wrap;gap:0.5rem;margin-block:0.5rem;}
+.markdown-segment:first-child > :first-child {margin-top:0;}
+.markdown-segment:last-child > :last-child {margin-bottom:0;}
