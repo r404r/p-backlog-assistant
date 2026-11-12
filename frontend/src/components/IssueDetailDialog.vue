@@ -627,6 +627,11 @@ pre.detail-description {
   color: var(--surface);
 }
 
+.view-toggle button[aria-pressed='true']:hover {
+  background: var(--border);
+  color: var(--surface);
+}
+
 .detail-note {
   margin: 0.75rem 0 0;
 }
