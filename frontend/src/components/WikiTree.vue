@@ -23,6 +23,7 @@ const port = ref<HTMLElement | null>(null), focusKey = ref('')
 const rows = computed(() => flattenWikiTree(props.nodes, props.collapsed))
 const rowElements = new Map<string, HTMLElement>()
 let prefix = '', typedAt = 0
+const foldAscii = (value: string) => value.replace(/[A-Z]/g, c => c.toLowerCase())
 const focused = computed(() => rows.value.find(r => r.rowKey === focusKey.value))
 watch(() => props.focusedRowKey, value => { if (value) focusKey.value = value })
 watch(rows, (current, old) => {
@@ -56,7 +57,7 @@ function toggle(row: WikiTreeRow) {
   emit('toggle', row.node.key)
 }
 function keydown(event: KeyboardEvent, row: WikiTreeRow) {
-  if (event.isComposing || event.altKey || event.metaKey || event.ctrlKey) return
+  if (event.isComposing || event.keyCode === 229 || event.altKey || event.metaKey || event.ctrlKey) return
   const index = rows.value.findIndex(r => r.rowKey === row.rowKey)
   const keys = ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Home', 'End', 'Enter', ' ']
   if (keys.includes(event.key)) event.preventDefault()
@@ -80,10 +81,10 @@ function keydown(event: KeyboardEvent, row: WikiTreeRow) {
       if (event.key.length !== 1) return
       if (Date.now() - typedAt > 700) prefix = ''
       typedAt = Date.now()
-      prefix += event.key.toLowerCase()
+      prefix += foldAscii(event.key)
       const search = [...rows.value.slice(index + 1), ...rows.value.slice(0, index + 1)]
       const query = [...prefix].every(c => c === prefix[0]) ? prefix[0]! : prefix
-      target = search.find(r => r.node.label.toLowerCase().startsWith(query))
+      target = search.find(r => foldAscii(r.node.label).startsWith(query))
     }
   }
   if (target) void focus(target)
@@ -111,7 +112,7 @@ defineExpose({ reveal, port })
       <span class="wiki-node-name" @click="activate(row)">{{ row.node.label || t('wiki.unnamed') }}</span>
       <span v-if="selectedId === row.pageId && row.pageId" class="wiki-sr-only">{{ t('wiki.currentPage') }}</span>
       <span class="wiki-sr-only">{{ !row.pageId ? t('wiki.folderNode') : row.hasChildren ? t('wiki.pageWithChildrenNode') : t('wiki.pageNode') }}</span>
-      <span v-if="row.node.pageIds.length > 1" class="wiki-node-id" :aria-label="t('wiki.duplicatePage', { id: row.pageId })">{{ row.pageId }}</span>
+      <span v-if="row.node.pageIds.length > 1" class="wiki-node-id" :aria-label="t('wiki.duplicatePage', { id: row.pageId })">#{{ row.pageId }}</span>
       <span v-if="row.hasChildren" class="wiki-node-count" :aria-label="filtered ? t('wiki.filteredDescendantPages', { count: row.node.descendantPageCount }) : t('wiki.descendantPages', { count: row.node.descendantPageCount })">{{ row.node.descendantPageCount }}</span>
       <svg v-if="selectedRowKey === row.rowKey" viewBox="0 0 16 16" :aria-label="t('wiki.selectedHierarchy')" role="img"><path d="m3 8 3 3 7-7" /></svg>
       <span v-if="outsideId && outsideId === row.pageId" class="wiki-outside" :title="t('wiki.outsideSearch')">{{ t('wiki.outsideSearch') }}</span>
@@ -126,7 +127,7 @@ defineExpose({ reveal, port })
 .wiki-tree-row[aria-level='1']::before { display: none; }
 .wiki-tree-row:hover { background: var(--bg-hover); }
 .wiki-tree-row.current { background: var(--selection-bg); border-left-color: var(--border); }
-.wiki-tree-row.selected { outline: var(--border-width) dashed var(--border); outline-offset: -2px; }
+.wiki-tree-row.selected::after { content: ''; position: absolute; inset: 1px; border: var(--border-width) dashed var(--border); pointer-events: none; }
 .wiki-tree-row:focus-visible { outline: var(--focus-width) solid var(--focus-ring); outline-offset: var(--focus-offset); }
 .wiki-tree-row[aria-disabled='true'] { color: var(--text-faint); background: var(--bg-muted); }
 .wiki-tree-row svg { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.6; }
@@ -134,6 +135,7 @@ defineExpose({ reveal, port })
 .wiki-node-name { flex: 1; min-width: 0; min-height: 24px; display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer; line-height: 24px; }
 .folder .wiki-node-name { font-weight: var(--strong-weight); }
 .wiki-node-count, .wiki-node-id { color: var(--text-muted); flex: none; }
+.wiki-node-id { font-size: 0.75rem; padding: 0 3px; background: var(--bg-muted); border: var(--border-width) solid var(--border); border-radius: var(--radius-ui); }
 .wiki-focus-path { position: absolute; bottom: 0; left: 0; right: 0; z-index: 1; background: var(--surface); color: var(--text); display: none; overflow-wrap: anywhere; margin: 4px 0; }
 .wiki-tree:focus-within + .wiki-focus-path { display: block; }
 .wiki-outside { max-width: 4rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 0.75rem; }

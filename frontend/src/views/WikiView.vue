@@ -151,6 +151,7 @@ const projects = ref<Project[]>([]),
 const initializing = ref(true),
   busy = ref(false),
   disabled = ref(false)
+const appliedFilter = ref(false)
 const keyword = ref(''),
   keywordMode = ref<'and' | 'or'>('and')
 const lastSynced = ref(''),
@@ -269,19 +270,22 @@ async function load() {
     pid = selectedProjectId.value
   if (!profile.value || !pid) {
     pages.value = []
+    appliedFilter.value = false
     lastSynced.value = ''
     return
   }
+  const submittedKeyword = keyword.value
   const [full, result] = await Promise.all([
     backend.listWikis(profile.value, { projectId: pid, keyword: '', keywordMode: 'and' }),
     backend.listWikis(profile.value, {
       projectId: pid,
-      keyword: keyword.value,
+      keyword: submittedKeyword,
       keywordMode: keywordMode.value,
     }),
   ])
   if (!alive || sequence !== request || pid !== selectedProjectId.value) return
   pages.value = result.pages
+  appliedFilter.value = !!submittedKeyword.trim()
   wikiIndex.value = full.pages
   projectFormatting.value = result.textFormattingRule ?? result.pages[0]?.textFormattingRule ?? ''
   disabled.value = result.disabled
@@ -369,7 +373,8 @@ onMounted(async () => {
     if (panel) for (const child of panel.children) if (!child.classList.contains('wiki-tree')) layoutObserver.observe(child)
   }
   window.addEventListener('resize', scheduleLayout)
-  scheduleLayout()
+  // 初回はrAFへ遅延せず、最初の描画前にモードと高さを確定する。
+  measureLayout()
   try {
     profile.value = await backend.getActiveProfile()
     if (!profile.value) return
@@ -701,7 +706,7 @@ async function exportNow() {
           <button type="button" :disabled="locked || !hasCollapsed" :title="t('wiki.allTreeScope')" @click="expandAll">{{ t('wiki.expandAll') }}</button>
           <button type="button" :disabled="locked || allCollapsed" :title="t('wiki.allTreeScope')" @click="collapseAll">{{ t('wiki.collapseAll') }}</button>
         </div>
-        <WikiTree ref="treeComponent" :nodes="tree" :selected-id="selectedId" :selected-row-key="selectedRowKey" :focused-row-key="focusedRowKey" :collapsed="collapsedNodeKeys" :outside-id="outsideId" :filtered="!!keyword.trim()" :disabled="locked" :flow="flow" @select="select" @toggle="toggleNode" @focus-row="focusedRowKey = $event" />
+        <WikiTree ref="treeComponent" :nodes="tree" :selected-id="selectedId" :selected-row-key="selectedRowKey" :focused-row-key="focusedRowKey" :collapsed="collapsedNodeKeys" :outside-id="outsideId" :filtered="appliedFilter" :disabled="locked" :flow="flow" @select="select" @toggle="toggleNode" @focus-row="focusedRowKey = $event" />
         <p v-if="!pages.length && !initializing">{{ t('wiki.empty') }}</p>
         <p v-if="selectedPath" class="wiki-selected-path">{{ t('wiki.subtree', { path: selectedPath }) }}</p>
       </aside>
