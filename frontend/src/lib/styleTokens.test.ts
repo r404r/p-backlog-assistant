@@ -268,6 +268,124 @@ describe('コントラスト(WCAG AA)', () => {
   }
 })
 
+function compareSpecificity(a: number[], b: number[]): number {
+  const index = a.findIndex((value, i) => value !== b[i])
+  return index < 0 ? 0 : a[index] - b[index]
+}
+
+function specificity(selector: string): number[] {
+  function score(nodes: selectorParser.Node[]): number[] {
+    return nodes.reduce((total, node) => {
+      let part = [0, 0, 0]
+      if (node.type === 'id') part = [1, 0, 0]
+      if (node.type === 'class' || node.type === 'attribute') part = [0, 1, 0]
+      if (node.type === 'tag') part = [0, 0, 1]
+      if (node.type === 'pseudo') {
+        if (node.value === ':where') return total
+        if ([':not', ':is', ':has'].includes(node.value)) {
+          part = node.nodes.map((child) => score(child.nodes)).sort(compareSpecificity).at(-1) ?? part
+        } else {
+          part = node.value.startsWith('::') ? [0, 0, 1] : [0, 1, 0]
+        }
+      }
+      return total.map((value, i) => value + part[i])
+    }, [0, 0, 0])
+  }
+  return score(selectorParser().astSync(selector).nodes[0].nodes)
+}
+
+
+describe('共通フォームと画面固有スタイルのカスケード', () => {
+  const scopeId = 'data-v-form-check'
+  const globalStyle = compileStyle({ source: cleanCss, filename: 'style.css', id: '', scoped: false })
+
+  function formStyles(filename: string) {
+    const { descriptor } = parse(readFileSync(resolve(SRC_DIR, filename), 'utf8'))
+    const style = descriptor.styles.find((block) => block.scoped)!
+    const compiled = compileStyle({ source: style.content, filename, id: scopeId, scoped: true })
+    expect(compiled.errors).toEqual([])
+    expect(globalStyle.errors).toEqual([])
+    return [compiled, globalStyle]
+  }
+
+  // 本番と同じく全体CSSを後に置き、マッチした宣言を詳細度・important・ソース順で比較する。
+  function winningValue(styles: ReturnType<typeof formStyles>, element: Element, property: string): string | undefined {
+    let winner: { value: string; specificity: number[]; important: boolean } | undefined
+    for (const style of styles) {
+      style.rawResult!.root.walkRules((rule) => {
+        // この検査の常態/disabled宣言はメディア・アニメーションの外にある。
+        if (rule.parent?.type !== 'root') return
+        for (const selector of selectorParser().astSync(rule.selector).nodes) {
+          if (!element.matches(selector.toString())) continue
+          const score = specificity(selector.toString())
+          rule.walkDecls((decl) => {
+            if (decl.prop !== property && !(property === 'background' && decl.prop === 'background-color')) return
+            const important = Boolean(decl.important)
+            if (!winner || (important && !winner.important)
+              || (important === winner.important && compareSpecificity(score, winner.specificity) >= 0)) {
+              winner = { value: decl.value, specificity: score, important }
+            }
+          })
+        }
+      })
+    }
+    return winner?.value
+  }
+
+  function fixture(markup: string, selector: string): Element {
+    const host = document.createElement('main')
+    host.className = 'content'
+    host.innerHTML = markup
+    host.querySelectorAll('*').forEach((element) => element.setAttribute(scopeId, ''))
+    return host.querySelector(selector)!
+  }
+
+  for (const [view, types] of [
+    ['IssuesView', ['select', 'text', 'date']],
+    ['BulkUpdateView', ['select', 'text', 'date']],
+    ['UsersView', ['select', 'text']],
+    ['SyncStatusView', ['select']],
+  ] as const) {
+    for (const type of types) {
+      it(`${view}: ${type}の無効時は明暗とも画面の背景・文字トークンが勝つ`, () => {
+        const styles = formStyles(`views/${view}.vue`)
+        const element = fixture(type === 'select' ? '<select disabled></select>' : `<input type="${type}" disabled>`, type === 'select' ? 'select' : 'input')
+        expect(element.matches(':disabled')).toBe(true)
+        for (const [property, token] of [['background', '--bg-muted'], ['color', '--text-faint']] as const) {
+          const value = winningValue(styles, element, property)
+          expect(value, `${view} ${type}: ${property}`).toBe(`var(${token})`)
+          for (const tokens of [lightTokens, darkTokens]) {
+            expect(tokens.get(token)).not.toBe(tokens.get(property === 'background' ? '--bg' : '--text'))
+          }
+        }
+        element.removeAttribute('disabled')
+        expect(winningValue(styles, element, 'background')).toBe('var(--bg)')
+        expect(winningValue(styles, element, 'color')).toBe('var(--text)')
+      })
+    }
+  }
+
+  for (const [filename, markup, selector] of [
+    ['components/WikiEditor.vue', '<div class="wiki-editor"><input type="text"></div>', 'input'],
+    ['components/WikiEditor.vue', '<div class="wiki-editor"><textarea></textarea></div>', 'textarea'],
+    ['components/WikiEditor.vue', '<div class="wiki-editor"><select></select></div>', 'select'],
+    ['views/WikiView.vue', '<div class="wiki-keyword"><input type="search"></div>', 'input'],
+    ['views/SettingsView.vue', '<div class="field"><input type="text"></div>', 'input'],
+    ['views/SettingsView.vue', '<div class="field"><input type="password"></div>', 'input'],
+  ] as const) {
+    it(`${filename}: ${markup}の共通外観を維持する`, () => {
+      const styles = formStyles(filename)
+      const element = fixture(markup, selector)
+      for (const [property, value] of [
+        ['border', 'var(--border-width) solid var(--border)'],
+        ['border-radius', 'var(--radius-ui)'],
+        ['background', 'var(--bg)'],
+        ['color', 'var(--text)'],
+      ]) expect(winningValue(styles, element, property), property).toBe(value)
+    })
+  }
+})
+
 describe('課題詳細の押下状態', () => {
   const source = stripCssComments(readFileSync(resolve(SRC_DIR, 'components/IssueDetailDialog.vue'), 'utf8'))
   const pressedHover = ".view-toggle button[aria-pressed='true']:hover"
@@ -278,32 +396,6 @@ describe('課題詳細の押下状態', () => {
     const declaration = block.match(new RegExp(`(?:^|;)\\s*${property}:\\s*var\\((--[\\w-]+)\\)\\s*;`))
     if (!declaration) throw new Error(`${selector} の ${property} に色トークンが必要です`)
     return declaration[1]
-  }
-
-  function compareSpecificity(a: number[], b: number[]): number {
-    const index = a.findIndex((value, i) => value !== b[i])
-    return index < 0 ? 0 : a[index] - b[index]
-  }
-
-  function specificity(selector: string): number[] {
-    function score(nodes: selectorParser.Node[]): number[] {
-      return nodes.reduce((total, node) => {
-        let part = [0, 0, 0]
-        if (node.type === 'id') part = [1, 0, 0]
-        if (node.type === 'class' || node.type === 'attribute') part = [0, 1, 0]
-        if (node.type === 'tag') part = [0, 0, 1]
-        if (node.type === 'pseudo') {
-          if (node.value === ':where') return total
-          if ([':not', ':is', ':has'].includes(node.value)) {
-            part = node.nodes.map((child) => score(child.nodes)).sort(compareSpecificity).at(-1) ?? part
-          } else {
-            part = node.value.startsWith('::') ? [0, 0, 1] : [0, 1, 0]
-          }
-        }
-        return total.map((value, i) => value + part[i])
-      }, [0, 0, 0])
-    }
-    return score(selectorParser().astSync(selector).nodes[0].nodes)
   }
 
   it('表示切替の押下 hover は scoped 化後に後続の全体 hover より詳細度が高い', () => {
