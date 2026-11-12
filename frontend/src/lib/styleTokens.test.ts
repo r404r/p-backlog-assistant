@@ -17,6 +17,8 @@
  */
 import { readdirSync, readFileSync } from 'node:fs'
 import { join, relative, resolve } from 'node:path'
+import { compileStyle, parse } from '@vue/compiler-sfc'
+import selectorParser from 'postcss-selector-parser'
 import { describe, expect, it } from 'vitest'
 import { THEME_BACKGROUND_RGB } from './theme'
 
@@ -268,17 +270,88 @@ describe('コントラスト(WCAG AA)', () => {
 
 describe('課題詳細の押下状態', () => {
   const source = stripCssComments(readFileSync(resolve(SRC_DIR, 'components/IssueDetailDialog.vue'), 'utf8'))
+  const pressedHover = ".view-toggle button[aria-pressed='true']:hover"
+  const globalHover = '.content button:hover:not(:disabled)'
 
-  function colorToken(selector: string, property: string): string {
-    const block = extractBlock(source, selector)
+  function colorToken(selector: string, property: string, css = source): string {
+    const block = extractBlock(css, selector)
     const declaration = block.match(new RegExp(`(?:^|;)\\s*${property}:\\s*var\\((--[\\w-]+)\\)\\s*;`))
     if (!declaration) throw new Error(`${selector} の ${property} に色トークンが必要です`)
     return declaration[1]
   }
 
+  function compareSpecificity(a: number[], b: number[]): number {
+    const index = a.findIndex((value, i) => value !== b[i])
+    return index < 0 ? 0 : a[index] - b[index]
+  }
+
+  function specificity(selector: string): number[] {
+    function score(nodes: selectorParser.Node[]): number[] {
+      return nodes.reduce((total, node) => {
+        let part = [0, 0, 0]
+        if (node.type === 'id') part = [1, 0, 0]
+        if (node.type === 'class' || node.type === 'attribute') part = [0, 1, 0]
+        if (node.type === 'tag') part = [0, 0, 1]
+        if (node.type === 'pseudo') {
+          if (node.value === ':where') return total
+          if ([':not', ':is', ':has'].includes(node.value)) {
+            part = node.nodes.map((child) => score(child.nodes)).sort(compareSpecificity).at(-1) ?? part
+          } else {
+            part = node.value.startsWith('::') ? [0, 0, 1] : [0, 1, 0]
+          }
+        }
+        return total.map((value, i) => value + part[i])
+      }, [0, 0, 0])
+    }
+    return score(selectorParser().astSync(selector).nodes[0].nodes)
+  }
+
+  it('表示切替の押下 hover は scoped 化後に後続の全体 hover より詳細度が高い', () => {
+    // ブロック欠落も失敗にする。ソース順が後の全体ルールとは同点では足りない。
+    extractBlock(source, pressedHover)
+    extractBlock(cleanCss, globalHover)
+    const { descriptor } = parse(source)
+    const style = descriptor.styles.find((block) => block.scoped)!
+    const compiled = compileStyle({ source: style.content, filename: 'IssueDetailDialog.vue', id: 'data-v-state-check', scoped: true })
+    expect(compiled.errors).toEqual([])
+    const selectors: string[] = []
+    compiled.rawResult?.root.walkRules((rule) => {
+      selectors.push(...selectorParser().astSync(rule.selector).nodes.map((node) => node.toString()))
+    })
+    const selector = selectors
+      .find((value) => value.includes('.view-toggle') && value.includes('[aria-pressed=') && value.includes(':hover'))
+    expect(selector).toBeDefined()
+    const host = document.createElement('main')
+    host.className = 'content'
+    host.innerHTML = '<div class="modal"><div class="view-toggle"><button aria-pressed="true" class="hover-probe" data-v-state-check></button></div></div>'
+    const button = host.querySelector('button')!
+    const globalStyle = compileStyle({ source: cleanCss, filename: 'style.css', id: '', scoped: false })
+    expect(globalStyle.errors).toEqual([])
+    globalStyle.rawResult?.root.walkRules((rule) => {
+      const relevant = rule.nodes.some((node) => node.type === 'decl' && ['background', 'background-color', 'color'].includes(node.prop))
+      if (!relevant) return
+      for (const globalSelector of selectorParser().astSync(rule.selector).nodes) {
+        const original = globalSelector.toString()
+        // DOMの静的マッチング用にのみhoverをクラスへ置換。詳細度は元セレクタで計算する。
+        globalSelector.walkPseudos((node) => {
+          if (node.value === ':hover') node.replaceWith(selectorParser.className({ value: 'hover-probe' }))
+        })
+        if (!button.matches(globalSelector.toString())) continue
+        expect(compareSpecificity(specificity(selector!), specificity(original)), `${selector} / ${original}`)
+          .toBeGreaterThan(0)
+        for (const node of rule.nodes) {
+          if (node.type === 'decl' && ['background', 'background-color', 'color'].includes(node.prop)) {
+            expect(node.important, `${original}: ${node.prop}`).toBeFalsy()
+          }
+        }
+      }
+    })
+  })
+
   for (const [themeName, tokens] of [['ライト', lightTokens], ['ダーク', darkTokens]] as const) {
     for (const [pressed, inactiveSelectors] of [
       [".view-toggle button[aria-pressed='true']", ['.view-toggle button']],
+      [pressedHover, ['.view-toggle button']],
       ['.modal.maximized .maximize-toggle', ['.maximize-toggle', '.maximize-toggle:hover']],
       ['.modal.maximized .maximize-toggle:hover', ['.maximize-toggle', '.maximize-toggle:hover']],
     ] as const) {
@@ -288,6 +361,7 @@ describe('課題詳細の押下状態', () => {
         // 共通の描辺ではなく、押下時だけ変わる塗りを実際の宣言から検査する。
         const adjacent = [
           ...inactiveSelectors.map((selector) => colorToken(selector, 'background')),
+          colorToken(globalHover, 'background', cleanCss),
           '--surface', '--bg-muted', '--bg',
         ]
         for (const background of adjacent) {
