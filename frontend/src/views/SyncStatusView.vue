@@ -638,7 +638,7 @@ select:disabled {
   display: inline-block;
   width: 14px;
   height: 14px;
-  border: 2px solid var(--border);
+  border: 2px solid var(--grid-border);
   border-top-color: var(--accent-fg);
   border-radius: var(--radius-circle);
   animation: spin 0.8s linear infinite;
@@ -693,7 +693,7 @@ select:disabled {
 }
 .rate-table th,
 .rate-table td {
-  border: var(--border-width) solid var(--border);
+  border: var(--border-width) solid var(--grid-border);
   padding: 6px 12px;
   text-align: left;
 }

@@ -533,7 +533,7 @@ button.link {
   display: inline-block;
   width: 14px;
   height: 14px;
-  border: 2px solid var(--border);
+  border: 2px solid var(--grid-border);
   border-top-color: var(--accent-fg);
   border-radius: var(--radius-circle);
   animation: spin 0.8s linear infinite;

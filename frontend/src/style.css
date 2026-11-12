@@ -274,7 +274,7 @@ body {
 }
 
 .content :is(button.link, button.issue-key, a.link),
-.markdown-body a[data-href] {
+.content .markdown-body a[data-href] {
   color: var(--accent-fg);
   font-weight: var(--strong-weight);
   text-decoration: underline;
@@ -284,7 +284,7 @@ body {
 }
 
 .content :is(button.link, button.issue-key, a.link):hover,
-.markdown-body a[data-href]:hover {
+.content .markdown-body a[data-href]:hover {
   color: var(--accent-fg-hover);
   text-decoration-color: var(--accent-fg-hover);
 }
@@ -302,4 +302,16 @@ body {
     animation: none;
     transition: none;
   }
+}
+
+/* Wiki のフォームを含め、ブラウザ既定の面色・形状も共通化する。 */
+.content :is(input:not([type='checkbox']):not([type='radio']), select, textarea) {
+  border: var(--border-width) solid var(--border);
+  border-radius: var(--radius-ui);
+  background: var(--bg);
+  color: var(--text);
+}
+
+.content :is(input[type='checkbox'], input[type='radio']) {
+  accent-color: var(--accent-fg);
 }

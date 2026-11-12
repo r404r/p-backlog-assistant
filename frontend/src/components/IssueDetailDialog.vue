@@ -438,8 +438,6 @@ function openMarkdownLinkByKeyboard(event: KeyboardEvent): void {
  */
 @media (max-height: 30rem) {
   .modal.maximized {
-  border-radius: var(--radius-none);
-  box-shadow: var(--shadow-none);
     display: block;
     height: auto;
   }
@@ -692,7 +690,7 @@ pre.comment-body {
   display: inline-block;
   width: 14px;
   height: 14px;
-  border: 2px solid var(--border);
+  border: 2px solid var(--grid-border);
   border-top-color: var(--accent-fg);
   border-radius: var(--radius-circle);
   animation: spin 0.8s linear infinite;

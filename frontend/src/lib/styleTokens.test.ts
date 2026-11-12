@@ -27,12 +27,12 @@ const STYLE_CSS_PATH = resolve(SRC_DIR, 'style.css')
 const styleCss = readFileSync(STYLE_CSS_PATH, 'utf8')
 
 /** src 配下の .vue と .css を再帰的に列挙する(テストは .ts のため自然に対象外になる) */
-function listVueFiles(dir: string): string[] {
+function listStyleFiles(dir: string): string[] {
   const found: string[] = []
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     const path = join(dir, entry.name)
     if (entry.isDirectory()) {
-      found.push(...listVueFiles(path))
+      found.push(...listStyleFiles(path))
     } else if ((/\.(vue|css)$/).test(entry.name)) {
       found.push(path)
     }
@@ -42,7 +42,7 @@ function listVueFiles(dir: string): string[] {
 
 /** 色を持ち得るソース(全 .css + 全 .vue)。名前は frontend/ からの相対パス */
 const STYLE_SOURCES: { name: string; source: string }[] = [
-  ...listVueFiles(SRC_DIR),
+  ...listStyleFiles(SRC_DIR),
 ].map((path) => ({
   name: relative(process.cwd(), path),
   source: readFileSync(path, 'utf8'),
@@ -151,7 +151,7 @@ describe('ハードコードされた色の残存', () => {
 
   it('トークン定義の外に色リテラルが残っていない', () => {
     for (const { name, source } of STYLE_SOURCES) {
-      const body = withoutTokenBlocks(source)
+      const body = name === 'src/style.css' ? withoutTokenBlocks(source) : stripCssComments(source)
       for (const { label, re } of COLOR_PATTERNS) {
         const found = body.match(re) ?? []
         expect(found, `${name} に ${label} の色が残っています`).toEqual([])
@@ -270,7 +270,7 @@ describe('コントラスト(WCAG AA)', () => {
 /** CSS と Vue のインライン指定を同じ宣言規則で調べる。 */
 function literalShapes(source: string): string[] {
   const clean = stripCssComments(source)
-  const declarations = clean.matchAll(/(?:border-radius|border-(?:top|bottom)-(?:left|right)-radius|box-shadow|borderRadius|border(?:Top|Bottom)(?:Left|Right)Radius|boxShadow)\s*:\s*(?:["']([^"']*)["']|([^;}"']+))/g)
+  const declarations = clean.matchAll(/(?:border-radius|border-(?:top|bottom)-(?:left|right)-radius|box-shadow|borderRadius|border(?:Top|Bottom)(?:Left|Right)Radius|boxShadow)["']?\s*:\s*(?:["']([^"']*)["']|([^;}"']+))/g)
   return [...declarations].map((m) => (m[1] ?? m[2]).trim())
     .filter((value) => !/^var\(--[\w-]+\)$/.test(value))
 }
@@ -293,6 +293,7 @@ describe('Pop の形状と配色', () => {
   it('形状検査が長形式・複合値・インライン指定も拒否する', () => {
     expect(literalShapes('border-radius: 4px; box-shadow: none; border-top-left-radius: 0;')).toHaveLength(3)
     expect(literalShapes('border-radius:\n  4px 0 0 4px;')).toHaveLength(1)
+    expect(literalShapes("<div :style=\"{ 'border-radius': '4px' }\">")).toHaveLength(1)
     expect(literalShapes('borderRadius: "4px", boxShadow: "none"')).toHaveLength(2)
     expect(literalShapes('/* box-shadow: none; */ border-radius: var(--radius-ui);')).toEqual([])
     // 未定義参照は別の全ソース走査で拒否する。

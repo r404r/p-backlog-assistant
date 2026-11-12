@@ -686,6 +686,7 @@ async function exportNow() {
   z-index: 100;
 }
 .wiki-modal {
+  box-shadow: var(--shadow-dialog);
   background: var(--surface);
   color: var(--text);
   padding: 1.5rem;

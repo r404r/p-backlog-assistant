@@ -254,6 +254,7 @@ function openLink(event: MouseEvent | KeyboardEvent) {
   align-items: center; justify-content: center; z-index: 110; padding: 1rem;
 }
 .wiki-editor-dialog {
+  box-shadow: var(--shadow-dialog);
   background: var(--surface); color: var(--text); padding: 1.25rem;
   width: min(56rem, 100%); max-height: 85vh; overflow: auto;
   border: var(--border-width) solid var(--border); border-radius: var(--radius-ui);
