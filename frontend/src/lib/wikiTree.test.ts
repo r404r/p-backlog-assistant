@@ -28,3 +28,22 @@ it('keeps empty-component compatibility, stable keys and duplicate IDs exactly o
   expect(tree[0]!.children[0]!.pageIds).toEqual([9, 10])
   expect(buildWikiTree([...pages].reverse())).toEqual(tree)
 })
+it('compares supplementary code points without UTF-16 or normalization shortcuts', async () => {
+  const { compareWikiNames } = await import('./wikiTree')
+  expect(compareWikiNames('\ue000', '\u{10000}')).toBeLessThan(0)
+  expect(compareWikiNames('e\u0301', 'é')).toBeLessThan(0)
+  expect(compareWikiNames('a', 'a')).toBe(0)
+  expect(compareWikiNames('a', 'aa')).toBeLessThan(0)
+})
+it('reveals only the owning scrollport by the clipped distance', async () => {
+  const { revealWikiRow } = await import('./wikiTree')
+  const port = document.createElement('div'), row = document.createElement('div')
+  port.scrollTop = 100
+  port.getBoundingClientRect = () => ({ top: 50, bottom: 150 }) as DOMRect
+  row.getBoundingClientRect = () => ({ top: 140, bottom: 170 }) as DOMRect
+  revealWikiRow(port, row)
+  expect(port.scrollTop).toBe(120)
+  row.getBoundingClientRect = () => ({ top: 60, bottom: 80 }) as DOMRect
+  revealWikiRow(port, row)
+  expect(port.scrollTop).toBe(120)
+})

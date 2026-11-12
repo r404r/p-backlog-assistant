@@ -14,7 +14,7 @@ let mounted: MountedApp | undefined
 let backend: ReturnType<typeof createMockBackend>
 const page: WikiPage = { id: 10, projectId: 1, name: 'Guide/Start', content: 'old', created: '', updated: 'T1', contentUpdated: 'T1', contentFetchedAt: 'now', tags: [], createdUser: '', updatedUser: '', textFormattingRule: 'markdown', attachments: [] }
 async function flush() { for (let i=0;i<20;i++) await nextTick() }
-function button(text: string) { const b=Array.from(mounted!.host.querySelectorAll('button')).find(b=>b.textContent?.trim()===text); expect(b, text).toBeDefined(); return b! }
+function button(text: string) { const b=Array.from(mounted!.host.querySelectorAll<HTMLElement>('button, .wiki-node-name')).find(b=>b.textContent?.trim()===text); expect(b, text).toBeDefined(); return b! as HTMLButtonElement }
 function input(selector: string, value: string) { const el=mounted!.host.querySelector<HTMLInputElement>(selector)!; expect(el).not.toBeNull(); el.value=value; el.dispatchEvent(new Event('input',{bubbles:true})) }
 beforeEach(async () => {
   backend=createMockBackend()

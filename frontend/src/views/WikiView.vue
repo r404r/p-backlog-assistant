@@ -1,6 +1,6 @@
 <script setup lang="ts">
 // OS ダイアログと WebView 結合は実機確認対象。状態遷移はコンポーネントテストで検証する。
-import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, shallowRef, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import MarkdownBody from '../components/MarkdownBody.vue'
 import type { Heading } from '../lib/markdownDocument'
@@ -18,7 +18,7 @@ import {
 } from '../lib/backend'
 import { errorMessage, formatDateTime } from '../lib/format'
 import { isMarkdownRule } from '../lib/markdown'
-import { buildWikiTree } from '../lib/wikiTree'
+import { buildWikiTree, indexWikiTree } from '../lib/wikiTree'
 import {
   selectedProjectId,
   restoreProjectSelection,
@@ -36,7 +36,94 @@ const headings = ref<Heading[]>([]),
   activeHeading = ref(''),
   tocLimit = ref(500),
   allowLarge = ref(false)
-const wikiIndex = ref<WikiPage[]>([])
+const wikiIndex = shallowRef<WikiPage[]>([])
+const collapsedNodeKeys = shallowRef(new Set<string>())
+const selectedRowKey = ref(''), focusedRowKey = ref('')
+const treeComponent = ref<InstanceType<typeof WikiTree> | null>(null)
+const layout = ref<HTMLElement | null>(null), bodyPort = ref<HTMLElement | null>(null)
+const outerPort = ref<HTMLElement | null>(null)
+const flow = ref(true), layoutHeight = ref(0), tocHeight = ref(0)
+const markdownScrollRoot = computed(() => flow.value ? outerPort.value : bodyPort.value)
+const temporaryId = ref(0)
+const fullTree = computed(() => indexWikiTree(buildWikiTree(wikiIndex.value)))
+const hasCollapsed = computed(() => [...fullTree.value.branches].some(key => collapsedNodeKeys.value.has(key)))
+const allCollapsed = computed(() => !fullTree.value.branches.size || [...fullTree.value.branches].every(key => collapsedNodeKeys.value.has(key)))
+const displayedPages = computed(() => {
+  const extra = wikiIndex.value.find(p => p.id === temporaryId.value)
+  return extra && !pages.value.some(p => p.id === extra.id) ? [...pages.value, extra] : pages.value
+})
+const outsideId = computed(() => displayedPages.value.length > pages.value.length ? temporaryId.value : 0)
+function toggleNode(key: string) {
+  if (locked.value) return
+  const next = new Set(collapsedNodeKeys.value)
+  if (next.has(key)) next.delete(key); else next.add(key)
+  collapsedNodeKeys.value = next
+}
+function expandAll() { if (!locked.value) collapsedNodeKeys.value = new Set() }
+function collapseAll() { if (!locked.value) collapsedNodeKeys.value = new Set(fullTree.value.branches) }
+watch(fullTree, index => {
+  collapsedNodeKeys.value = new Set([...collapsedNodeKeys.value].filter(key => index.keys.has(key)))
+})
+let layoutObserver: ResizeObserver | undefined, layoutFrame = 0
+let treeAnchor: { key: string; offset: number } | undefined
+function scheduleLayout() {
+  if (!layoutFrame) layoutFrame = requestAnimationFrame(() => { layoutFrame = 0; measureLayout() })
+}
+function measureLayout() {
+  const el = layout.value
+  if (!el) return
+  const outer = outerPort.value
+  const bottom = Math.min(window.innerHeight, outer?.getBoundingClientRect().bottom ?? window.innerHeight)
+  // 外側スクロール位置に依存しない文書内の上端を使う。
+  const top = el.getBoundingClientRect().top + (outer?.scrollTop ?? 0)
+  const available = Math.max(0, bottom - top - 16)
+  layoutHeight.value = available
+  const panel = el.querySelector<HTMLElement>('aside')
+  let fixed = 0, tocNatural = 0
+  if (panel && !panelCollapsed.value) {
+    for (const child of panel.children) {
+      if (child.classList.contains('wiki-tree')) continue
+      const node = child as HTMLElement
+      const css = getComputedStyle(node)
+      if (css.display === 'none' || css.position === 'absolute') continue
+      let height = node.getBoundingClientRect().height
+      if (node.classList.contains('wiki-toc-section') && tocOpen.value) {
+        const summary = node.querySelector('summary')?.getBoundingClientRect().height ?? 0
+        tocNatural = node.querySelector('nav')?.scrollHeight ?? 0
+        height = summary
+      }
+      fixed += height + (parseFloat(css.marginTop) || 0) + (parseFloat(css.marginBottom) || 0)
+    }
+  }
+  tocHeight.value = Math.max(0, Math.min(192, available * .25, available - fixed - 142))
+  const tocMinimum = tocNatural ? Math.min(tocNatural, 48) : 0
+  const next = window.innerWidth <= 700 || window.innerHeight < 640 || available < 320 || fixed + tocMinimum + 128 + 14 > available
+  if (flow.value !== next) {
+    const body = bodyPort.value, port = treeComponent.value?.port
+    const bodyTop = (flow.value ? outer : body)?.getBoundingClientRect().top ?? 0
+    const anchor = [...(body?.querySelectorAll<HTMLElement>('h1,h2,h3,h4,h5,h6,p,pre,table') ?? [])]
+      .find(node => node.getBoundingClientRect().bottom > bodyTop)
+    const before = anchor?.getBoundingClientRect().top
+    if (port) {
+      const top = flow.value ? (outer?.getBoundingClientRect().top ?? 0) : port.getBoundingClientRect().top
+      const first = [...port.querySelectorAll<HTMLElement>('[data-row-key]')]
+        .find(node => node.getBoundingClientRect().bottom > top)
+      if (first && (!flow.value || port.getBoundingClientRect().top < window.innerHeight))
+        treeAnchor = { key: first.dataset.rowKey!, offset: first.getBoundingClientRect().top - top }
+    }
+    flow.value = next
+    void nextTick(() => {
+      if (!alive || !anchor || before === undefined) return
+      const destination = next ? outer : body
+      if (!next && outer) outer.scrollTop = 0
+      if (destination) destination.scrollTop += anchor.getBoundingClientRect().top - before
+      if (!next && port && treeAnchor) {
+        const row = [...port.querySelectorAll<HTMLElement>('[data-row-key]')].find(node => node.dataset.rowKey === treeAnchor!.key)
+        if (row) port.scrollTop += row.getBoundingClientRect().top - port.getBoundingClientRect().top - treeAnchor.offset
+      }
+    })
+  }
+}
 const tocOpen = ref(true),
   searchOpen = ref(true)
 function openToc() {
@@ -46,8 +133,8 @@ function openToc() {
 }
 async function navigateWiki(id: number) {
   const page = wikiIndex.value.find((p) => p.id === id && p.projectId === selectedProjectId.value)
-  if (!page || locked.value || !(await leaveEditor())) return
-  await select(page.name, page.id)
+  if (!page) return
+  if (!(await select(page.name, page.id))) return
   await nextTick()
   pageHeading.value?.focus({ preventScroll: true })
 }
@@ -60,7 +147,7 @@ function togglePanel() {
 const profile = ref(''),
   spaceURL = ref('')
 const projects = ref<Project[]>([]),
-  pages = ref<WikiPage[]>([])
+  pages = shallowRef<WikiPage[]>([])
 const initializing = ref(true),
   busy = ref(false),
   disabled = ref(false)
@@ -116,8 +203,7 @@ async function wikiSaved(page: WikiPage) {
   // 検索条件を維持する。名前変更で検索から外れても保存済みページは表示する。
   pages.value = [...pages.value.filter((p) => p.id !== page.id), page]
   wikiIndex.value = [...wikiIndex.value.filter((p) => p.id !== page.id), page]
-  selectedId.value = page.id
-  selectedPath.value = page.name
+  await select(page.name, page.id)
   notice.value = t('wiki.saved')
 }
 function cancelEditor() {editing.value=false;writingBusy.value=false}
@@ -133,7 +219,9 @@ const dialogOpen = computed(() => estimate.value !== null)
 const locked = computed(
   () => initializing.value || busy.value || writingBusy.value || issueSyncRunning.value,
 )
-const tree = computed(() => buildWikiTree(pages.value))
+watch([headings, searchOpen, tocOpen, panelCollapsed, selectedPath, notice, error, editing, initializing, disabled], () => void nextTick(scheduleLayout))
+watch(panelCollapsed, hidden => { if (!hidden) void nextTick(() => treeComponent.value?.reveal(`p:${selectedId.value}`)) })
+const tree = computed(() => buildWikiTree(displayedPages.value))
 const selected = computed(
   () =>
     wikiIndex.value.find((p) => p.id === selectedId.value) ??
@@ -198,9 +286,15 @@ async function load() {
   projectFormatting.value = result.textFormattingRule ?? result.pages[0]?.textFormattingRule ?? ''
   disabled.value = result.disabled
   lastSynced.value = result.lastSyncedAt
-  if (!wikiIndex.value.some((p) => p.id === selectedId.value)) {
+  if (selectedId.value && !wikiIndex.value.some((p) => p.id === selectedId.value)) {
     selectedId.value = 0
+    headings.value = []
+  }
+  if (selectedRowKey.value && !fullTree.value.rows.has(selectedRowKey.value)) {
     selectedPath.value = ''
+    selectedRowKey.value = ''
+  } else if (selectedRowKey.value) {
+    selectedPath.value = fullTree.value.rows.get(selectedRowKey.value)!.node.path
   }
 }
 async function search() {
@@ -216,17 +310,41 @@ function keywordEnter(event: KeyboardEvent) {
   event.preventDefault()
   if (!event.isComposing) void search()
 }
-async function select(path: string, id: number) {
-  if (locked.value || !(await leaveEditor())) return
-  headings.value = []
-  activeHeading.value = ''
+async function select(path: string, id: number, rowKey = '') {
+  const pid = selectedProjectId.value, sequence = request
+  if (locked.value || !(await leaveEditor()) || pid !== selectedProjectId.value || sequence !== request || !alive) return
+  if (!id) {
+    selectedPath.value = path
+    selectedRowKey.value = rowKey || `d:${JSON.stringify(path.split('/').filter(Boolean))}`
+    toggleNode(JSON.stringify(path.split('/').filter(Boolean)))
+    return
+  }
+  const target = fullTree.value.pages.get(id)
+  if (!target) return
   allowLarge.value = false
   tocLimit.value = 500
-  selectedPath.value = path
+  temporaryId.value = id
+  selectedPath.value = target.node.path
   selectedId.value = id
+  selectedRowKey.value = target.rowKey
+  focusedRowKey.value = target.rowKey
+  const next = new Set(collapsedNodeKeys.value)
+  for (let i = 1; i < target.node.segments.length; i++) next.delete(JSON.stringify(target.node.segments.slice(0, i)))
+  collapsedNodeKeys.value = next
   formatted.value = true
+  await nextTick()
+  if (!alive || pid !== selectedProjectId.value || id !== selectedId.value) return
+  if (bodyPort.value) { bodyPort.value.scrollTop = 0; bodyPort.value.scrollLeft = 0 }
+  if (flow.value && outerPort.value && bodyPort.value)
+    outerPort.value.scrollTop += bodyPort.value.getBoundingClientRect().top - outerPort.value.getBoundingClientRect().top
+  if (!panelCollapsed.value) treeComponent.value?.reveal(target.rowKey)
+  return true
 }
 watch(selectedProjectId, () => {
+  collapsedNodeKeys.value = new Set()
+  selectedRowKey.value = focusedRowKey.value = ''
+  temporaryId.value = 0
+  if (treeComponent.value?.port) treeComponent.value.port.scrollTop = 0
   selectedId.value = 0
   selectedPath.value = ''
   pages.value = []
@@ -241,6 +359,17 @@ watch(selectedProjectId, () => {
     })
 })
 onMounted(async () => {
+  outerPort.value = layout.value?.closest<HTMLElement>('.content') ?? null
+  if (typeof ResizeObserver !== 'undefined') {
+    layoutObserver = new ResizeObserver(scheduleLayout)
+    if (outerPort.value) layoutObserver.observe(outerPort.value)
+    const section = layout.value?.closest('.wiki-view')
+    if (section) for (const child of section.children) if (child !== layout.value) layoutObserver.observe(child)
+    const panel = layout.value?.querySelector('aside')
+    if (panel) for (const child of panel.children) if (!child.classList.contains('wiki-tree')) layoutObserver.observe(child)
+  }
+  window.addEventListener('resize', scheduleLayout)
+  scheduleLayout()
   try {
     profile.value = await backend.getActiveProfile()
     if (!profile.value) return
@@ -259,6 +388,9 @@ onMounted(async () => {
   }
 })
 onUnmounted(() => {
+  layoutObserver?.disconnect()
+  window.removeEventListener('resize', scheduleLayout)
+  if (layoutFrame) cancelAnimationFrame(layoutFrame)
   alive = false
   request++
   off()
@@ -427,8 +559,8 @@ async function exportNow() {
         {{ panelCollapsed ? t('wiki.showPanel') : t('wiki.hidePanel') }}
       </button>
     </div>
-    <div class="wiki-layout" :class="{ 'panel-collapsed': panelCollapsed }">
-      <div class="wiki-content">
+    <div ref="layout" class="wiki-layout" :class="{ 'panel-collapsed': panelCollapsed, 'wiki-flow': flow }" :style="{ height: flow ? 'auto' : `${layoutHeight}px` }">
+      <div ref="bodyPort" class="wiki-content">
         <WikiEditor
           v-if="editing"
           :key="editorGeneration"
@@ -490,6 +622,7 @@ async function exportNow() {
             :profile="profile"
             :disabled="locked"
             :allow-large="allowLarge"
+            :scroll-container="markdownScrollRoot"
             @headings="headings = $event"
             @active="activeHeading = $event"
             @navigate="navigateWiki"
@@ -506,35 +639,10 @@ async function exportNow() {
       </div>
       <aside id="wiki-search-panel" :hidden="panelCollapsed" :aria-label="t('wiki.panel')">
         <details
-          v-if="selected && formatted && !editing && isMarkdownRule(selected.textFormattingRule)"
-          :open="tocOpen"
-          @toggle="tocOpen = ($event.target as HTMLDetailsElement).open"
-        >
-          <summary>{{ t('wiki.render.toc') }}</summary>
-          <nav class="wiki-toc" :aria-label="t('wiki.render.toc')">
-            <button
-              v-for="h in headings.slice(0, tocLimit)"
-              :key="h.id"
-              type="button"
-              :class="[`toc-level-${h.level}`, { current: activeHeading === h.id }]"
-              :aria-current="activeHeading === h.id ? 'location' : undefined"
-              @click="markdown?.goToHeading(h.id)"
-            >
-              {{ h.text }}
-            </button>
-            <p v-if="!headings.length">{{ t('wiki.render.noHeadings') }}</p>
-            <button v-if="headings.length > tocLimit" type="button" @click="tocLimit += 500">
-              {{ t('wiki.render.more') }}
-            </button>
-          </nav>
-        </details>
-        <p v-if="!formatted || editing" role="status">{{ t('wiki.render.tocUnavailable') }}</p>
-        <details
           :open="searchOpen"
           @toggle="searchOpen = ($event.target as HTMLDetailsElement).open"
         >
           <summary>{{ t('wiki.panel') }}</summary>
-          <h2 class="wiki-panel-title">{{ t('wiki.panel') }}</h2>
           <form class="wiki-search" @submit.prevent="search">
             <label class="wiki-keyword">{{ t('wiki.keyword')
             }}<input
@@ -562,13 +670,40 @@ async function exportNow() {
             </fieldset>
             <button type="submit" :disabled="locked">{{ t('wiki.search') }}</button>
           </form>
-          <h3 class="wiki-tree-title">{{ t('wiki.tree') }}</h3>
-          <WikiTree :nodes="tree" :selected-id="selectedId" :disabled="locked" @select="select" />
-          <p v-if="!pages.length && !initializing">{{ t('wiki.empty') }}</p>
-          <p v-if="selectedPath">
-            {{ t('wiki.subtree', { path: selectedPath }) }}
-          </p>
         </details>
+        <details
+          v-if="selected && formatted && !editing && isMarkdownRule(selected.textFormattingRule)"
+          class="wiki-toc-section"
+          :open="tocOpen"
+          @toggle="tocOpen = ($event.target as HTMLDetailsElement).open"
+        >
+          <summary>{{ t('wiki.render.toc') }}</summary>
+          <nav :style="{ maxHeight: flow ? '40vh' : `${tocHeight}px` }" class="wiki-toc" :aria-label="t('wiki.render.toc')">
+            <button
+              v-for="h in headings.slice(0, tocLimit)"
+              :key="h.id"
+              type="button"
+              :class="[`toc-level-${h.level}`, { current: activeHeading === h.id }]"
+              :aria-current="activeHeading === h.id ? 'location' : undefined"
+              @click="markdown?.goToHeading(h.id)"
+            >
+              {{ h.text }}
+            </button>
+            <p v-if="!headings.length">{{ t('wiki.render.noHeadings') }}</p>
+            <button v-if="headings.length > tocLimit" type="button" @click="tocLimit += 500">
+              {{ t('wiki.render.more') }}
+            </button>
+          </nav>
+        </details>
+        <p v-if="!formatted || editing" role="status">{{ t('wiki.render.tocUnavailable') }}</p>
+        <div class="wiki-tree-heading">
+          <h3 class="wiki-tree-title">{{ t('wiki.tree') }}</h3>
+          <button type="button" :disabled="locked || !hasCollapsed" :title="t('wiki.allTreeScope')" @click="expandAll">{{ t('wiki.expandAll') }}</button>
+          <button type="button" :disabled="locked || allCollapsed" :title="t('wiki.allTreeScope')" @click="collapseAll">{{ t('wiki.collapseAll') }}</button>
+        </div>
+        <WikiTree ref="treeComponent" :nodes="tree" :selected-id="selectedId" :selected-row-key="selectedRowKey" :focused-row-key="focusedRowKey" :collapsed="collapsedNodeKeys" :outside-id="outsideId" :filtered="!!keyword.trim()" :disabled="locked" :flow="flow" @select="select" @toggle="toggleNode" @focus-row="focusedRowKey = $event" />
+        <p v-if="!pages.length && !initializing">{{ t('wiki.empty') }}</p>
+        <p v-if="selectedPath" class="wiki-selected-path">{{ t('wiki.subtree', { path: selectedPath }) }}</p>
       </aside>
     </div>
     <div v-if="estimate" class="wiki-modal-backdrop">
@@ -619,6 +754,8 @@ async function exportNow() {
   margin: 0.8rem 0;
 }
 .wiki-layout {
+  position: relative;
+  min-height: 0;
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 20rem);
   gap: 1.5rem;
@@ -632,11 +769,13 @@ async function exportNow() {
   margin: 0.8rem 0;
 }
 .wiki-layout aside {
-  align-self: start;
-  position: sticky;
-  top: 1rem;
-  max-height: calc(100vh - 2rem);
-  overflow-y: auto;
+  position: relative;
+  width: 100%;
+  box-sizing: border-box;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
   min-width: 0;
   border-left: var(--border-width) solid var(--border);
   padding-left: 1rem;
@@ -685,6 +824,9 @@ async function exportNow() {
   margin: 0;
 }
 .wiki-content {
+  min-height: 0;
+  overflow-y: auto;
+  overflow-anchor: none;
   min-width: 0;
   overflow-wrap: anywhere;
   overflow-x: auto;
@@ -756,7 +898,7 @@ async function exportNow() {
   }
 }
 .wiki-toc {
-  max-height: 40vh;
+  max-height: 12rem;
   overflow-y: auto;
   display: grid;
   gap: 0.2rem;
@@ -783,4 +925,14 @@ async function exportNow() {
 .wiki-toc :is(.toc-level-4, .toc-level-5, .toc-level-6) {
   padding-left: 2rem;
 }
+
+.wiki-layout aside[hidden] { display: none; }
+.wiki-layout aside > :not(.wiki-tree) { flex: none; }
+.wiki-tree-heading { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; }
+.wiki-selected-path { overflow-wrap: anywhere; }
+.wiki-layout.wiki-flow { height: auto; grid-template-columns: minmax(0, 1fr); }
+.wiki-flow .wiki-content { overflow: visible; }
+.wiki-flow aside { position: relative; max-width: 20rem; overflow: visible; max-height: none; border-left: 0; border-top: var(--border-width) solid var(--border); padding: 1rem 0; }
+.wiki-flow :deep(.wiki-tree) { overflow-y: visible; flex: none; }
+.wiki-flow .wiki-toc { max-height: 40vh; }
 </style>

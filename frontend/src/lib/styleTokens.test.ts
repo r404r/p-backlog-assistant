@@ -539,3 +539,16 @@ describe('Markdownの高亮と縞表の文字コントラスト', () => {
     })
   }
 })
+
+describe('Wikiツリーの状態対比', () => {
+  for (const [name, tokens] of [['ライト', lightTokens], ['ダーク', darkTokens]] as const) {
+    it(`${name}: 通常・現在・hover・無効と焦点を判別できる`, () => {
+      for (const bg of ['--surface', '--selection-bg', '--bg-hover', '--bg-muted']) {
+        for (const fg of ['--text', '--text-muted', '--text-faint'])
+          expect(contrast(tokens.get(fg)!, tokens.get(bg)!), `${fg}/${bg}`).toBeGreaterThanOrEqual(4.5)
+        for (const fg of ['--border', '--focus-ring'])
+          expect(contrast(tokens.get(fg)!, tokens.get(bg)!), `${fg}/${bg}`).toBeGreaterThanOrEqual(3)
+      }
+    })
+  }
+})

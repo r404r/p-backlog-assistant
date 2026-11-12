@@ -81,7 +81,7 @@ it('browses cached pages, searches locally and confirms export with sync enabled
   mounted = mountWithI18n(WikiView, { locale: 'en' })
   await flush()
   const button = (text: string) =>
-    Array.from(mounted!.host.querySelectorAll('button')).find(
+    Array.from(mounted!.host.querySelectorAll<HTMLElement>('button, .wiki-node-name')).find(
       (el) => el.textContent?.trim() === text,
     )!
   button('Start').click()
@@ -187,7 +187,7 @@ it('cancels preparation while a project refresh is still pending', async () => {
       release = resolve
     })
   const button = (text: string) =>
-    Array.from(mounted!.host.querySelectorAll('button')).find(
+    Array.from(mounted!.host.querySelectorAll<HTMLElement>('button, .wiki-node-name')).find(
       (el) => el.textContent?.trim() === text,
     )!
   button('Export project').click()

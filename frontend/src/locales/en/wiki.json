@@ -112,5 +112,20 @@
       "network": "Image unavailable",
       "busy": "Busy; retry when the operation finishes"
     }
-  }
+  },
+  "expandAll": "Expand all",
+  "collapseAll": "Collapse all",
+  "expandNode": "Expand {name}",
+  "collapseNode": "Collapse {name}",
+  "descendantPages": "Descendant pages: {count}",
+  "filteredDescendantPages": "Visible descendant pages: {count}",
+  "currentPage": "Current page",
+  "selectedHierarchy": "Selected hierarchy",
+  "folderNode": "Directory",
+  "pageNode": "Page",
+  "pageWithChildrenNode": "Page with descendants",
+  "outsideSearch": "Current page outside search results",
+  "allTreeScope": "Applies to hierarchies hidden by search",
+  "duplicatePage": "Duplicate page ID: {id}",
+  "treeKeyboardHelp": "Use arrows to move or expand; Enter or Space selects"
 }

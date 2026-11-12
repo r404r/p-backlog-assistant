@@ -31,6 +31,7 @@ const props = defineProps<{
   profile?: string
   disabled?: boolean
   variant?: 'wiki' | 'comment'
+  scrollContainer?: HTMLElement | null
   allowLarge?: boolean
 }>()
 const emit = defineEmits<{ headings: [Heading[]]; active: [string]; navigate: [number] }>()
@@ -141,6 +142,7 @@ function cleanup() {
   highlightBytes = 0
 }
 function getScrollRoot() {
+  if (props.scrollContainer) return props.scrollContainer
   let parent = root.value?.parentElement ?? null
   while (parent) {
     if (
@@ -477,33 +479,44 @@ watch(
     refresh()
     await nextTick()
     if (gen !== generation || !root.value) return
-    scrollRoot = getScrollRoot()
-    scrollRoot?.addEventListener('scroll', onScroll, { passive: true })
-    window.addEventListener('resize', onScroll)
+    bindScrollRoot()
     if (typeof ResizeObserver !== 'undefined') {
       positionObserver = new ResizeObserver(onScroll)
       positionObserver.observe(root.value)
     }
-    if (typeof IntersectionObserver !== 'undefined') {
-      observer = new IntersectionObserver(
-        (entries) => {
-          for (const entry of entries)
-            if (entry.isIntersecting) {
-              const image = entry.target.getAttribute('data-md-image'),
-                code = entry.target.getAttribute('data-md-code')
-              if (image !== null) loadImage(Number(image))
-              if (code !== null) highlight(Number(code))
-              observer?.unobserve(entry.target)
-            }
-        },
-        { root: scrollRoot === document.scrollingElement ? null : scrollRoot, rootMargin: '200px' },
-      )
-      observeVisible()
-    }
-    updatePosition()
   },
   { immediate: true },
 )
+function bindScrollRoot() {
+  if (!root.value || !doc.value) return
+  scrollRoot?.removeEventListener('scroll', onScroll)
+  observer?.disconnect()
+  observer = undefined
+  scrollRoot = getScrollRoot()
+  scrollRoot?.addEventListener('scroll', onScroll, { passive: true })
+  window.addEventListener('resize', onScroll)
+  if (typeof IntersectionObserver !== 'undefined') {
+    observer = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries)
+          if (entry.isIntersecting) {
+            const image = entry.target.getAttribute('data-md-image'),
+              code = entry.target.getAttribute('data-md-code')
+            if (image !== null) loadImage(Number(image))
+            if (code !== null) highlight(Number(code))
+            observer?.unobserve(entry.target)
+          }
+      },
+      { root: scrollRoot === document.scrollingElement ? null : scrollRoot, rootMargin: '200px' },
+    )
+    observeVisible()
+  }
+  updatePosition()
+}
+watch(() => props.scrollContainer, async () => {
+  await nextTick()
+  bindScrollRoot()
+})
 watch(
   () => props.disabled,
   (disabled) => {

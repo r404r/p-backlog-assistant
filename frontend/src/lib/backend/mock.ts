@@ -675,6 +675,9 @@ export function createMockBackend(): Backend {
     textFormattingRule: 'markdown', attachments: [7,8,9,20,21,22].map(id=>({id,wikiId:index+1,name:({7:'flow.png',8:'photo.jpg',9:'animation.gif',20:'forbidden.png',21:'unsupported.svg',22:'large.png'} as Record<number,string>)[id],size:id===22?9000000:1024})),
   }))
   wikiPages.push(...['未取得','重名','重名'].map((name,i)=>({...wikiPages[0],id:i+4,name,contentFetchedAt:i===0?'':wikiTime,content:i===0?'':'# '+name,attachments:[]})))
+  const treeNames = ['架空手引', '架空手引/開始', '架空手引/確認事項' + 'あ'.repeat(120), '架空保管/記録', '架空深層/一/二/三/四/五/六/末端', ...['!先頭', '-先頭', '10案', '2案', 'A', 'A/子', 'B', '_先頭', 'a', 'あ', 'ア', 'カ', '仮箱/子', '漢', 'Ａ', 'ｶ'].map(name => '架空並替/' + name)]
+  wikiPages.push(...treeNames.map((name, i) => ({ ...wikiPages[0], id: 100 + i, name,
+    content: '# 架空の開始\n\n[[架空手引/開始]]\n\n' + Array.from({ length: 20 }, (_, n) => `## 確認 ${n + 1}\n\n合成データによる説明。\n\n`).join(''), attachments: [] })))
   const copyWiki = (page: typeof wikiPages[number]) => ({ ...page, tags: [...page.tags], attachments: [...page.attachments] })
 
   return {

@@ -112,5 +112,20 @@
       "network": "画像を取得できません",
       "busy": "処理中です。終了後に再試行してください"
     }
-  }
+  },
+  "expandAll": "すべて展開",
+  "collapseAll": "すべて折りたたむ",
+  "expandNode": "{name} を展開",
+  "collapseNode": "{name} を折りたたむ",
+  "descendantPages": "下位ページ: {count}",
+  "filteredDescendantPages": "表示中の下位ページ: {count}",
+  "currentPage": "現在のページ",
+  "selectedHierarchy": "選択階層",
+  "folderNode": "ディレクトリ",
+  "pageNode": "ページ",
+  "pageWithChildrenNode": "下位のあるページ",
+  "outsideSearch": "検索対象外の現在ページ",
+  "allTreeScope": "検索で非表示の階層にも適用",
+  "duplicatePage": "同名ページ ID: {id}",
+  "treeKeyboardHelp": "上下で移動、左右で開閉、Enter または Space で選択"
 }

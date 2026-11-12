@@ -242,3 +242,30 @@ describe('MarkdownBody の操作と寿命', () => {
     expect(mounted.host.textContent).toContain('画像を確認できません')
   })
 })
+
+it.each(['wiki', 'comment'] as const)('rebinds an explicit scroll container without replacing headings or image requests (%s)', async (variant) => {
+  const first = document.createElement('div'), second = document.createElement('div')
+  const container = ref<HTMLElement>(first)
+  // eslint-disable-next-line vue/one-component-per-file -- スクロール所有者の差替えを検証する専用ホスト。
+  mounted = mountWithI18n(defineComponent({ setup: () => () => h(MarkdownBody, { source: '# One\n\n## Two', variant, scrollContainer: container.value }) }))
+  await nextTick(); await nextTick(); await nextTick()
+  const heading = mounted.host.querySelector('h2')!
+  const remove = vi.spyOn(first, 'removeEventListener'), add = vi.spyOn(second, 'addEventListener')
+  container.value = second
+  await nextTick(); await nextTick(); await nextTick()
+  expect(mounted.host.querySelector('h2')).toBe(heading)
+  expect(remove).toHaveBeenCalledWith('scroll', expect.any(Function))
+  expect(add).toHaveBeenCalledWith('scroll', expect.any(Function), { passive: true })
+})
+it.each(['wiki', 'comment'] as const)('keeps ancestor scroll detection when no container is supplied (%s)', async (variant) => {
+  const host = document.createElement('div')
+  host.style.overflowY = 'auto'
+  Object.defineProperty(host, 'scrollHeight', { value: 900 })
+  Object.defineProperty(host, 'clientHeight', { value: 100 })
+  const add = vi.spyOn(host, 'addEventListener')
+  // eslint-disable-next-line vue/one-component-per-file -- 既定の祖先検出を検証する専用ホスト。
+  const Parent = defineComponent({ setup: () => () => h('div', { ref: (el: unknown) => { if (el instanceof HTMLElement) { el.style.overflowY = 'auto'; Object.defineProperty(el, 'scrollHeight', { value: 900, configurable: true }); Object.defineProperty(el, 'clientHeight', { value: 100, configurable: true }); el.addEventListener = host.addEventListener.bind(host) } } }, h(MarkdownBody, { source: '# One', variant })) })
+  mounted = mountWithI18n(Parent)
+  await nextTick(); await nextTick(); await nextTick()
+  expect(add).toHaveBeenCalledWith('scroll', expect.any(Function), { passive: true })
+})
