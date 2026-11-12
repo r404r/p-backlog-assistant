@@ -247,6 +247,9 @@ describe('applyTheme', () => {
     applyTheme('dark')
 
     expect(runtime.background).toEqual([[...THEME_BACKGROUND_RGB.dark, 255]])
+    expect(document.documentElement.style.backgroundColor).toBe('rgb(15, 15, 15)')
+    applyTheme('light')
+    expect(document.documentElement.style.backgroundColor).toBe('rgb(248, 245, 236)')
   })
 
   it('Wails ランタイムが無くてもテーマ適用は成功する', async () => {
@@ -654,7 +657,7 @@ interface PrepaintEnv {
  * クラシックスクリプト(グローバルの window / document を参照する)なので、
  * new Function の引数で同名の変数を与えて差し替える。
  */
-function runPrepaint(env: PrepaintEnv): { theme: string | null; colorScheme: string } {
+function runPrepaint(env: PrepaintEnv): { theme: string | null; colorScheme: string; background: string } {
   const code = readFileSync(PREPAINT_PATH, 'utf8')
   const root = document.createElement('html')
   const fakeDocument = { documentElement: root }
@@ -686,6 +689,7 @@ function runPrepaint(env: PrepaintEnv): { theme: string | null; colorScheme: str
   return {
     theme: root.getAttribute('data-theme'),
     colorScheme: root.style.colorScheme,
+    background: root.style.backgroundColor,
   }
 }
 
@@ -694,6 +698,7 @@ describe('prepaint.js(起動時のちらつき対策)', () => {
     expect(runPrepaint({ stored: 'dark', matchMedia: 'light' })).toEqual({
       theme: 'dark',
       colorScheme: 'dark',
+      background: 'rgb(15, 15, 15)',
     })
   })
 
@@ -701,6 +706,7 @@ describe('prepaint.js(起動時のちらつき対策)', () => {
     expect(runPrepaint({ stored: 'light', matchMedia: 'dark' })).toEqual({
       theme: 'light',
       colorScheme: 'light',
+      background: 'rgb(248, 245, 236)',
     })
   })
 
@@ -721,6 +727,7 @@ describe('prepaint.js(起動時のちらつき対策)', () => {
     expect(runPrepaint({ storageThrows: true, matchMedia: 'dark' })).toEqual({
       theme: 'light',
       colorScheme: 'light',
+      background: 'rgb(248, 245, 236)',
     })
   })
 
@@ -728,6 +735,7 @@ describe('prepaint.js(起動時のちらつき対策)', () => {
     expect(runPrepaint({ stored: 'system', matchMedia: 'absent' })).toEqual({
       theme: 'light',
       colorScheme: 'light',
+      background: 'rgb(248, 245, 236)',
     })
   })
 
@@ -735,7 +743,19 @@ describe('prepaint.js(起動時のちらつき対策)', () => {
     expect(runPrepaint({ stored: 'system', matchMedia: 'throws' })).toEqual({
       theme: 'light',
       colorScheme: 'light',
+      background: 'rgb(248, 245, 236)',
     })
+  })
+
+  it('全てのモード・OS・例外分岐で初回背景が一致する', () => {
+    for (const stored of ['light', 'dark', 'system', 'purple', null]) {
+      for (const matchMedia of ['dark', 'light', 'absent', 'throws'] as const) {
+        for (const storageThrows of [true, false]) {
+          const result = runPrepaint({ stored, matchMedia, storageThrows })
+          expect(result.background).toBe(result.theme === 'dark' ? 'rgb(15, 15, 15)' : 'rgb(248, 245, 236)')
+        }
+      }
+    }
   })
 
   it('theme.ts と同じ localStorage キーを参照する', () => {

@@ -12,7 +12,7 @@
  * のいずれかが 1 つでも入り込むと崩れる。人手のレビューでは見落とすため、
  * ソースを読み込む静的検査として継続実行する(設計 §4)。
  *
- * 検査対象は style.css と src 配下の全 .vue。固定リストに列挙すると画面を足した
+ * 検査対象は src 配下の全 .css と .vue。固定リストに列挙すると画面を足した
  * ときに追加を忘れて検査から漏れるため、**fs で自動列挙**する。
  */
 import { readdirSync, readFileSync } from 'node:fs'
@@ -26,23 +26,22 @@ const STYLE_CSS_PATH = resolve(SRC_DIR, 'style.css')
 
 const styleCss = readFileSync(STYLE_CSS_PATH, 'utf8')
 
-/** src 配下の .vue を再帰的に列挙する(テストは .ts のため自然に対象外になる) */
+/** src 配下の .vue と .css を再帰的に列挙する(テストは .ts のため自然に対象外になる) */
 function listVueFiles(dir: string): string[] {
   const found: string[] = []
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     const path = join(dir, entry.name)
     if (entry.isDirectory()) {
       found.push(...listVueFiles(path))
-    } else if (entry.name.endsWith('.vue')) {
+    } else if ((/\.(vue|css)$/).test(entry.name)) {
       found.push(path)
     }
   }
   return found.sort()
 }
 
-/** 色を持ち得るソース(style.css + 全 .vue)。名前は frontend/ からの相対パス */
+/** 色を持ち得るソース(全 .css + 全 .vue)。名前は frontend/ からの相対パス */
 const STYLE_SOURCES: { name: string; source: string }[] = [
-  STYLE_CSS_PATH,
   ...listVueFiles(SRC_DIR),
 ].map((path) => ({
   name: relative(process.cwd(), path),
@@ -99,6 +98,7 @@ describe('デザイントークンの定義', () => {
   it('検査対象のソースを列挙できている(列挙の空振りで検査が素通りしない)', () => {
     const names = STYLE_SOURCES.map((f) => f.name)
     expect(names).toContain('src/style.css')
+    expect(names).toContain('src/markdown.css')
     expect(names).toContain('src/App.vue')
     expect(names).toContain('src/views/AboutView.vue')
     // style.css + App.vue + 画面 6 本
@@ -139,6 +139,7 @@ describe('ハードコードされた色の残存', () => {
     { label: 'hex', re: /#(?:[0-9a-fA-F]{3,4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})\b/g },
     { label: 'rgb()', re: /\brgba?\s*\(/g },
     { label: 'hsl()', re: /\bhsla?\s*\(/g },
+    { label: '色関数', re: /\b(?:oklch|oklab|color-mix|lab|lch|color)\s*\(/g },
   ]
 
   /** トークン定義そのもの(:root の 2 ブロック)は色リテラルで良いので除外する */
@@ -206,7 +207,7 @@ const BG_TOKENS = [
  *   --border / --handle-hover-bg / --warning-border / --success-border /
  *   --danger-border / --danger-border-muted … 罫線
  *   --accent-muted … 押下不可の主ボタンの塗り(無効表示なので AA 対象外)
- *   --overlay / --shadow / --shadow-subtle … 幕・影(半透明のため比率を算出できない)
+ *   --overlay / --shadow … 幕・影(半透明のため比率を算出できない)
  */
 const CONTRAST_PAIRS: [string, string][] = [
   ...['--text', '--text-muted', '--accent-fg', '--accent-fg-hover'].flatMap(
@@ -239,20 +240,6 @@ const CONTRAST_PAIRS: [string, string][] = [
   ),
 ]
 
-/**
- * ライトのみ AA を免除する文字トークン。
- *
- * ライト値は「ダークモード対応で見た目を変えない」ことを最優先に、既存色のまま
- * 凍結している(設計 §3.1)。`--text-faint`(#8c959f)はその既存色で、
- * 白地に対して 3.04:1、表ヘッダ地(#f6f8fa)に対して 2.85:1 と AA に届かない。
- * これはダークモード対応で持ち込んだ問題ではなく元からの状態のため、ここでは
- * 現状を追認し、配色の改善は別課題として扱う。
- *
- * ダーク側は免除しない(設計 §3.1 が `--text-faint` について
- * 「通常文字として読める AA 値にする」と定めているため)。
- */
-const LIGHT_EXEMPT_TOKENS = new Set(['--text-faint'])
-
 const AA_NORMAL = 4.5
 
 describe('コントラスト(WCAG AA)', () => {
@@ -263,7 +250,6 @@ describe('コントラスト(WCAG AA)', () => {
     it(`${themeName}: 文字と背景の組が AA を満たす`, () => {
       const failures: string[] = []
       for (const [fg, bg] of CONTRAST_PAIRS) {
-        if (themeName === 'ライト' && LIGHT_EXEMPT_TOKENS.has(fg)) continue
         const fgHex = tokens.get(fg)
         const bgHex = tokens.get(bg)
         expect(fgHex, `${fg} が未定義です`).toBeDefined()
@@ -278,4 +264,65 @@ describe('コントラスト(WCAG AA)', () => {
       expect(failures).toEqual([])
     })
   }
+})
+
+
+/** CSS と Vue のインライン指定を同じ宣言規則で調べる。 */
+function literalShapes(source: string): string[] {
+  const clean = stripCssComments(source)
+  const declarations = clean.matchAll(/(?:border-radius|border-(?:top|bottom)-(?:left|right)-radius|box-shadow|borderRadius|border(?:Top|Bottom)(?:Left|Right)Radius|boxShadow)\s*:\s*(?:["']([^"']*)["']|([^;}"']+))/g)
+  return [...declarations].map((m) => (m[1] ?? m[2]).trim())
+    .filter((value) => !/^var\(--[\w-]+\)$/.test(value))
+}
+
+const SHAPE_TOKENS: Record<string, string> = {
+  '--radius-ui': '4px', '--radius-code': '2px', '--radius-circle': '50%',
+  '--radius-none': '0', '--radius-segment-start': '4px 0 0 4px',
+  '--radius-segment-end': '0 4px 4px 0', '--shadow-none': 'none',
+  '--shadow-card': '2px 2px 0 var(--shadow)',
+  '--shadow-menu': '4px 4px 0 var(--floating-shadow-color)',
+  '--shadow-dialog': '6px 6px 0 var(--floating-shadow-color)',
+  '--shadow-button-hover': '3px 3px 0 var(--floating-shadow-color)',
+  '--heading-weight': '800', '--subheading-weight': '700', '--strong-weight': '700',
+  '--border-width': '1px', '--divider-width': '2px', '--quote-border-width': '4px',
+  '--focus-width': '3px', '--focus-offset': '3px', '--button-lift': '-2px',
+  '--motion-duration': '120ms',
+}
+
+describe('Pop の形状と配色', () => {
+  it('形状検査が長形式・複合値・インライン指定も拒否する', () => {
+    expect(literalShapes('border-radius: 4px; box-shadow: none; border-top-left-radius: 0;')).toHaveLength(3)
+    expect(literalShapes('border-radius:\n  4px 0 0 4px;')).toHaveLength(1)
+    expect(literalShapes('borderRadius: "4px", boxShadow: "none"')).toHaveLength(2)
+    expect(literalShapes('/* box-shadow: none; */ border-radius: var(--radius-ui);')).toEqual([])
+    // 未定義参照は別の全ソース走査で拒否する。
+    expect(literalShapes('border-radius: var(--missing);')).toEqual([])
+  })
+  for (const [name, tokens] of [['ライト', lightTokens], ['ダーク', darkTokens]] as const) {
+    it(`${name}: 形状値と hex 色を定義する`, () => {
+      for (const [token, value] of Object.entries(SHAPE_TOKENS)) expect(tokens.get(token), token).toBe(value)
+      for (const [token, value] of tokens) {
+        if (!(token in SHAPE_TOKENS)) expect(value, token).toMatch(/^#[0-9a-f]{6}(?:[0-9a-f]{2})?$/i)
+      }
+      expect(tokens.has('--shadow-subtle')).toBe(false)
+      for (const token of ['--frame-bg', '--grid-border', '--focus-ring', '--floating-shadow-color']) expect(tokens.has(token), token).toBe(true)
+    })
+    it(`${name}: 焦点と状態の輪郭は隣接背景に 3:1 を満たす`, () => {
+      for (const fg of ['--focus-ring', '--border']) {
+        for (const bg of [...BG_TOKENS, '--frame-bg', '--accent-emphasis', '--warning-bg', '--success-bg', '--danger-bg', '--danger-bg-hover', '--danger-bg-subtle']) {
+          // 黄色の主ボタン上には outline-offset により画布色の隙間がある。
+          if (fg === '--focus-ring' && bg === '--accent-emphasis') continue
+          expect(contrast(tokens.get(fg)!, tokens.get(bg)!), `${fg} / ${bg}`).toBeGreaterThanOrEqual(3)
+        }
+      }
+      for (const fg of ['--text', '--text-muted', '--text-faint', '--accent-fg', '--accent-fg-hover']) expect(contrast(tokens.get(fg)!, tokens.get('--frame-bg')!), fg).toBeGreaterThanOrEqual(4.5)
+    })
+  }
+  it('色・形状のリテラルは style.css のトークン定義内に閉じる', () => {
+    for (const { name, source } of STYLE_SOURCES) {
+      const clean = stripCssComments(source)
+      const body = name === 'src/style.css' ? clean.replace(/:root(?:\[data-theme="dark"\])?\s*\{[^}]*\}/g, '') : clean
+      expect(literalShapes(body), name).toEqual([])
+    }
+  })
 })
