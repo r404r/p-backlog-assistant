@@ -266,6 +266,41 @@ describe('コントラスト(WCAG AA)', () => {
   }
 })
 
+describe('課題詳細の押下状態', () => {
+  const source = stripCssComments(readFileSync(resolve(SRC_DIR, 'components/IssueDetailDialog.vue'), 'utf8'))
+
+  function colorToken(selector: string, property: string): string {
+    const block = extractBlock(source, selector)
+    const declaration = block.match(new RegExp(`(?:^|;)\\s*${property}:\\s*var\\((--[\\w-]+)\\)\\s*;`))
+    if (!declaration) throw new Error(`${selector} の ${property} に色トークンが必要です`)
+    return declaration[1]
+  }
+
+  for (const [themeName, tokens] of [['ライト', lightTokens], ['ダーク', darkTokens]] as const) {
+    for (const [pressed, inactiveSelectors] of [
+      [".view-toggle button[aria-pressed='true']", ['.view-toggle button']],
+      ['.modal.maximized .maximize-toggle', ['.maximize-toggle', '.maximize-toggle:hover']],
+      ['.modal.maximized .maximize-toggle:hover', ['.maximize-toggle', '.maximize-toggle:hover']],
+    ] as const) {
+      it(`${themeName}: ${pressed} の塗りで未押下状態を識別でき、文字も読める`, () => {
+        const fill = colorToken(pressed, 'background')
+        const foreground = colorToken(pressed, 'color')
+        // 共通の描辺ではなく、押下時だけ変わる塗りを実際の宣言から検査する。
+        const adjacent = [
+          ...inactiveSelectors.map((selector) => colorToken(selector, 'background')),
+          '--surface', '--bg-muted', '--bg',
+        ]
+        for (const background of adjacent) {
+          expect(contrast(tokens.get(fill)!, tokens.get(background)!), `${pressed}: ${fill} / ${background}`)
+            .toBeGreaterThanOrEqual(3)
+        }
+        expect(contrast(tokens.get(foreground)!, tokens.get(fill)!), `${pressed}: 文字 / 押下時の塗り`)
+          .toBeGreaterThanOrEqual(4.5)
+      })
+    }
+  }
+})
+
 
 /** CSS と Vue のインライン指定を同じ宣言規則で調べる。 */
 function literalShapes(source: string): string[] {
