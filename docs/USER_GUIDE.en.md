@@ -34,7 +34,7 @@ The main use cases are:
 | Filter issues by conditions and export them to Excel | Issues |
 | Apply edits made in Excel to many issues at once, or add many issues at once | Bulk Update & Add |
 | Export users, teams, and project membership to Excel | User Export |
-| Search, browse, and back up Wiki pages with attachments | Wiki |
+| Search, browse, and back up Wiki pages with attachments, or edit and create individual pages | Wiki |
 
 ### Requirements
 
@@ -67,7 +67,7 @@ Drag the right edge of the sidebar to adjust its width between 140 and 360 px. D
 |---|---|
 | Connection | Add, edit, delete, and switch connection profiles |
 | Issues | Sync, search, and export issues to Excel |
-| Wiki | Sync, browse, search, and export Wiki pages with attachments |
+| Wiki | Sync, browse, search, export with attachments, and edit or create individual pages |
 | Bulk Update | Export a template, import it, and write changes in bulk |
 | Users | Sync, filter, and export users to Excel |
 | Sync Status | Last sync time per data type, manual sync, rate limit remaining |

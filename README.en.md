@@ -2,7 +2,7 @@
 
 [日本語](README.md) | English
 
-A desktop app that extracts and bulk-updates issues and user information in Nulab [Backlog](https://backlog.com/) safely, using a local cache. Open source software under the MIT License.
+A desktop app that extracts and bulk-updates issues and user information in Nulab [Backlog](https://backlog.com/) safely, using a local cache. It also supports Wiki synchronization, search, export with attachments, and single-page editing and creation. Open source software under the MIT License.
 
 - Tech stack: [Wails v2](https://wails.io/) + Vue 3 + TypeScript / Go
 - Local cache: SQLite ([modernc.org/sqlite](https://pkg.go.dev/modernc.org/sqlite), pure Go)
@@ -38,6 +38,7 @@ See the [User Guide](docs/USER_GUIDE.en.md) for installation steps, how to use e
 ### Wiki
 - Sync each project with a dedicated Sync Wiki button, separately from issues. Only new or changed page content is fetched; projects without Wiki show Wiki disabled
 - Browse a hierarchy based on `/`, search page names and content locally (Japanese and multiple words with AND/OR), and view tags, authors, attachments, and the last Wiki sync time
+- Search and the tree appear in a collapsible panel on the far right; collapse it to give the page content the full width
 - Preview Markdown according to the project's formatting rule, view source text, fetch an individual page again, and copy its URL
 - Export a project or selected subtree with page content, attachments, `index.xlsx`, and `manifest.json`. Review counts, size, and estimated time before starting; cancel the export or inspect individual attachment failures in the index
 - Edit a single page name and content, or create a page. Switch between text and preview; confirm before leaving unsaved changes. Conflicts offer reload, copy, or explicitly confirmed overwrite. Email notifications default to off
