@@ -499,15 +499,15 @@ section {
 
 .mock-note {
   background: var(--warning-bg);
-  border: 1px solid var(--warning-border);
-  border-radius: 4px;
+  border: var(--border-width) solid var(--warning-border);
+  border-radius: var(--radius-ui);
   padding: 0.5rem 0.75rem;
   font-size: 0.85rem;
 }
 
 .first-run {
-  border: 1px solid var(--border);
-  border-radius: 6px;
+  border: var(--border-width) solid var(--border);
+  border-radius: var(--radius-ui);
   padding: 1.5rem;
   background: var(--bg-muted);
 }
@@ -525,6 +525,9 @@ section {
 /* 幅が足りないときだけ横スクロールさせる(パネル自体は全幅を保つ) */
 .table-wrap {
   width: 100%;
+  box-sizing: border-box;
+  border: var(--border-width) solid var(--border);
+  border-radius: var(--radius-ui);
   overflow-x: auto;
 }
 
@@ -536,14 +539,14 @@ section {
 
 .profile-list th,
 .profile-list td {
-  border: 1px solid var(--border);
+  border: var(--border-width) solid var(--grid-border);
   padding: 0.4rem 0.6rem;
   text-align: left;
 }
 
 .profile-list th {
   background: var(--bg-muted);
-  font-weight: 600;
+  font-weight: var(--strong-weight);
 }
 
 .profile-list tr.active td {
@@ -556,8 +559,8 @@ section {
   padding: 0 0.4rem;
   font-size: 0.75rem;
   color: var(--accent-fg);
-  border: 1px solid var(--accent-fg);
-  border-radius: 8px;
+  border: var(--border-width) solid var(--accent-fg);
+  border-radius: var(--radius-ui);
 }
 
 .actions {
@@ -574,8 +577,8 @@ section {
 }
 
 .profile-form {
-  border: 1px solid var(--border);
-  border-radius: 6px;
+  border: var(--border-width) solid var(--border);
+  border-radius: var(--radius-ui);
   padding: 1rem 1.25rem;
   background: var(--surface);
 }
@@ -586,7 +589,7 @@ section {
 
 .field label {
   display: block;
-  font-weight: 600;
+  font-weight: var(--strong-weight);
   margin-bottom: 0.25rem;
   font-size: 0.9rem;
 }
@@ -601,8 +604,8 @@ input[type='text'],
 input[type='password'],
 select {
   padding: 0.4rem 0.5rem;
-  border: 1px solid var(--border);
-  border-radius: 4px;
+  border: var(--border-width) solid var(--border);
+  border-radius: var(--radius-ui);
   font-size: 0.9rem;
   background: var(--bg);
   color: var(--text);
@@ -641,23 +644,23 @@ button.danger:hover:not(:disabled) {
 
 .test-result {
   margin-top: 0.9rem;
-  border-radius: 4px;
+  border-radius: var(--radius-ui);
   padding: 0.6rem 0.9rem;
   font-size: 0.9rem;
 }
 
 .test-result.ok {
   background: var(--success-bg);
-  border: 1px solid var(--success-border);
+  border: var(--border-width) solid var(--success-border);
 }
 
 .test-result.ng {
   background: var(--danger-bg-hover);
-  border: 1px solid var(--danger-border-muted);
+  border: var(--border-width) solid var(--danger-border-muted);
 }
 
 .result-title {
-  font-weight: 600;
+  font-weight: var(--strong-weight);
   margin: 0 0 0.3rem;
 }
 
@@ -677,11 +680,12 @@ button.danger:hover:not(:disabled) {
 }
 
 .modal {
+  border: var(--border-width) solid var(--border);
   background: var(--surface);
-  border-radius: 6px;
+  border-radius: var(--radius-ui);
   padding: 1.25rem 1.5rem;
   width: min(480px, 90vw);
-  box-shadow: 0 8px 24px var(--shadow);
+  box-shadow: var(--shadow-dialog);
   font-size: 0.9rem;
 }
 

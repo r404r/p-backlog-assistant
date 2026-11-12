@@ -455,16 +455,16 @@ async function exportExcel() {
 
 .mock-note {
   background: var(--warning-bg);
-  border: 1px solid var(--warning-border);
-  border-radius: 4px;
+  border: var(--border-width) solid var(--warning-border);
+  border-radius: var(--radius-ui);
   padding: 0.5rem 0.75rem;
   font-size: 0.85rem;
 }
 
 .notice {
   background: var(--bg-muted);
-  border: 1px solid var(--border);
-  border-radius: 4px;
+  border: var(--border-width) solid var(--border);
+  border-radius: var(--radius-ui);
   padding: 0.5rem 0.75rem;
   font-size: 0.85rem;
   color: var(--text-muted);
@@ -477,7 +477,7 @@ async function exportExcel() {
 }
 
 .row > label {
-  font-weight: 600;
+  font-weight: var(--strong-weight);
   font-size: 0.9rem;
   min-width: 6rem;
 }
@@ -485,8 +485,8 @@ async function exportExcel() {
 input[type='text'],
 select {
   padding: 0.4rem 0.5rem;
-  border: 1px solid var(--border);
-  border-radius: 4px;
+  border: var(--border-width) solid var(--border);
+  border-radius: var(--radius-ui);
   font-size: 0.9rem;
   background: var(--bg);
   color: var(--text);
@@ -533,9 +533,9 @@ button.link {
   display: inline-block;
   width: 14px;
   height: 14px;
-  border: 2px solid var(--border);
+  border: 2px solid var(--grid-border);
   border-top-color: var(--accent-fg);
-  border-radius: 50%;
+  border-radius: var(--radius-circle);
   animation: spin 0.8s linear infinite;
 }
 
@@ -559,15 +559,15 @@ button.link {
 
 .summary {
   font-size: 0.9rem;
-  font-weight: 600;
+  font-weight: var(--strong-weight);
   margin: 0 0 0.5rem;
 }
 
 .table-wrap {
   max-height: 420px;
   overflow: auto;
-  border: 1px solid var(--border);
-  border-radius: 4px;
+  border: var(--border-width) solid var(--border);
+  border-radius: var(--radius-ui);
 }
 
 table {
@@ -578,7 +578,7 @@ table {
 
 th,
 td {
-  border-bottom: 1px solid var(--border);
+  border-bottom: var(--border-width) solid var(--grid-border);
   padding: 0.35rem 0.6rem;
   text-align: left;
   vertical-align: top;
@@ -586,7 +586,7 @@ td {
 
 th {
   background: var(--bg-muted);
-  font-weight: 600;
+  font-weight: var(--strong-weight);
   position: sticky;
   top: 0;
   z-index: 1;

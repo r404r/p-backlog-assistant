@@ -127,8 +127,8 @@ function toggleItem(definitionId: number, itemId: number, event: Event) {
 
 <style scoped>
 .cf-filters {
-  border: 1px solid var(--border);
-  border-radius: 4px;
+  border: var(--border-width) solid var(--border);
+  border-radius: var(--radius-ui);
   padding: 0.5rem 0.75rem;
   margin-bottom: 0.75rem;
   background: var(--bg-muted);
@@ -137,7 +137,7 @@ function toggleItem(definitionId: number, itemId: number, event: Event) {
 .cf-filters > summary {
   cursor: pointer;
   font-size: 0.9rem;
-  font-weight: 600;
+  font-weight: var(--strong-weight);
 }
 
 .cf-filters[open] > summary {
@@ -150,7 +150,7 @@ function toggleItem(definitionId: number, itemId: number, event: Event) {
 }
 
 .row > label {
-  font-weight: 600;
+  font-weight: var(--strong-weight);
   font-size: 0.9rem;
 }
 
@@ -168,8 +168,8 @@ function toggleItem(definitionId: number, itemId: number, event: Event) {
 input[type='text'],
 input[type='date'] {
   padding: 0.4rem 0.5rem;
-  border: 1px solid var(--border);
-  border-radius: 4px;
+  border: var(--border-width) solid var(--border);
+  border-radius: var(--radius-ui);
   font-size: 0.9rem;
   background: var(--bg);
   color: var(--text);

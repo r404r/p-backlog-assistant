@@ -45,13 +45,13 @@ div.markdown-body h6 { font-size: 0.95em; }
 .markdown-body blockquote {
   margin: 0.6em 0;
   padding: 0.1em 0.8em;
-  border-left: 3px solid var(--border);
+  border-left: var(--quote-border-width) solid var(--border);
   color: var(--text-muted);
 }
 
 .markdown-body hr {
   border: none;
-  border-top: 1px solid var(--border);
+  border-top: var(--divider-width) solid var(--border);
   margin: 1em 0;
 }
 
@@ -59,15 +59,18 @@ div.markdown-body h6 { font-size: 0.95em; }
   font-family: monospace;
   font-size: 0.9em;
   background: var(--bg-hover);
-  border-radius: 3px;
+  border-radius: var(--radius-code);
   padding: 0.05em 0.25em;
 }
 
 .markdown-body pre {
   margin: 0.6em 0;
   padding: 0.6em 0.8em;
-  background: var(--bg-hover);
-  border-radius: 4px;
+  background: var(--surface);
+  color: var(--text);
+  border: var(--border-width) solid var(--border);
+  box-shadow: var(--shadow-card);
+  border-radius: var(--radius-ui);
   overflow-x: auto;
   white-space: pre;
   overflow-wrap: normal;
@@ -84,18 +87,20 @@ div.markdown-body h6 { font-size: 0.95em; }
   max-width: 100%;
   overflow-x: auto;
   border-collapse: collapse;
+  border: var(--border-width) solid var(--border);
   margin: 0.6em 0;
 }
 
 .markdown-body :is(th, td) {
-  border: 1px solid var(--border);
+  border: var(--border-width) solid var(--grid-border);
   padding: 0.3em 0.6em;
   text-align: left;
   min-width: 5em;
 }
 
 .markdown-body th {
-  background: var(--bg-hover);
+  font-weight: var(--strong-weight);
+  background: var(--bg-muted);
 }
 
 /* href を持たないリンクもクリックと Enter で既定ブラウザへ渡す。 */
@@ -106,8 +111,8 @@ div.markdown-body h6 { font-size: 0.95em; }
 }
 
 .markdown-body a[data-href]:focus-visible {
-  outline: 2px solid var(--accent-fg);
-  outline-offset: 2px;
+  outline: var(--focus-width) solid var(--focus-ring);
+  outline-offset: var(--focus-offset);
 }
 
 div.markdown-body > :first-child {
@@ -117,3 +122,6 @@ div.markdown-body > :first-child {
 div.markdown-body > :last-child {
   margin-bottom: 0;
 }
+
+div.markdown-body :is(h1, h2) { font-weight: var(--heading-weight); }
+div.markdown-body :is(h3, h4, h5, h6) { font-weight: var(--subheading-weight); }

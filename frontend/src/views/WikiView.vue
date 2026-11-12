@@ -610,7 +610,7 @@ async function exportNow() {
 }
 .wiki-layout aside {
   min-width: 0;
-  border-left: 1px solid var(--border);
+  border-left: var(--border-width) solid var(--border);
   padding-left: 1rem;
   overflow-wrap: anywhere;
 }
@@ -686,14 +686,15 @@ async function exportNow() {
   z-index: 100;
 }
 .wiki-modal {
+  box-shadow: var(--shadow-dialog);
   background: var(--surface);
   color: var(--text);
   padding: 1.5rem;
   max-width: 650px;
   max-height: 85vh;
   overflow: auto;
-  border: 1px solid var(--border);
-  border-radius: 8px;
+  border: var(--border-width) solid var(--border);
+  border-radius: var(--radius-ui);
 }
 .wiki-modal button {
   margin-right: 0.6rem;
