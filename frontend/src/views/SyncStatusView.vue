@@ -584,6 +584,9 @@ async function runProjectSync() {
 /* 幅が足りないときだけ横スクロールさせる(パネル自体は全幅を保つ) */
 .table-wrap {
   width: 100%;
+  box-sizing: border-box;
+  border: var(--border-width) solid var(--border);
+  border-radius: var(--radius-ui);
   overflow-x: auto;
 }
 

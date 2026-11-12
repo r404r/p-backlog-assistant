@@ -525,6 +525,9 @@ section {
 /* 幅が足りないときだけ横スクロールさせる(パネル自体は全幅を保つ) */
 .table-wrap {
   width: 100%;
+  box-sizing: border-box;
+  border: var(--border-width) solid var(--border);
+  border-radius: var(--radius-ui);
   overflow-x: auto;
 }
 
@@ -536,7 +539,7 @@ section {
 
 .profile-list th,
 .profile-list td {
-  border: var(--border-width) solid var(--border);
+  border: var(--border-width) solid var(--grid-border);
   padding: 0.4rem 0.6rem;
   text-align: left;
 }
