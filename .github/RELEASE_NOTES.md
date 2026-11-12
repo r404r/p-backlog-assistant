@@ -1,22 +1,19 @@
-# backlog-assistant v1.5.0
+# backlog-assistant v1.6.0
 
-Wiki の同期・閲覧・検索・添付込みエクスポートと、単ページ編集・新規作成を追加するリリースです。v1.3.1 以降の変更をまとめて含みます(v1.4.0 の配布はありません)。
+画面全体の外観を Pop スタイルへ統一するリリースです。v1.5.0 以降の変更を含みます。システム / ライト / ダークの 3 モードと保存済みの設定は引き続き利用でき、データ・同期・書き込み処理・Wiki 記法は変更しません。
 
-**English summary**: This release includes all changes since v1.3.1; v1.4.0 was not distributed. Sync Wiki pages separately from issues, browse a `/` hierarchy, search names and content locally with Japanese and AND/OR support, and export a project or subtree with attachments, `index.xlsx`, and `manifest.json`. Search and the tree move to a collapsible right panel. Edit or create one page at a time, switch between text and preview, and confirm before leaving unsaved changes. Detected conflicts offer discard/reload, copy your content, or overwrite after confirmation. Email notifications default to off; uncertain saves are checked by reading without automatic resends, and uncertain creation records survive restarts. Markdown tables, blank-line spacing, and line breaks improve across Wiki pages, issue details, and comments; issue-detail links also support keyboard activation. The local database upgrades to schema v7. Wiki bulk writes, deletion, tag editing, attachment uploads, automatic periodic sync, and notation conversion are unsupported. Conflict checking leaves a short check-to-save race because the API has no optimistic locking. Under Backlog's policy change, spaces started on or after July 14, 2026 do not offer Wiki; new projects in existing spaces default to Wiki off and can enable it in project settings.
+**English summary**: This release includes all changes since v1.5.0 and updates the entire interface to Pop styling: a warm paper canvas in Light, a black canvas in Dark, yellow primary buttons, crisp outlines, small corners, and hard shadows. System / Light / Dark modes and saved settings remain available. Dense tables use strong outer borders with lighter internal rules; rendered content uses bold headings, thick yellow link underlines, outlined code blocks, and quote rules. Keyboard focus and secondary text remain readable in both modes, selected and disabled controls are visually distinct, and startup backgrounds match the theme. Primary buttons stay stationary on hover when the OS requests reduced motion. Data, sync, write operations, and Wiki notation are unchanged. As an existing limitation, the macOS title bar follows only the OS appearance setting.
 
 ## 新機能
 
-- **Wiki の同期・閲覧・全文検索**: 課題とは別にプロジェクトごとに手動同期し、新規・更新ページの本文を取得します。`/` 区切りの階層ツリー、ページ名・本文のローカル全文検索(日本語・複数語 AND/OR)、タグ・更新情報・添付一覧、単ページの最新取得、ページ URL のコピーに対応します。
-- **添付込みエクスポート**: プロジェクト全体または選択階層を、ページ本文・添付ファイル・`index.xlsx`・`manifest.json` として出力します。件数・サイズ・所要時間の事前確認、キャンセル、安全なファイル名への置換に対応し、添付の個別失敗は索引に記録して残りを続行します。
-- **Wiki の単ページ編集・新規作成**: ページ名・本文を編集でき、テキスト / プレビュー切替と未保存時の離脱確認に対応します。保存前に更新日時を再取得し、競合時は「破棄して最新を読み込む」「自分の内容をコピー」「確認して上書き保存」から選べます。メール通知は既定 OFF です。
-- **保存結果が不確定な場合の確認**: タイムアウト等では自動再送せず、読み取りで結果を確認します。新規作成の不確定な試行は再起動後も記録を保持し、二重作成を防ぎます。
+- **全画面を Pop スタイルへ統一**: ライトは暖かい紙色、ダークは黒い画布に、黄色の主ボタン・明確な輪郭・小さな角丸・硬い影を組み合わせます。システム / ライト / ダークの 3 モードと保存済みの設定はそのまま利用できます。
 
 ## 改善・修正
 
-- **Markdown 表示の改善**: Wiki・課題詳細・コメントで、表の罫線・横スクロール、空行による段落間隔、単一改行の表示を改善しました。古いテンプレートの表で区切り行だけ列が不足する場合は、見出しと直後のデータ行の列数が一致するときに表示上だけ補います。原文や出力ファイルは変更しません。
-- **Wiki の検索・ツリーを右端へ移動**: パネルを折りたたんで本文を全幅に広げられます。選択ページ・検索条件を維持し、開閉状態を保存します。
-- **Markdown リンクのキーボード操作**: 課題詳細のリンクを Tab で選択し、Enter で既定ブラウザに開けるようにしました。
-- **ローカル DB をスキーマ v7 へ更新**: Wiki 本文・添付メタデータ・全文検索用のキャッシュを追加します。添付の実体は DB に保存せず、エクスポート時に取得します。
+- **表と整形表示の外観**: 密な表は外枠を強く、内部の罫線を淡くしました。見出しの太字、リンクの黄色い太い下線、コードブロックの輪郭、引用の左罫線を統一しました。データ・同期・書き込み処理・Wiki 記法は変更しません。
+- **操作状態と可読性**: 明暗両モードで焦点環と補助文字を見やすくし、選択中や無効な操作部品を視覚的に区別できるようにしました。
+- **起動時の背景**: 画面の描画前からテーマに合う背景色を適用します。
+- **動きを減らす設定への追従**: OS の動きを減らす設定が有効な場合、主ボタンはホバーしても移動しません。
 
 ## 動作環境
 
@@ -34,6 +31,7 @@ zip を展開し、`backlog-assistant.exe`(Windows)または `Backlog Assistant.
 
 ## 既知の制限
 
+- macOS のタイトルバーは OS の外観設定のみに従います。アプリ内でライト / ダークを指定しても、タイトルバーだけ OS 側の配色のまま残ることがあります(既存の制限)。
 - Wiki の書き込みは単ページ編集・新規作成のみです。一括書き戻し、削除、タグ編集、添付アップロード、自動定期同期には対応していません。
 - Backlog 記法と Markdown の相互変換は行いません。プロジェクトの記法設定に従って表示・出力します。
 - 保存前の競合確認と実際の保存の間には短い競合窓が残ります(API に楽観ロックがないため)。その間の他者更新を完全には防げません。
