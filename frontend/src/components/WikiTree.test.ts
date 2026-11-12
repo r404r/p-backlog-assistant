@@ -5,12 +5,15 @@ import { buildWikiTree } from '../lib/wikiTree'
 import WikiTree from './WikiTree.vue'
 let mounted: MountedApp | undefined
 afterEach(() => mounted?.unmount())
+function renderTree(props: () => InstanceType<typeof WikiTree>['$props']) {
+  return mountWithI18n(defineComponent({ setup: () => () => h(WikiTree, props()) }))
+}
 function open(disabled = false) {
   const nodes = buildWikiTree([{ id: 1, name: 'a' }, { id: 2, name: 'a/b' }, { id: 3, name: 'folder/c' }])
   const collapsed = ref(new Set<string>())
   const selected = ref('p:1')
   const select = vi.fn((_path: string, id: number) => { selected.value = `p:${id}` })
-  mounted = mountWithI18n(defineComponent({ setup: () => () => h(WikiTree, {
+  mounted = renderTree(() => ({
     nodes, selectedId: 1, disabled, collapsed: collapsed.value, selectedRowKey: selected.value,
     onSelect: select,
     onToggle: (key: string) => {
@@ -18,7 +21,7 @@ function open(disabled = false) {
       if (next.has(key)) next.delete(key); else next.add(key)
       collapsed.value = next
     },
-  }) }))
+  }))
   return { host: mounted.host, select, collapsed }
 }
 function key(el: Element, value: string) {
@@ -71,7 +74,7 @@ it('rejects pointer and keyboard changes while disabled', async () => {
 it('keeps duplicate pages distinct, restores ancestor focus, and supports Home/End', async () => {
   const nodes = ref(buildWikiTree([{ id: 1, name: 'a' }, { id: 2, name: 'a/child' }, { id: 3, name: 'a/child' }]))
   const collapsed = ref(new Set<string>())
-  mounted = mountWithI18n(defineComponent({ setup: () => () => h(WikiTree, { nodes: nodes.value, selectedId: 3, selectedRowKey: 'p:2', collapsed: collapsed.value, disabled: false }) }))
+  mounted = renderTree(() => ({ nodes: nodes.value, selectedId: 3, selectedRowKey: 'p:2', collapsed: collapsed.value, disabled: false }))
   let rows = mounted.host.querySelectorAll<HTMLElement>('[role=treeitem]')
   expect(rows[1]!.getAttribute('aria-setsize')).toBe('2')
   expect(rows[2]!.getAttribute('aria-current')).toBe('page')

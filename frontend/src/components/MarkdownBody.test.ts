@@ -257,7 +257,7 @@ it.each(['wiki', 'comment'] as const)('rebinds an explicit scroll container with
   expect(remove).toHaveBeenCalledWith('scroll', expect.any(Function))
   expect(add).toHaveBeenCalledWith('scroll', expect.any(Function), { passive: true })
 })
-it.each(['wiki', 'comment'] as const)('keeps ancestor scroll detection when no container is supplied (%s)', async (variant) => {
+it.each([undefined, 'comment'] as const)('keeps ancestor scroll detection when no container is supplied (%s)', async (variant) => {
   const host = document.createElement('div')
   host.style.overflowY = 'auto'
   Object.defineProperty(host, 'scrollHeight', { value: 900 })
