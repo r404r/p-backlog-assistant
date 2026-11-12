@@ -14,10 +14,74 @@ import (
 
 	"github.com/xuri/excelize/v2"
 
+	"backlog-assistant/internal/backlogclient"
 	"backlog-assistant/internal/store"
 )
 
 type wikiDownload struct{ cancel context.CancelFunc }
+
+type missingWikiDownload struct{ calls []int64 }
+
+func (d *missingWikiDownload) DownloadWikiAttachment(_ context.Context, _, id int64, dst io.Writer) error {
+	d.calls = append(d.calls, id)
+	if id == 1 {
+		return backlogclient.ErrNotFound
+	}
+	_, err := io.WriteString(dst, "data")
+	return err
+}
+
+func TestWikiExportMissingAttachmentKeepsFailureTextAndContinues(t *testing.T) {
+	pages := []WikiExportPage{
+		{Wiki: store.Wiki{ID: 1, Name: "Guide", Content: "本文", ContentFetchedAt: "now"}, Attachments: []store.WikiAttachment{
+			{ID: 1, Name: "missing.png", Size: 4},
+			{ID: 2, Name: "later.txt", Size: 4},
+		}},
+		{Wiki: store.Wiki{ID: 2, Name: "Later", Content: "次頁", ContentFetchedAt: "now"}},
+	}
+	download := &missingWikiDownload{}
+	path, err := ExportWiki(context.Background(), WikiExportOptions{Parent: t.TempDir(), ProjectKey: "SAMPLE", TextFormattingRule: "markdown", Pages: pages}, download)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(download.calls) != 2 || download.calls[0] != 1 || download.calls[1] != 2 {
+		t.Fatal("後続の添付が取得されていません", download.calls)
+	}
+	b, err := os.ReadFile(filepath.Join(path, "manifest.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var manifest WikiManifest
+	if err := json.Unmarshal(b, &manifest); err != nil {
+		t.Fatal(err)
+	}
+	const reason = "添付の取得に失敗しました(HTTP 404)"
+	if len(manifest.Pages) != 2 || len(manifest.Pages[0].Attachments) != 2 {
+		t.Fatal(manifest)
+	}
+	first, later := manifest.Pages[0].Attachments[0], manifest.Pages[0].Attachments[1]
+	if first.Error != reason || later.Error != "" {
+		t.Fatalf("添付の結果 = %q / %q", first.Error, later.Error)
+	}
+	if _, err := os.Stat(filepath.Join(path, filepath.FromSlash(first.Path))); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("失敗した添付が残っています", err)
+	}
+	if data, err := os.ReadFile(filepath.Join(path, filepath.FromSlash(later.Path))); err != nil || string(data) != "data" {
+		t.Fatal("後続添付", string(data), err)
+	}
+	if data, err := os.ReadFile(filepath.Join(path, filepath.FromSlash(manifest.Pages[1].Path))); err != nil || string(data) != "次頁" {
+		t.Fatal("後続ページ", string(data), err)
+	}
+	book, err := excelize.OpenFile(filepath.Join(path, "index.xlsx"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer book.Close()
+	rows, err := book.GetRows("Sheet1")
+	if err != nil || len(rows) != 3 || len(rows[1]) < 9 || rows[1][8] != "1: "+reason {
+		t.Fatal(rows, err)
+	}
+}
 
 func (d wikiDownload) DownloadWikiAttachment(ctx context.Context, w, a int64, dst io.Writer) error {
 	io.WriteString(dst, "data")

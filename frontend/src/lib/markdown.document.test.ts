@@ -38,6 +38,40 @@ describe('拡張 Markdown の安全な描画', () => {
     expect(host.querySelector('img')).toBeNull()
   })
   it.each([
+    ['TypeScript', 'typescript'],
+    ['JSON', 'json'],
+    ['SQL', 'sql'],
+    ['TS', 'typescript'],
+    ['HtMl extra', 'xml'],
+    ['UnknownLanguage', 'text'],
+  ])('囲み言語 %s は大小文字を区別せず固定名 %s を使う', (info, language) => {
+    const { doc, host } = dom(`\`\`\`${info}\nx\n\`\`\``)
+    expect(doc.codeBlocks[0].language).toBe(language)
+    expect(host.querySelector('span.md-code-language')?.textContent).toBe(language)
+    expect(host.querySelector('code')?.className).toBe(`language-${language}`)
+  })
+  it.each(['javascript', 'typescript', 'json', 'bash', 'go', 'python', 'xml', 'css', 'sql', 'yaml', 'markdown', 'diff', 'text'])(
+    'md-code-language は生成した %s のタグだけを保持する',
+    (language) => {
+      const { doc, host } = dom(`\`\`\`${language}\nx\n\`\`\``)
+      expect(host.querySelectorAll('span.md-code-language')).toHaveLength(1)
+      expect(host.querySelector('span.md-code-language')?.textContent).toBe(language)
+      const invalid = parseHTML(doc.sanitize(
+        `<p><span class="md-code-language">${language}</span></p>` +
+        '<pre><span class="md-code-language">not-a-block-language</span>' +
+        `<span class="md-code-language extra">${language}</span>` +
+        `<span class="md-code-language-forged">${language}</span></pre>`,
+      ))
+      expect(invalid.querySelector('[class]')).toBeNull()
+      const raw = dom(`<pre><span class="md-code-language">${language}</span></pre>`)
+      expect(raw.host.querySelector('span.md-code-language')).toBeNull()
+      expect(raw.host.textContent).toContain('class="md-code-language"')
+      expect(parseHTML(prepareMarkdownDocument('本文').sanitize(
+        `<pre><span class="md-code-language">${language}</span></pre>`,
+      )).querySelector('[class]')).toBeNull()
+    },
+  )
+  it.each([
     'https://example.invalid/pixel',
     '//example.invalid/pixel',
     '/pixel',
