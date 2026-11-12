@@ -77,7 +77,7 @@ const aliases: Record<string, string> = {
   md: 'markdown',
 }
 export function codeLanguage(info: string) {
-  const first = info.trim().split(/\s+/)[0]
+  const first = info.trim().split(/\s+/)[0].toLowerCase()
   const name = aliases[first] ?? first
   return languages.has(name) ? name : 'text'
 }

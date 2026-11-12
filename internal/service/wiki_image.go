@@ -115,7 +115,8 @@ func imageErrorCode(err error) string {
 	}
 }
 
-// imageRun は短いlockだけで世代を登録する。network待機中にprofile lockを保持しない。
+// imageRun は短いlockだけで世代を登録する。初回client生成時の限速初期化を除き、
+// 詳細・添付取得のnetwork待機中にprofile lockを保持しない。
 func (s *ProfileService) imageRun(ctx context.Context, profile string, in WikiImageInput) (*wikiImageRun, chan struct{}, string) {
 	s.imageMu.Lock()
 	defer s.imageMu.Unlock()
