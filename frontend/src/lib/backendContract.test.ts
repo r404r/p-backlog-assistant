@@ -80,6 +80,8 @@ const PUBLIC_CONTRACT: string[] = [
   'WikiCreateInput',
   'WikiEdit',
   'WikiExportEstimate',
+  'WikiImageInput',
+  'WikiImageResult',
   'WikiList',
   'WikiPage',
   'WikiQuery',

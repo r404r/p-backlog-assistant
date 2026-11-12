@@ -255,7 +255,7 @@ function buildMockComments(issueKey: string, at: string): MockCommentState {
       authorName: authors[i % authors.length],
       content:
         i === 0
-          ? `${issueKey} のコメント(モックデータ)。\n\n- 複数行の本文も折り返して表示されます\n- \`インラインコード\` も出せます`
+          ? `### 確認メモ\n\n- [x] 確認済み\n- [ ] 次の操作\n\n\`\`\`json\n{ "sample": true }\n\`\`\`\n\n${issueKey} のコメント(モックデータ)。\n\n- 複数行の本文も折り返して表示されます\n- \`インラインコード\` も出せます`
           : `${issueKey} への返信 ${count - i}(モックデータ)。`,
       // 新しい順に並べる(1 件ごとに 1 時間ずつ古くする)
       created: new Date(base - i * 3600 * 1000).toISOString(),
@@ -276,6 +276,9 @@ function buildMockComments(issueKey: string, at: string): MockCommentState {
 function mockDescription(row: IssueRow): string {
   return [
     `## ${row.summary} の詳細(モックデータ)`,
+    '',
+    '- [x] 再現を確認',
+    '- [ ] 対応を確認',
     '',
     '再現手順:',
     '',
@@ -661,17 +664,32 @@ export function createMockBackend(): Backend {
   }
 
   // 閲覧専用の合成データ。編集・書込は従来どおり未対応を明示する。
+  const renderingSample = "# Wiki 読み方ガイド\n\n日本語の「**強調。**」と English **emphasis**。合成データで表示を確認します。\n\n## 読みやすい記録\n\n### 情報の整理\n\n#### 操作の詳細\n\n##### 補足\n\n###### 参照\n\n> 読みやすさと、原文をいつでも確認できることを大切にします。\n\n---\n\n| 項目 | 状態 | 担当 |\n| --- | --- |\n| Wiki の同期 | 完了 | Sample |\n| 記録の確認 | 進行中 | Example |\n| 次の手順 | 未着手 | Demo |\n\n## コードとタスク\n\n```ts\n// 原文のままコピーできます\nconst page = { name: \"ガイド\" };\nconst limit = 2;\nawait openWiki(page);\n```\n\n- [x] 内容を確認する\n- [ ] チームに共有する\n  - [ ] 参照先も確認する\n\n## 画像と内部リンク\n\n[[ガイド/運用メモ]] / [[見つからないページ]] / [[重名]] / [[未取得]]\n\n![フロー][7]\n\n#image(8)\n\n#image(9)\n\n#image(20)\n\n#image(21)\n\n#image(22)\n\n#image(999)\n\n![外部画像](https://example.invalid/pixel)\n\n## 横長の表\n\n| 項目 | バージョン | 説明 | 参照 | 追加情報 | 最終状態 |\n| --- | --- | --- | --- | --- | --- |\n| 項目の長い名前 | 1.0 | 長い説明を持つ確認用データ | 資料の完全な名前 | さらに詳しい情報 | 確認済み |\n| 別の項目 | 2.0 | 列を横にスクロールして確認 | 参照先 | 追加 | 未着手 |\n\n## 対応言語\n\n```js\nconst message = \"hello\";\n```\n\n```ts\nconst count: number = 2;\n```\n\n```json\n{ \"active\": true }\n```\n\n```sh\necho \"hello\"\n```\n\n```go\nfunc main() { println(\"hello\") }\n```\n\n```py\nprint(\"hello\")\n```\n\n```html\n<p class=\"sample\">hello</p>\n```\n\n```css\n.sample { display: block; }\n```\n\n```sql\nSELECT * FROM samples;\n```\n\n```yml\nactive: true\n```\n\n```md\n# Hello\n```\n\n```diff\n+ added\n- removed\n```\n\n```unknown\nplain text <example>\n```\n\n## 繰り返しの見出し\n\n同名でも目次のIDは異なります。\n\n## 繰り返しの見出し\n\n末尾。"
+  const cancelledImages = new Set<string>()
   const wikiTime = '2026-11-12T03:00:00Z'
   const wikiPages = ['ガイド', 'ガイド/運用メモ', 'チーム/チェックリスト'].map((name, index) => ({
     id: index + 1, projectId: 101, name,
-    content: '# サンプルの Wiki ガイド\n\n合成データで外観を確認します。\n\n## 読みやすい記録\n\n[利用案内](https://example.com/guide) と `sample` を参照してください。\n\n> 共有する前に内容を確認しましょう。\n\n| 項目 | 状態 |\n| --- | --- |\n| 課題の同期 | 完了 |\n| レビュー | 確認中 |\n\n```text\nproject: SAMPLE\nmode: preview\n```\n\n---\n\n- 記録を整理する\n- チームで確認する',
+    content: renderingSample,
     created: wikiTime, updated: wikiTime, contentUpdated: wikiTime, contentFetchedAt: wikiTime,
     tags: ['サンプル'], createdUser: 'サンプル担当', updatedUser: 'サンプル担当',
-    textFormattingRule: 'markdown', attachments: [],
+    textFormattingRule: 'markdown', attachments: [7,8,9,20,21,22].map(id=>({id,wikiId:index+1,name:({7:'flow.png',8:'photo.jpg',9:'animation.gif',20:'forbidden.png',21:'unsupported.svg',22:'large.png'} as Record<number,string>)[id],size:id===22?9000000:1024})),
   }))
+  wikiPages.push(...['未取得','重名','重名'].map((name,i)=>({...wikiPages[0],id:i+4,name,contentFetchedAt:i===0?'':wikiTime,content:i===0?'':'# '+name,attachments:[]})))
   const copyWiki = (page: typeof wikiPages[number]) => ({ ...page, tags: [...page.tags], attachments: [...page.attachments] })
 
   return {
+    async getWikiAttachmentImage(_profile,input) {
+      await delay(180)
+      const page=wikiPages.find(p=>p.id===input.wikiId && p.projectId===input.projectId)
+      const code=cancelledImages.has(input.requestId)?'cancelled':!page?'not_found':page.contentUpdated!==input.expectedUpdated?'stale':!page.attachments.some(a=>a.id===input.attachmentId)?'not_own_attachment':input.attachmentId===20?'forbidden':input.attachmentId===21?'unsupported_type':input.attachmentId===22?'too_large':''
+      if(code) return {code,mime:'',dataBase64:'',width:0,height:0}
+      const {imageJPEG,imagePNG}=await import('./mockWikiImageData')
+      return {code:'',mime:input.attachmentId===8?'image/jpeg':'image/png',dataBase64:input.attachmentId===8?imageJPEG:imagePNG,width:480,height:180}
+    },
+    async cancelWikiImageLoads(_profile,requestId) {
+      if(cancelledImages.size>=8) cancelledImages.delete(cancelledImages.values().next().value!)
+      cancelledImages.add(requestId)
+    },
     beginWikiEdit: async () => { throw new Error(globalTranslate('wiki.mockUnavailable')) },
     saveWikiEdit: async () => { throw new Error(globalTranslate('wiki.mockUnavailable')) },
     createWiki: async () => { throw new Error(globalTranslate('wiki.mockUnavailable')) },

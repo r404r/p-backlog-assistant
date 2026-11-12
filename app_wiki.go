@@ -110,3 +110,19 @@ func (a *App) ExportWiki(profile, runID string) (*ExportResultDTO, error) {
 	}
 	return &ExportResultDTO{Path: path}, nil
 }
+
+func (a *App) GetWikiAttachmentImage(profile string, in service.WikiImageInput) (*service.WikiImageResult, error) {
+	s, err := a.svc()
+	if err != nil {
+		return nil, err
+	}
+	return s.GetWikiAttachmentImage(a.ctx, profile, in)
+}
+func (a *App) CancelWikiImageLoads(profile, requestID string) error {
+	s, err := a.svc()
+	if err != nil {
+		return err
+	}
+	s.CancelWikiImageLoads(profile, requestID)
+	return nil
+}

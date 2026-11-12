@@ -526,3 +526,16 @@ describe('Pop の形状と配色', () => {
     }
   })
 })
+
+describe('Markdownの高亮と縞表の文字コントラスト', () => {
+  for(const [name,tokens] of [['ライト',lightTokens],['ダーク',darkTokens]] as const) {
+    it(`${name}: 高亮8カテゴリをsurface上で読める`,()=>{
+      for(const foreground of ['--warning-text','--success-text','--danger-text','--text-muted','--text']) {
+        expect(contrast(tokens.get(foreground)!,tokens.get('--surface')!),foreground).toBeGreaterThanOrEqual(4.5)
+      }
+    })
+    it(`${name}: 表の全背景で文字を読める`,()=>{
+      for(const background of ['--bg','--surface','--bg-muted','--bg-hover']) expect(contrast(tokens.get('--text')!,tokens.get(background)!),background).toBeGreaterThanOrEqual(4.5)
+    })
+  }
+})

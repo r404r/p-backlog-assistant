@@ -32,7 +32,7 @@ See the [User Guide](docs/USER_GUIDE.en.md) for installation steps, how to use e
 - Filtering, listing, and exporting by **custom field** (text is a partial match, number and date are ranges, list types are a multi-select of their options)
 - **Click an issue key in the result list to open the issue details in a popup** (custom fields, parent issue, and the description body included; copying the URL and opening it in a browser are available there too). **The clipboard icon next to the key copies the issue URL directly**
 - **"Get the latest state"** in the detail popup re-fetches just that one issue from Backlog and applies it locally (no need to sync the whole project). It also fetches and displays **comments (up to the most recent 500)** (comments are not retrieved by a normal sync and are covered by neither keyword search nor Excel export)
-- For projects that use **Markdown formatting**, the description and comments are shown **rendered** (headings, lists, tables, code, links). You can switch between "Formatted" and "Source". Images are not displayed - their URLs are shown as text - and projects that use Backlog formatting keep the previous plain display
+- For projects that use **Markdown formatting**, the description and comments are shown **rendered** (headings, lists, tables, highlighting and copying for 12 code languages, read-only tasks, CJK emphasis, and links). You can switch between "Formatted" and "Source". Images are not displayed - their URLs are shown as text - and projects that use Backlog formatting keep the previous plain display
 - **Excel export** (selectable columns, up to 1,000,000 matching rows; above that the export fails with an error instead of producing a file). Custom field columns and the parent issue key column can also be selected
 
 ### Wiki
@@ -40,6 +40,8 @@ See the [User Guide](docs/USER_GUIDE.en.md) for installation steps, how to use e
 - Browse a hierarchy based on `/`, search page names and content locally (Japanese and multiple words with AND/OR), and view tags, authors, attachments, and the last Wiki sync time
 - Search and the tree appear in a collapsible panel on the far right; collapse it to give the page content the full width
 - Preview Markdown according to the project's formatting rule, view source text, fetch an individual page again, and copy its URL
+- Use the collapsible contents panel to move to headings. `[[Page name]]` opens an exact, unique match in the same project; missing or duplicate names show a reason
+- Display PNG / JPEG / GIF attachments belonging to the current Wiki inline (the first GIF frame only). External images are not loaded; failures keep the source and a reason
 - Export a project or selected subtree with page content, attachments, `index.xlsx`, and `manifest.json`. Review counts, size, and estimated time before starting; cancel the export or inspect individual attachment failures in the index
 - Edit a single page name and content, or create a page. Switch between text and preview; confirm before leaving unsaved changes. Conflicts offer reload, copy, or explicitly confirmed overwrite. Email notifications default to off
 - Uncertain saves are checked through reads without resending. Uncertain creation attempts remain recorded across restarts to prevent duplicates. Attachment bodies are downloaded during export and are not stored in the database
@@ -157,6 +159,8 @@ E:\BacklogAssistant\                   <- folder holding the executable (a USB d
 - Only HTTPS connections to `*.backlog.jp` / `*.backlog.com` are allowed, and redirects are not followed
 - Rate limits are configured from the actual values returned by `GET /api/v2/rateLimit` on first API use (never hard-coded; if the call fails, operation continues and it is retried on the next API use at least 30 seconds later)
 - Configuration and the local DB are stored in the user area (the Excel output location and the log location follow the user's own choice and placement)
+
+- Markdown never executes raw HTML or navigates directly within the WebView. Attachment images are checked for page ownership, content revision, and bitmap contents, then re-encoded before display
 
 ## Notes on use
 

@@ -746,6 +746,20 @@ export interface StorageInfo {
 // バックエンドインターフェース
 // ---------------------------------------------------------------------------
 
+export interface WikiImageInput {
+ projectId:number
+ wikiId:number
+ attachmentId:number
+ expectedUpdated:string
+ requestId:string
+}
+export interface WikiImageResult {
+ code:string
+ mime:string
+ dataBase64:string
+ width:number
+ height:number
+}
 export interface WikiAttachment {
   id: number
   wikiId: number
@@ -814,6 +828,8 @@ export interface WikiWriteResult {
   page: WikiPage | null
 }
 export interface Backend {
+ getWikiAttachmentImage(profile:string,input:WikiImageInput):Promise<WikiImageResult>
+ cancelWikiImageLoads(profile:string,requestId:string):Promise<void>
   beginWikiEdit(profile: string, projectId: number, id: number): Promise<WikiEdit>
   saveWikiEdit(profile: string, input: WikiSaveInput): Promise<WikiWriteResult>
   createWiki(profile: string, input: WikiCreateInput): Promise<WikiWriteResult>

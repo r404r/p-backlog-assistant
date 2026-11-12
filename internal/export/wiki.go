@@ -14,6 +14,7 @@ import (
 
 	"github.com/xuri/excelize/v2"
 
+	"backlog-assistant/internal/backlogclient"
 	"backlog-assistant/internal/store"
 )
 
@@ -203,6 +204,10 @@ func ExportWiki(ctx context.Context, o WikiExportOptions, downloader WikiDownloa
 			}
 			if dlErr != nil {
 				ma.Error = dlErr.Error()
+				// 画像用の分類を出力せず、従来の添付404の理由を保持する。
+				if errors.Is(dlErr, backlogclient.ErrNotFound) {
+					ma.Error = "添付の取得に失敗しました(HTTP 404)"
+				}
 				if m.AttachmentFailures != "" {
 					m.AttachmentFailures += "; "
 				}
