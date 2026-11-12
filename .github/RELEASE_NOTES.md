@@ -1,19 +1,21 @@
-# backlog-assistant v1.6.0
+# backlog-assistant v1.7.0
 
-画面全体の外観を Pop スタイルへ統一するリリースです。v1.5.0 以降の変更を含みます。システム / ライト / ダークの 3 モードと保存済みの設定は引き続き利用でき、データ・同期・書き込み処理・Wiki 記法は変更しません。
+Wiki の読みやすさと操作性を高めるリリースです。v1.6.0 以降の変更と依存ライブラリの更新を含みます。コードの構文ハイライト・読み取り専用タスク・CJK 強調・排版は、Wiki に加えて課題詳細とコメントにも適用されます。
 
-**English summary**: This release includes all changes since v1.5.0 and updates the entire interface to Pop styling: a warm paper canvas in Light, a black canvas in Dark, yellow primary buttons, crisp outlines, small corners, and hard shadows. System / Light / Dark modes and saved settings remain available. Dense tables use strong outer borders with lighter internal rules; rendered content uses bold headings, thick yellow link underlines, outlined code blocks, and quote rules. Keyboard focus and secondary text remain readable in both modes, selected and disabled controls are visually distinct, and startup backgrounds match the theme. Primary buttons stay stationary on hover when the OS requests reduced motion. Data, sync, write operations, and Wiki notation are unchanged. As an existing limitation, the macOS title bar follows only the OS appearance setting.
+**English summary**: This release includes all changes since v1.6.0. Wiki, issue details, and comments gain syntax highlighting with language labels and copy buttons, read-only task lists, CJK emphasis, and improved typography. Wiki also gains a heading-based table of contents, inline images from the current page’s attachments, and exact-match links to pages in the same project. Markdown parsing and sanitization dependencies are updated to fix slow rendering for certain content. Supported attachment formats are PNG, JPEG, and GIF (first frame only), limited to 8 MiB, 16 million pixels, and 8192 pixels per side. External images and raw HTML are not rendered, Backlog-format pages remain plain text, and pages over 2 MiB show source by default.
 
 ## 新機能
 
-- **全画面を Pop スタイルへ統一**: ライトは暖かい紙色、ダークは黒い画布に、黄色の主ボタン・明確な輪郭・小さな角丸・硬い影を組み合わせます。システム / ライト / ダークの 3 モードと保存済みの設定はそのまま利用できます。
+- **コードの構文ハイライトとコピー**: 12 言語のコードブロックに構文ハイライト・言語ラベル・コピー操作を追加しました。未対応言語はコード原文を表示します。
+- **読み取り専用タスクリスト**: 未完了・完了のタスクを見分けやすく表示します。表示上のチェックは変更できません。
+- **Wiki の目次**: 右側の折りたたみ目次から見出しへ移動できます。現在位置の表示とキーボード操作に対応します。
+- **Wiki 添付画像**: 表示中の Wiki 自身に添付された画像を本文内に表示します。読み込みに失敗した場合も原文と理由を残します。
+- **Wiki 内部リンク**: `[[ページ名]]` から同じプロジェクトのページへ移動できます。見つからない場合や同名ページが複数ある場合は理由を表示します。
 
 ## 改善・修正
 
-- **表と整形表示の外観**: 密な表は外枠を強く、内部の罫線を淡くしました。見出しの太字、リンクの黄色い太い下線、コードブロックの輪郭、引用の左罫線を統一しました。データ・同期・書き込み処理・Wiki 記法は変更しません。
-- **操作状態と可読性**: 明暗両モードで焦点環と補助文字を見やすくし、選択中や無効な操作部品を視覚的に区別できるようにしました。
-- **起動時の背景**: 画面の描画前からテーマに合う背景色を適用します。
-- **動きを減らす設定への追従**: OS の動きを減らす設定が有効な場合、主ボタンはホバーしても移動しません。
+- **CJK 強調と排版**: 日本語などの句読点に隣接する強調に対応し、本文幅・見出し・引用・区切り線・表の表頭と縞模様を Pop スタイルで整えました。幅の広い表とコードは横スクロールできます。従来の単改行と旧テンプレート表の表示も維持します。
+- **依存ライブラリの更新**: Markdown の解析・サニタイズに関わる依存を更新し、特定の内容で表示が遅くなる問題を修正しました。DOMPurify 3.4.17、markdown-it 15.0.3、Vue と関連コンパイラ 3.5.45、vue-i18n と `@intlify/*` 11.4.18、source-map-js 1.2.2 を使用します。
 
 ## 動作環境
 
@@ -31,6 +33,10 @@ zip を展開し、`backlog-assistant.exe`(Windows)または `Backlog Assistant.
 
 ## 既知の制限
 
+- Wiki 添付画像は PNG / JPEG / GIF のみ対応し、GIF は先頭フレームだけを表示します。入力・変換後とも 1 枚 8 MiB、1600 万画素、一辺 8192px までです。
+- 外部画像と生 HTML は描画しません。Backlog 記法（非 Markdown）のページは引き続き原文のプレーンテキストで表示し、記法変換は行いません。
+- 2 MiB を超えるページは既定で原文を表示します。Wiki では明示的に整形表示を選べますが、画像とコードの構文ハイライトは無効になります。
+- Wiki 内部リンクは同じプロジェクト内のページ名の完全一致だけに対応します。課題詳細・コメント・編集プレビューでは Wiki 添付画像と内部リンクを解決しません。
 - macOS のタイトルバーは OS の外観設定のみに従います。アプリ内でライト / ダークを指定しても、タイトルバーだけ OS 側の配色のまま残ることがあります(既存の制限)。
 - Wiki の書き込みは単ページ編集・新規作成のみです。一括書き戻し、削除、タグ編集、添付アップロード、自動定期同期には対応していません。
 - Backlog 記法と Markdown の相互変換は行いません。プロジェクトの記法設定に従って表示・出力します。
