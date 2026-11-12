@@ -660,23 +660,48 @@ export function createMockBackend(): Backend {
     putSyncState('issues', projects[0].id, initial)
   }
 
+  // 閲覧専用の合成データ。編集・書込は従来どおり未対応を明示する。
+  const wikiTime = '2026-11-12T03:00:00Z'
+  const wikiPages = ['ガイド', 'ガイド/運用メモ', 'チーム/チェックリスト'].map((name, index) => ({
+    id: index + 1, projectId: 101, name,
+    content: '# サンプルの Wiki ガイド\n\n合成データで外観を確認します。\n\n## 読みやすい記録\n\n[利用案内](https://example.com/guide) と `sample` を参照してください。\n\n> 共有する前に内容を確認しましょう。\n\n| 項目 | 状態 |\n| --- | --- |\n| 課題の同期 | 完了 |\n| レビュー | 確認中 |\n\n```text\nproject: SAMPLE\nmode: preview\n```\n\n---\n\n- 記録を整理する\n- チームで確認する',
+    created: wikiTime, updated: wikiTime, contentUpdated: wikiTime, contentFetchedAt: wikiTime,
+    tags: ['サンプル'], createdUser: 'サンプル担当', updatedUser: 'サンプル担当',
+    textFormattingRule: 'markdown', attachments: [],
+  }))
+  const copyWiki = (page: typeof wikiPages[number]) => ({ ...page, tags: [...page.tags], attachments: [...page.attachments] })
+
   return {
     beginWikiEdit: async () => { throw new Error(globalTranslate('wiki.mockUnavailable')) },
     saveWikiEdit: async () => { throw new Error(globalTranslate('wiki.mockUnavailable')) },
     createWiki: async () => { throw new Error(globalTranslate('wiki.mockUnavailable')) },
     setWikiWindowState: async () => {},
-    listWikis: async () => ({ pages: [], disabled: false, lastSyncedAt: '' }),
-    syncWikis: async () => ({
+    async listWikis(_profileId, query) {
+      await delay(100)
+      const words = query.keyword.trim().toLocaleLowerCase().split(/\s+/).filter(Boolean)
+      const pages = wikiPages.filter((page) => {
+        if (page.projectId !== query.projectId) return false
+        const text = `${page.name} ${page.content}`.toLocaleLowerCase()
+        return query.keywordMode === 'or'
+          ? words.length === 0 || words.some((word) => text.includes(word))
+          : words.every((word) => text.includes(word))
+      })
+      return { pages: pages.map(copyWiki), disabled: false, lastSyncedAt: wikiTime, textFormattingRule: 'markdown' }
+    },
+    syncWikis: async (_profileId, projectId) => ({
       mode: 'incremental',
-      fetched: 0,
-      upserted: 0,
+      fetched: wikiPages.filter((page) => page.projectId === projectId).length,
+      upserted: wikiPages.filter((page) => page.projectId === projectId).length,
       deleted: 0,
       warnings: [],
       durationMs: 0,
       disabled: false,
     }),
-    refreshWiki: async () => {
-      throw new Error(globalTranslate('wiki.mockUnavailable'))
+    async refreshWiki(_profileId, projectId, id) {
+      await delay(100)
+      const page = wikiPages.find((page) => page.projectId === projectId && page.id === id)
+      if (!page) throw new Error('合成 Wiki ページが見つかりません')
+      return copyWiki(page)
     },
     prepareWikiExport: async () => ({
       pages: 0,
