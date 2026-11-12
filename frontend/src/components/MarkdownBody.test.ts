@@ -46,7 +46,7 @@ const observers: FakeObserver[] = []
 class FakeObserver {
   nodes = new Set<Element>()
   callback: IntersectionObserverCallback
-  constructor(callback: IntersectionObserverCallback) {
+  constructor(callback: IntersectionObserverCallback, readonly options?: IntersectionObserverInit) {
     this.callback = callback
     observers.push(this)
   }
@@ -56,9 +56,9 @@ class FakeObserver {
   unobserve(node: Element) {
     this.nodes.delete(node)
   }
-  disconnect() {
+  disconnect = vi.fn(() => {
     this.nodes.clear()
-  }
+  })
   reveal() {
     this.callback(
       Array.from(this.nodes, (node) => ({
@@ -243,19 +243,62 @@ describe('MarkdownBody の操作と寿命', () => {
   })
 })
 
-it.each(['wiki', 'comment'] as const)('rebinds an explicit scroll container without replacing headings or image requests (%s)', async (variant) => {
+it.each(['wiki', 'comment'] as const)('rebinds observers, heading navigation, position and delayed images to the new container (%s)', async (variant) => {
   const first = document.createElement('div'), second = document.createElement('div')
   const container = ref<HTMLElement>(first)
+  const component = ref<InstanceType<typeof MarkdownBody>>()
+  const active = vi.fn()
+  const wiki = { page, pages: [page] }
+  let resolveImage!: (result: WikiImageResult) => void
+  mocks.get.mockImplementation(() => new Promise<WikiImageResult>(resolve => { resolveImage = resolve }))
   // eslint-disable-next-line vue/one-component-per-file -- スクロール所有者の差替えを検証する専用ホスト。
-  mounted = mountWithI18n(defineComponent({ setup: () => () => h(MarkdownBody, { source: '# One\n\n## Two', variant, scrollContainer: container.value }) }))
-  await nextTick(); await nextTick(); await nextTick()
-  const heading = mounted.host.querySelector('h2')!
+  mounted = mountWithI18n(defineComponent({ setup: () => () => h(MarkdownBody, { ref: component, source: '# One\n\n## Two\n\n#image(7)', variant, scrollContainer: container.value, profile: 'p', wiki, onActive: active }) }))
+  await flush()
+  const heading = mounted.host.querySelector<HTMLElement>('h2')!
+  const old = observers.at(-1)!
+  expect(old.options?.root).toBe(first)
+  expect(old.nodes.size).toBe(1)
   const remove = vi.spyOn(first, 'removeEventListener'), add = vi.spyOn(second, 'addEventListener')
+  vi.spyOn(first, 'getBoundingClientRect').mockReturnValue({ top: 0 } as DOMRect)
+  vi.spyOn(second, 'getBoundingClientRect').mockReturnValue({ top: 100 } as DOMRect)
+  const rect = vi.spyOn(heading, 'getBoundingClientRect').mockReturnValue({ top: 120 } as DOMRect)
   container.value = second
-  await nextTick(); await nextTick(); await nextTick()
+  await flush()
   expect(mounted.host.querySelector('h2')).toBe(heading)
   expect(remove).toHaveBeenCalledWith('scroll', expect.any(Function))
   expect(add).toHaveBeenCalledWith('scroll', expect.any(Function), { passive: true })
+  expect(old.disconnect).toHaveBeenCalledTimes(1)
+  expect(old.nodes.size).toBe(0)
+  const current = observers.at(-1)!
+  expect(current).not.toBe(old)
+  expect(current.options?.root).toBe(second)
+  expect(current.nodes.size).toBe(1)
+  expect(active).toHaveBeenLastCalledWith(heading.id)
+  // 目次からの移動は新しい所有者だけを動かす。
+  first.scrollTop = 17; second.scrollTop = 80
+  rect.mockReturnValue({ top: 320 } as DOMRect)
+  component.value!.goToHeading(heading.id)
+  expect(first.scrollTop).toBe(17)
+  expect(second.scrollTop).toBe(284)
+  expect(active).toHaveBeenLastCalledWith(heading.id)
+  // scrollイベントでも新rootの上端を基準に現在見出しを判定する。
+  active.mockClear()
+  rect.mockReturnValue({ top: 120 } as DOMRect)
+  second.dispatchEvent(new Event('scroll')); await flush()
+  expect(active).toHaveBeenLastCalledWith(heading.id)
+  active.mockClear()
+  first.dispatchEvent(new Event('scroll')); await flush()
+  expect(active).not.toHaveBeenCalled()
+  expect(mocks.get).not.toHaveBeenCalled()
+  old.reveal(); await flush()
+  expect(mocks.get).not.toHaveBeenCalled()
+  current.reveal(); await flush()
+  expect(mocks.get).toHaveBeenCalledTimes(1)
+  const request = mocks.get.mock.calls[0]![1].requestId
+  resolveImage(ready); await flush()
+  expect(mounted.host.querySelector('img')?.getAttribute('src')).toMatch(/^blob:test-/)
+  expect(mocks.get.mock.calls[0]![1].requestId).toBe(request)
+  expect(mocks.cancel).not.toHaveBeenCalled()
 })
 it.each([undefined, 'comment'] as const)('keeps ancestor scroll detection when no container is supplied (%s)', async (variant) => {
   const host = document.createElement('div')

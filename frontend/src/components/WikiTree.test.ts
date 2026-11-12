@@ -91,3 +91,30 @@ it('keeps duplicate pages distinct, restores ancestor focus, and supports Home/E
   key(rows[0]!, 'Home'); await nextTick()
   expect(rows[0]!.tabIndex).toBe(0)
 })
+
+it('shows duplicate IDs with a number sign while preserving the accessible label', () => {
+  const nodes = buildWikiTree([{ id: 1, name: 'a' }, { id: 2, name: 'a' }, { id: 3, name: 'a/child' }])
+  mounted = renderTree(() => ({ nodes, selectedId: 1, disabled: false }))
+  const ids = mounted.host.querySelectorAll('.wiki-node-id')
+  expect([...ids].map(el => el.textContent)).toEqual(['#1', '#2'])
+  expect(ids[0]!.getAttribute('aria-label')).toBe('同名ページ ID: 1')
+  expect(mounted.host.querySelector('.wiki-node-count')?.textContent).toBe('1')
+})
+it.each([['É', 'é'], ['Ａ', 'ａ']])('folds ASCII only during type-ahead (%s / %s)', async (upper, lower) => {
+  const nodes = buildWikiTree([{ id: 1, name: upper }, { id: 2, name: lower }, { id: 3, name: 'A' }, { id: 4, name: 'a' }])
+  mounted = renderTree(() => ({ nodes, selectedId: 0, disabled: false }))
+  const row = mounted.host.querySelector<HTMLElement>('[data-row-key="p:1"]')!
+  row.focus()
+  key(row, lower); await nextTick()
+  expect((document.activeElement as HTMLElement).dataset.rowKey).toBe('p:2')
+  key(document.activeElement!, lower); await nextTick()
+  expect((document.activeElement as HTMLElement).dataset.rowKey).toBe('p:2')
+})
+it('ignores keyCode 229 even when isComposing is false', async () => {
+  const { host } = open()
+  const row = host.querySelector<HTMLElement>('[role=treeitem]')!
+  row.focus()
+  row.dispatchEvent(new KeyboardEvent('keydown', { key: 'f', keyCode: 229, isComposing: false, bubbles: true }))
+  await nextTick()
+  expect(document.activeElement).toBe(row)
+})
