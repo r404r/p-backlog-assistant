@@ -15,3 +15,16 @@ it('keeps folder pages, virtual folders and duplicate names without merging case
   expect(tree.find((n) => n.label === 'A')?.children[0]?.path).toBe('A/c')
   expect(tree.find((n) => n.label === '..')?.children[0]?.path).toBe('../x')
 })
+it('orders by Unicode code points, mixes folders and pages, and counts all descendants without self', () => {
+  const names = ['ｶ', 'Ａ', '漢', 'カ', 'ア', 'あ', 'a', '_', 'B', 'A/子', 'A', '2', '10', '-', '!']
+  const tree = buildWikiTree(names.map((name, i) => ({ id: i + 1, name })))
+  expect(tree.map(n => n.label)).toEqual(['!', '-', '10', '2', 'A', 'B', '_', 'a', 'あ', 'ア', 'カ', '漢', 'Ａ', 'ｶ'])
+  expect(tree.find(n => n.label === 'A')).toMatchObject({ key: '["A"]', descendantPageCount: 1 })
+})
+it('keeps empty-component compatibility, stable keys and duplicate IDs exactly once', () => {
+  const pages = [{ id: 9, name: '/Guide//Start/' }, { id: 3, name: 'Guide' }, { id: 9, name: '/Guide//Start/' }, { id: 10, name: 'Guide/Start' }]
+  const tree = buildWikiTree(pages)
+  expect(tree[0]).toMatchObject({ path: 'Guide', key: '["Guide"]', descendantPageCount: 2 })
+  expect(tree[0]!.children[0]!.pageIds).toEqual([9, 10])
+  expect(buildWikiTree([...pages].reverse())).toEqual(tree)
+})
