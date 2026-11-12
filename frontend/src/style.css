@@ -304,8 +304,8 @@ body {
   }
 }
 
-/* Wiki のフォームを含め、ブラウザ既定の面色・形状も共通化する。 */
-.content :is(input:not([type='checkbox']):not([type='radio']), select, textarea) {
+/* Wiki のフォームにも共通外観を補い、画面固有の常態・無効状態を優先する。 */
+.content :where(input:not([type='checkbox']):not([type='radio']), select, textarea) {
   border: var(--border-width) solid var(--border);
   border-radius: var(--radius-ui);
   background: var(--bg);
