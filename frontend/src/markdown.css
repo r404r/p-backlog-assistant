@@ -164,3 +164,4 @@ div.markdown-comment {line-height:1.55;}
 .markdown-image-actions {display:flex;flex-wrap:wrap;gap:0.5rem;margin-block:0.5rem;}
 .markdown-segment:first-child > :first-child {margin-top:0;}
 .markdown-segment:last-child > :last-child {margin-bottom:0;}
+.markdown-body .md-image-error {display:inline-block;max-width:100%;padding:0.4em;background:var(--danger-bg);color:var(--danger-text);border:var(--border-width) solid var(--border);border-radius:var(--radius-ui);white-space:normal;}

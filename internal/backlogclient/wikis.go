@@ -151,6 +151,9 @@ func (c *Client) DownloadWikiAttachment(ctx context.Context, wikiID, attachmentI
 		return errors.New("添付の通信に失敗しました")
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		return ErrNotFound
+	}
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("添付の取得に失敗しました(HTTP %d)", resp.StatusCode)
 	}

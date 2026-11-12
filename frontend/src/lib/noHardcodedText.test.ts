@@ -47,6 +47,7 @@ const CONVERTED_FILES: string[] = [
   'src/components/BulkRunConfirmation.vue',
   'src/components/CustomFieldFilters.vue',
   'src/components/IssueDetailDialog.vue',
+  'src/components/MarkdownBody.vue',
   'src/components/SyncResultPanel.vue',
   'src/views/AboutView.vue',
   'src/views/BulkUpdateView.vue',

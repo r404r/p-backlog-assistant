@@ -1,0 +1,244 @@
+// @vitest-environment jsdom
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { defineComponent, h, nextTick, ref } from 'vue'
+import MarkdownBody from './MarkdownBody.vue'
+import { mountWithI18n, type MountedApp } from '../lib/testing/mountWithI18n'
+import type { WikiPage, WikiImageResult } from '../lib/backend'
+const mocks = vi.hoisted(() => ({
+  get: vi.fn(),
+  cancel: vi.fn(async () => {}),
+  copy: vi.fn(async () => {}),
+  open: vi.fn(),
+}))
+vi.mock('../lib/backend', async (original) => ({
+  ...(await original<typeof import('../lib/backend')>()),
+  getBackend: () => ({ getWikiAttachmentImage: mocks.get, cancelWikiImageLoads: mocks.cancel }),
+  copyToClipboard: mocks.copy,
+  openExternalURL: mocks.open,
+}))
+const page: WikiPage = {
+  id: 1,
+  projectId: 101,
+  name: 'Guide',
+  content: '#image(7)',
+  created: '',
+  updated: 'T',
+  contentUpdated: 'T',
+  contentFetchedAt: 'T',
+  tags: [],
+  createdUser: '',
+  updatedUser: '',
+  textFormattingRule: 'markdown',
+  attachments: [{ id: 7, wikiId: 1, name: 'test.png', size: 20 }],
+}
+const ready: WikiImageResult = {
+  code: '',
+  mime: 'image/png',
+  dataBase64:
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aY1sAAAAASUVORK5CYII=',
+  width: 1,
+  height: 1,
+}
+let mounted: MountedApp | undefined
+const create = vi.fn(() => `blob:test-${Math.random()}`),
+  revoke = vi.fn()
+const observers: FakeObserver[] = []
+class FakeObserver {
+  nodes = new Set<Element>()
+  callback: IntersectionObserverCallback
+  constructor(callback: IntersectionObserverCallback) {
+    this.callback = callback
+    observers.push(this)
+  }
+  observe(node: Element) {
+    this.nodes.add(node)
+  }
+  unobserve(node: Element) {
+    this.nodes.delete(node)
+  }
+  disconnect() {
+    this.nodes.clear()
+  }
+  reveal() {
+    this.callback(
+      Array.from(this.nodes, (node) => ({
+        target: node,
+        isIntersecting: true,
+      })) as IntersectionObserverEntry[],
+      this as unknown as IntersectionObserver,
+    )
+  }
+}
+async function flush() {
+  for (let i = 0; i < 12; i++) {
+    await Promise.resolve()
+    await nextTick()
+  }
+  await new Promise((resolve) => setTimeout(resolve, 25))
+  await nextTick()
+}
+function reveal() {
+  for (const observer of observers) observer.reveal()
+}
+beforeEach(() => {
+  mocks.get.mockReset()
+  mocks.get.mockResolvedValue(ready)
+  mocks.cancel.mockClear()
+  mocks.copy.mockClear()
+  mocks.open.mockClear()
+  create.mockClear()
+  revoke.mockClear()
+  observers.length = 0
+  vi.stubGlobal('IntersectionObserver', FakeObserver)
+  vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) =>
+    setTimeout(() => callback(performance.now()), 0),
+  )
+  vi.stubGlobal('cancelAnimationFrame', (id: number) => clearTimeout(id))
+  class TestURL extends URL {
+    static createObjectURL = create
+    static revokeObjectURL = revoke
+  }
+  vi.stubGlobal('URL', TestURL)
+})
+afterEach(() => {
+  mounted?.unmount()
+  mounted = undefined
+  vi.unstubAllGlobals()
+})
+describe('MarkdownBody の操作と寿命', () => {
+  it('viewportに入るまで取得せず、同じ添付参照を共有してunmount時に一度だけrevokeする', async () => {
+    mounted = mountWithI18n(
+      defineComponent(
+        () => () =>
+          h(MarkdownBody, {
+            source: '#image(7) #image(7)',
+            wiki: { page, pages: [page] },
+            profile: 'p',
+          }),
+      ),
+    )
+    await flush()
+    expect(mocks.get).not.toHaveBeenCalled()
+    reveal()
+    await flush()
+    expect(mocks.get).toHaveBeenCalledTimes(1)
+    expect(create).toHaveBeenCalledTimes(1)
+    expect(mounted.host.querySelectorAll('img')).toHaveLength(2)
+    mounted.unmount()
+    mounted = undefined
+    expect(revoke).toHaveBeenCalledTimes(1)
+    expect(observers.every((o) => o.nodes.size === 0)).toBe(true)
+    expect(mocks.cancel).toHaveBeenCalledWith('p', expect.stringMatching(/^img-/))
+  })
+  it('遅延応答後にページやprofileが変わっても古いblobを作らない', async () => {
+    let resolve!: (value: WikiImageResult) => void
+    mocks.get.mockImplementation(
+      () =>
+        new Promise<WikiImageResult>((r) => {
+          resolve = r
+        }),
+    )
+    const current = ref({ source: '#image(7)', profile: 'old', wiki: { page, pages: [page] } })
+    mounted = mountWithI18n(defineComponent(() => () => h(MarkdownBody, current.value)))
+    await flush()
+    reveal()
+    await flush()
+    current.value = {
+      source: '# next',
+      profile: 'new',
+      wiki: { page: { ...page, id: 2, attachments: [] }, pages: [page] },
+    }
+    await flush()
+    resolve(ready)
+    await flush()
+    expect(create).not.toHaveBeenCalled()
+    expect(mounted.host.querySelector('img')).toBeNull()
+    expect(mocks.cancel).toHaveBeenCalledWith('old', expect.any(String))
+  })
+  it('エラーを文字表示し、手動再試行を新世代で取得する', async () => {
+    mocks.get.mockResolvedValueOnce({ ...ready, code: 'forbidden', dataBase64: '' })
+    mounted = mountWithI18n(
+      defineComponent(
+        () => () =>
+          h(MarkdownBody, { source: '#image(7)', profile: 'p', wiki: { page, pages: [page] } }),
+      ),
+    )
+    await flush()
+    reveal()
+    await flush()
+    expect(mounted.host.textContent).toContain('権限がありません')
+    const first = mocks.get.mock.calls[0][1].requestId
+    mounted.host.querySelector<HTMLButtonElement>('.markdown-image-actions button')!.click()
+    await flush()
+    reveal()
+    await flush()
+    expect(mocks.get.mock.calls[1][1].requestId).not.toBe(first)
+    expect(mounted.host.querySelector('img')).not.toBeNull()
+  })
+  it('原文をコピーして成功/失敗を通知し、Enterで内部リンクを通知する', async () => {
+    const navigate = vi.fn()
+    mounted = mountWithI18n(
+      defineComponent(
+        () => () =>
+          h(MarkdownBody, {
+            source: '```js\nconst x = "<img>"\n```\n\n[[Guide]]',
+            wiki: { page, pages: [page] },
+            profile: 'p',
+            onNavigate: navigate,
+          }),
+      ),
+    )
+    await flush()
+    mounted.host.querySelector<HTMLButtonElement>('button[data-md-code]')!.click()
+    await flush()
+    expect(mocks.copy).toHaveBeenCalledWith('const x = "<img>"\n')
+    expect(mounted.host.textContent).toContain('コードをコピーしました')
+    mocks.copy.mockRejectedValueOnce(new Error('failure'))
+    mounted.host.querySelector<HTMLButtonElement>('button[data-md-code]')!.click()
+    await flush()
+    expect(mounted.host.textContent).toContain('コピーできませんでした')
+    const anchor = mounted.host.querySelector('a')!
+    anchor.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }),
+    )
+    await flush()
+    expect(navigate).toHaveBeenCalledWith(1)
+    anchor.dispatchEvent(
+      new MouseEvent('click', { button: 0, ctrlKey: true, bubbles: true, cancelable: true }),
+    )
+    expect(navigate).toHaveBeenCalledTimes(1)
+  })
+  it('大きなページは原文を欠落させず画像と高亮を停止する', async () => {
+    const source = '#image(7)\n' + 'a'.repeat(2 * 1024 * 1024)
+    mounted = mountWithI18n(
+      defineComponent(
+        () => () => h(MarkdownBody, { source, profile: 'p', wiki: { page, pages: [page] } }),
+      ),
+    )
+    await flush()
+    reveal()
+    await flush()
+    expect(mounted.host.querySelector('pre')?.textContent).toBe(source)
+    expect(mocks.get).not.toHaveBeenCalled()
+  })
+  it('同期中と偽MIMEでは画像を表示しない', async () => {
+    const busy = ref(true),
+      wiki = { page, pages: [page] }
+    mocks.get.mockResolvedValue({ ...ready, mime: 'image/svg+xml' })
+    mounted = mountWithI18n(
+      defineComponent(
+        () => () =>
+          h(MarkdownBody, { source: '#image(7)', profile: 'p', wiki, disabled: busy.value }),
+      ),
+    )
+    await flush()
+    reveal()
+    await flush()
+    expect(mocks.get).not.toHaveBeenCalled()
+    busy.value = false
+    await flush()
+    expect(create).not.toHaveBeenCalled()
+    expect(mounted.host.querySelector('img')).toBeNull()
+    expect(mounted.host.textContent).toContain('画像を確認できません')
+  })
+})

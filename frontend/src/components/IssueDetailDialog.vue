@@ -1,14 +1,13 @@
 <script setup lang="ts">
 import { computed, ref, toRef, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { openExternalURL, type IssueDetail } from '../lib/backend'
+import MarkdownBody from './MarkdownBody.vue'
+import { type IssueDetail } from '../lib/backend'
 import { loadDetailMaximized, saveDetailMaximized } from '../lib/detailMaximized'
 import { formatDateTime } from '../lib/format'
 import {
   isMarkdownRule,
   loadDetailMarkdown,
-  markdownLinkHref,
-  renderMarkdown,
   saveDetailMarkdown,
 } from '../lib/markdown'
 import { useModalFocus } from '../lib/modalFocus'
@@ -127,38 +126,6 @@ function setMarkdownView(on: boolean): void {
   saveDetailMarkdown(on)
 }
 
-/** 整形表示した詳細本文(サニタイズ済み HTML) */
-const renderedDescription = computed(() =>
-  showMarkdown.value ? renderMarkdown(props.detail?.description ?? '') : '',
-)
-
-/** 整形表示した各コメント(サニタイズ済み HTML。並びは detail.comments と同じ) */
-const renderedComments = computed(() =>
-  showMarkdown.value ? (props.detail?.comments ?? []).map((c) => renderMarkdown(c.content)) : [],
-)
-
-/**
- * 整形表示のリンクのクリックを OS の既定ブラウザへ回す。
- *
- * 整形表示のリンクは href を持たない(data-href に検証済み URL が入る)ため、
- * ここで解決しないと何も起こらない。WebView 内で遷移させないための作りで、
- * 開く前にもう一度 http / https を検証している(lib/markdown.ts)。
- */
-function openMarkdownLink(event: MouseEvent): void {
-  const url = markdownLinkHref(event.target)
-  if (!url) return
-  event.preventDefault()
-  openExternalURL(url)
-}
-
-/** 整形表示のリンクをキーボード(Enter)でも開けるようにする */
-function openMarkdownLinkByKeyboard(event: KeyboardEvent): void {
-  if (event.key !== 'Enter') return
-  const url = markdownLinkHref(event.target)
-  if (!url) return
-  event.preventDefault()
-  openExternalURL(url)
-}
 </script>
 
 <template>
@@ -264,7 +231,7 @@ function openMarkdownLinkByKeyboard(event: KeyboardEvent): void {
             <!-- v-html に渡すのは lib/markdown.ts で変換 + DOMPurify のサニタイズを
                  必ず通した HTML だけ(設計 §3.2)。原文をそのまま渡してはならない -->
             <!-- eslint-disable-next-line vue/no-v-html -->
-            <div v-if="showMarkdown" class="detail-description markdown-body" @click="openMarkdownLink" @keydown="openMarkdownLinkByKeyboard" v-html="renderedDescription"></div>
+            <MarkdownBody v-if="showMarkdown" class="detail-description markdown-body" :source="detail.description" />
             <pre v-else class="detail-description">{{ detail.description }}</pre>
           </template>
           <p v-else class="hint">{{ t('issues.detail.noDescription') }}</p>
@@ -284,7 +251,7 @@ function openMarkdownLinkByKeyboard(event: KeyboardEvent): void {
               </p>
               <!-- 詳細本文と同じく lib/markdown.ts のサニタイズ済み HTML のみを渡す -->
               <!-- eslint-disable-next-line vue/no-v-html -->
-              <div v-if="showMarkdown" class="comment-body markdown-body" @click="openMarkdownLink" @keydown="openMarkdownLinkByKeyboard" v-html="renderedComments[index]"></div>
+              <MarkdownBody v-if="showMarkdown" class="comment-body markdown-body" variant="comment" :source="comment.content" />
               <pre v-else class="comment-body">{{ comment.content }}</pre>
             </li>
           </ol>

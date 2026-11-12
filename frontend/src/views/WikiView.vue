@@ -1,14 +1,15 @@
 <script setup lang="ts">
 // OS ダイアログと WebView 結合は実機確認対象。状態遷移はコンポーネントテストで検証する。
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
+import MarkdownBody from '../components/MarkdownBody.vue'
+import type { Heading } from '../lib/markdownDocument'
 import WikiTree from '../components/WikiTree.vue'
 import WikiEditor from '../components/WikiEditor.vue'
 import {
   getBackend,
   newSyncRunId,
   copyToClipboard,
-  openExternalURL,
   onSyncProgress,
   type Project,
   type WikiPage,
@@ -16,30 +17,40 @@ import {
   type SyncProgress,
 } from '../lib/backend'
 import { errorMessage, formatDateTime } from '../lib/format'
-import {
-  renderMarkdown,
-  isMarkdownRule,
-  markdownLinkHref,
-} from '../lib/markdown'
+import { isMarkdownRule } from '../lib/markdown'
 import { buildWikiTree } from '../lib/wikiTree'
 import {
   selectedProjectId,
   restoreProjectSelection,
   resolveProjectSelection,
 } from '../lib/projectSelection'
-import {
-  issueSyncRunning,
-  beginIssueSync,
-  endIssueSync,
-} from '../lib/syncState'
-import {
-  runSharedProjectRefresh,
-  shouldSkipProjectRefreshFor,
-} from '../lib/projectRefresh'
+import { issueSyncRunning, beginIssueSync, endIssueSync } from '../lib/syncState'
+import { runSharedProjectRefresh, shouldSkipProjectRefreshFor } from '../lib/projectRefresh'
 import { useModalFocus } from '../lib/modalFocus'
 import { loadWikiPanelCollapsed, saveWikiPanelCollapsed } from '../lib/wikiPanel'
 
 const { t } = useI18n()
+const pageHeading = ref<HTMLElement | null>(null)
+const markdown = ref<InstanceType<typeof MarkdownBody> | null>(null)
+const headings = ref<Heading[]>([]),
+  activeHeading = ref(''),
+  tocLimit = ref(500),
+  allowLarge = ref(false)
+const wikiIndex = ref<WikiPage[]>([])
+const tocOpen = ref(true),
+  searchOpen = ref(true)
+function openToc() {
+  panelCollapsed.value = false
+  tocOpen.value = true
+  saveWikiPanelCollapsed(false)
+}
+async function navigateWiki(id: number) {
+  const page = wikiIndex.value.find((p) => p.id === id && p.projectId === selectedProjectId.value)
+  if (!page || locked.value || !(await leaveEditor())) return
+  await select(page.name, page.id)
+  await nextTick()
+  pageHeading.value?.focus({ preventScroll: true })
+}
 const backend = getBackend()
 const panelCollapsed = ref(loadWikiPanelCollapsed())
 function togglePanel() {
@@ -72,7 +83,9 @@ const runId = ref(''),
 const dialog = ref<HTMLElement | null>(null)
 const editor = ref<InstanceType<typeof WikiEditor> | null>(null)
 const projectFormatting = ref('')
-const editing = ref(false), editingId = ref(0), writingBusy = ref(false)
+const editing = ref(false),
+  editingId = ref(0),
+  writingBusy = ref(false)
 const editorGeneration = ref(0)
 const editorParents = computed(() => {
   const paths = new Set<string>()
@@ -101,14 +114,19 @@ async function wikiSaved(page: WikiPage) {
   editing.value = false
   writingBusy.value = false
   // 検索条件を維持する。名前変更で検索から外れても保存済みページは表示する。
-  pages.value = [...pages.value.filter(p => p.id !== page.id), page]
+  pages.value = [...pages.value.filter((p) => p.id !== page.id), page]
+  wikiIndex.value = [...wikiIndex.value.filter((p) => p.id !== page.id), page]
   selectedId.value = page.id
   selectedPath.value = page.name
   notice.value = t('wiki.saved')
 }
+function cancelEditor() {editing.value=false;writingBusy.value=false}
 async function changeProject(event: Event) {
   const select = event.target as HTMLSelectElement
-  if (locked.value || !(await leaveEditor())) { select.value = String(selectedProjectId.value); return }
+  if (locked.value || !(await leaveEditor())) {
+    select.value = String(selectedProjectId.value)
+    return
+  }
   selectedProjectId.value = Number(select.value)
 }
 const dialogOpen = computed(() => estimate.value !== null)
@@ -116,21 +134,23 @@ const locked = computed(
   () => initializing.value || busy.value || writingBusy.value || issueSyncRunning.value,
 )
 const tree = computed(() => buildWikiTree(pages.value))
-const selected = computed(() =>
-  pages.value.find((p) => p.id === selectedId.value),
+const selected = computed(
+  () =>
+    wikiIndex.value.find((p) => p.id === selectedId.value) ??
+    pages.value.find((p) => p.id === selectedId.value),
 )
-const html = computed(() =>
-  selected.value &&
-  formatted.value &&
-  isMarkdownRule(selected.value.textFormattingRule)
-    ? renderMarkdown(selected.value.content)
-    : '',
+const wikiLarge = computed(() =>
+  selected.value
+    ? new TextEncoder().encode(selected.value.content).length > 2 * 1024 * 1024
+    : false,
+)
+const wikiContext = computed(() =>
+  selected.value ? { page: selected.value, pages: wikiIndex.value } : undefined,
 )
 let alive = true,
   request = 0
 const off = onSyncProgress((p) => {
-  if (p.profileId === profile.value && p.runId === runId.value)
-    progress.value = p
+  if (p.profileId === profile.value && p.runId === runId.value) progress.value = p
 })
 useModalFocus(dialog, dialogOpen, {
   onEscape: () => {
@@ -164,17 +184,21 @@ async function load() {
     lastSynced.value = ''
     return
   }
-  const result = await backend.listWikis(profile.value, {
-    projectId: pid,
-    keyword: keyword.value,
-    keywordMode: keywordMode.value,
-  })
+  const [full, result] = await Promise.all([
+    backend.listWikis(profile.value, { projectId: pid, keyword: '', keywordMode: 'and' }),
+    backend.listWikis(profile.value, {
+      projectId: pid,
+      keyword: keyword.value,
+      keywordMode: keywordMode.value,
+    }),
+  ])
   if (!alive || sequence !== request || pid !== selectedProjectId.value) return
   pages.value = result.pages
+  wikiIndex.value = full.pages
   projectFormatting.value = result.textFormattingRule ?? result.pages[0]?.textFormattingRule ?? ''
   disabled.value = result.disabled
   lastSynced.value = result.lastSyncedAt
-  if (!pages.value.some((p) => p.id === selectedId.value)) {
+  if (!wikiIndex.value.some((p) => p.id === selectedId.value)) {
     selectedId.value = 0
     selectedPath.value = ''
   }
@@ -194,6 +218,10 @@ function keywordEnter(event: KeyboardEvent) {
 }
 async function select(path: string, id: number) {
   if (locked.value || !(await leaveEditor())) return
+  headings.value = []
+  activeHeading.value = ''
+  allowLarge.value = false
+  tocLimit.value = 500
   selectedPath.value = path
   selectedId.value = id
   formatted.value = true
@@ -202,6 +230,9 @@ watch(selectedProjectId, () => {
   selectedId.value = 0
   selectedPath.value = ''
   pages.value = []
+  wikiIndex.value = []
+  headings.value = []
+  activeHeading.value = ''
   disabled.value = false
   lastSynced.value = ''
   if (!initializing.value)
@@ -214,18 +245,12 @@ onMounted(async () => {
     profile.value = await backend.getActiveProfile()
     if (!profile.value) return
     spaceURL.value =
-      (await backend.listProfiles()).find((p) => p.id === profile.value)
-        ?.spaceUrl ?? ''
+      (await backend.listProfiles()).find((p) => p.id === profile.value)?.spaceUrl ?? ''
     if (!issueSyncRunning.value && !shouldSkipProjectRefreshFor(profile.value))
-      await runSharedProjectRefresh(profile.value, () =>
-        backend.syncProjects(profile.value),
-      )
+      await runSharedProjectRefresh(profile.value, () => backend.syncProjects(profile.value))
     projects.value = await backend.listProjects(profile.value)
     restoreProjectSelection(profile.value)
-    selectedProjectId.value = resolveProjectSelection(
-      projects.value,
-      selectedProjectId.value,
-    )
+    selectedProjectId.value = resolveProjectSelection(projects.value, selectedProjectId.value)
     await load()
   } catch (e) {
     error.value = errorMessage(e)
@@ -245,20 +270,14 @@ async function sync() {
   if (locked.value || !selectedProjectId.value || !(await leaveEditor())) return
   const id = startRun()
   try {
-    await runSharedProjectRefresh(profile.value, () =>
-      backend.syncProjects(profile.value),
-    )
+    await runSharedProjectRefresh(profile.value, () => backend.syncProjects(profile.value))
     projects.value = await backend.listProjects(profile.value)
     if (!projects.value.some((p) => p.id === selectedProjectId.value)) {
       selectedProjectId.value = resolveProjectSelection(projects.value, 0)
       await load()
       return
     }
-    const result = await backend.syncWikis(
-      profile.value,
-      selectedProjectId.value,
-      id,
-    )
+    const result = await backend.syncWikis(profile.value, selectedProjectId.value, id)
     warnings.value = result.warnings
     await load()
     disabled.value = result.disabled
@@ -273,11 +292,7 @@ async function refresh() {
   if (locked.value || !selected.value || !(await leaveEditor())) return
   const id = startRun()
   try {
-    await backend.refreshWiki(
-      profile.value,
-      selectedProjectId.value,
-      selected.value.id,
-    )
+    await backend.refreshWiki(profile.value, selectedProjectId.value, selected.value.id)
     await load()
   } catch (e) {
     error.value = errorMessage(e)
@@ -288,20 +303,10 @@ async function refresh() {
 async function copy() {
   if (!selected.value || !spaceURL.value) return
   try {
-    await copyToClipboard(
-      `${spaceURL.value.replace(/\/$/, '')}/alias/wiki/${selected.value.id}`,
-    )
+    await copyToClipboard(`${spaceURL.value.replace(/\/$/, '')}/alias/wiki/${selected.value.id}`)
     notice.value = t('wiki.copied')
   } catch (e) {
     error.value = errorMessage(e)
-  }
-}
-function openLink(event: MouseEvent | KeyboardEvent) {
-  if (event instanceof KeyboardEvent && event.key !== 'Enter') return
-  const href = markdownLinkHref(event.target)
-  if (href) {
-    event.preventDefault()
-    openExternalURL(href)
   }
 }
 async function prepare(subtree: string) {
@@ -310,9 +315,7 @@ async function prepare(subtree: string) {
   preparing.value = true
   try {
     if (syncFirst.value)
-      await runSharedProjectRefresh(profile.value, () =>
-        backend.syncProjects(profile.value),
-      )
+      await runSharedProjectRefresh(profile.value, () => backend.syncProjects(profile.value))
     if (!alive || cancelRequested.value) {
       finishRun(id)
       return
@@ -384,9 +387,7 @@ async function exportNow() {
         {{ t('wiki.sync') }}
       </button>
       <span>{{
-        lastSynced
-          ? t('wiki.freshness', { at: formatDateTime(lastSynced) })
-          : t('wiki.unsynced')
+        lastSynced ? t('wiki.freshness', { at: formatDateTime(lastSynced) }) : t('wiki.unsynced')
       }}</span>
     </div>
     <p v-if="disabled" role="status">{{ t('wiki.disabled') }}</p>
@@ -396,33 +397,23 @@ async function exportNow() {
       <li v-for="w in warnings" :key="w">{{ w }}</li>
     </ul>
     <p v-if="busy" role="status">
-      {{
-        preparing
-          ? t('wiki.preparing')
-          : exporting
-            ? t('wiki.exporting')
-            : t('wiki.working')
-      }}
+      {{ preparing ? t('wiki.preparing') : exporting ? t('wiki.exporting') : t('wiki.working') }}
       <span v-if="progress">{{ progress.fetched }} / {{ progress.total }}</span>
     </p>
     <button v-if="preparing || exporting" @click="cancelExport">
       {{ t('wiki.cancel') }}
     </button>
     <div class="toolbar">
-      <button :disabled="locked || disabled || !selectedProjectId" @click="openEditor(true)">{{ t('wiki.newPage') }}</button>
+      <button :disabled="locked || disabled || !selectedProjectId" @click="openEditor(true)">
+        {{ t('wiki.newPage') }}
+      </button>
       <label><input v-model="syncFirst" type="checkbox" :disabled="locked" />{{
         t('wiki.syncFirst')
       }}</label>
-      <button
-        :disabled="locked || disabled || !selectedProjectId"
-        @click="prepare('')"
-      >
+      <button :disabled="locked || disabled || !selectedProjectId" @click="prepare('')">
         {{ t('wiki.exportProject') }}
       </button>
-      <button
-        :disabled="locked || disabled || !selectedPath"
-        @click="prepare(selectedPath)"
-      >
+      <button :disabled="locked || disabled || !selectedPath" @click="prepare(selectedPath)">
         {{ t('wiki.exportSubtree') }}
       </button>
     </div>
@@ -449,49 +440,60 @@ async function exportNow() {
           :parents="editorParents"
           :text-formatting-rule="projectFormatting"
           @saved="wikiSaved"
-          @cancel="editing = false; writingBusy = false"
+          @cancel="cancelEditor"
           @error="error = $event"
           @busy="writingBusy = $event"
         />
         <article v-else-if="selected" class="wiki-detail">
-          <h2>{{ selected.name }}</h2>
+          <h2 ref="pageHeading" tabindex="-1">{{ selected.name }}</h2>
           <div class="toolbar">
-            <button :disabled="locked || disabled" @click="openEditor(false)">{{ t('wiki.edit') }}</button>
+            <button :disabled="locked || disabled" @click="openEditor(false)">
+              {{ t('wiki.edit') }}
+            </button>
             <button :disabled="locked" @click="refresh">
               {{ t('wiki.refresh') }}
             </button><button :disabled="!spaceURL" @click="copy">
               {{ t('wiki.copy') }}
             </button>
-            <label v-if="isMarkdownRule(selected.textFormattingRule)"><input v-model="formatted" type="checkbox" />{{
-              t('wiki.formatted')
-            }}</label>
+            <label v-if="isMarkdownRule(selected.textFormattingRule)"><input v-model="formatted" type="checkbox" />{{ t('wiki.formatted') }}</label>
           </div>
           <dl>
             <dt>{{ t('wiki.tags') }}</dt>
             <dd>{{ selected.tags.join(', ') }}</dd>
             <dt>{{ t('wiki.created') }}</dt>
-            <dd>
-              {{ selected.createdUser }} {{ formatDateTime(selected.created) }}
-            </dd>
+            <dd>{{ selected.createdUser }} {{ formatDateTime(selected.created) }}</dd>
             <dt>{{ t('wiki.updated') }}</dt>
-            <dd>
-              {{ selected.updatedUser }} {{ formatDateTime(selected.updated) }}
-            </dd>
+            <dd>{{ selected.updatedUser }} {{ formatDateTime(selected.updated) }}</dd>
           </dl>
           <p v-if="!selected.contentFetchedAt">{{ t('wiki.missingBody') }}</p>
           <p v-else-if="selected.contentUpdated !== selected.updated">
             {{ t('wiki.staleBody') }}
           </p>
-          <!-- 既存の markdown-it + DOMPurify の許可リストを再利用する。 -->
-          <!-- eslint-disable vue/no-v-html -->
-          <div
-            v-if="html"
+          <button
+            v-if="formatted && isMarkdownRule(selected.textFormattingRule)"
+            type="button"
+            @click="openToc"
+          >
+            {{ t('wiki.render.toc') }}
+          </button>
+          <button v-if="wikiLarge && !allowLarge" type="button" @click="allowLarge = true">
+            {{ t('wiki.render.renderLarge') }}
+          </button>
+          <MarkdownBody
+            v-if="formatted && isMarkdownRule(selected.textFormattingRule)"
+            :key="`${profile}:${selectedProjectId}:${selected.id}:${selected.contentUpdated}`"
+            ref="markdown"
             class="wiki-preview markdown-body"
-            @click="openLink"
-            @keydown="openLink"
-            v-html="html"
+            variant="wiki"
+            :source="selected.content"
+            :wiki="wikiContext"
+            :profile="profile"
+            :disabled="locked"
+            :allow-large="allowLarge"
+            @headings="headings = $event"
+            @active="activeHeading = $event"
+            @navigate="navigateWiki"
           />
-          <!-- eslint-enable vue/no-v-html -->
           <pre v-else class="wiki-preview">{{ selected.content }}</pre>
           <h3>{{ t('wiki.attachments') }}</h3>
           <ul>
@@ -502,50 +504,71 @@ async function exportNow() {
         </article>
         <p v-else>{{ t('wiki.choosePage') }}</p>
       </div>
-      <aside
-        id="wiki-search-panel"
-        :hidden="panelCollapsed"
-        :aria-label="t('wiki.panel')"
-      >
-        <h2 class="wiki-panel-title">{{ t('wiki.panel') }}</h2>
-        <form class="wiki-search" @submit.prevent="search">
-          <label class="wiki-keyword">{{ t('wiki.keyword')
-          }}<input
-            v-model="keyword"
-            data-testid="wiki-keyword"
-            :disabled="locked"
-            @keydown.enter="keywordEnter"
-          /></label>
-          <fieldset class="wiki-search-modes">
-            <legend>{{ t('wiki.searchMode') }}</legend>
-            <label><input
-              v-model="keywordMode"
-              type="radio"
-              name="wiki-keyword-mode"
-              value="and"
+      <aside id="wiki-search-panel" :hidden="panelCollapsed" :aria-label="t('wiki.panel')">
+        <details
+          v-if="selected && formatted && !editing && isMarkdownRule(selected.textFormattingRule)"
+          :open="tocOpen"
+          @toggle="tocOpen = ($event.target as HTMLDetailsElement).open"
+        >
+          <summary>{{ t('wiki.render.toc') }}</summary>
+          <nav class="wiki-toc" :aria-label="t('wiki.render.toc')">
+            <button
+              v-for="h in headings.slice(0, tocLimit)"
+              :key="h.id"
+              type="button"
+              :class="[`toc-level-${h.level}`, { current: activeHeading === h.id }]"
+              :aria-current="activeHeading === h.id ? 'location' : undefined"
+              @click="markdown?.goToHeading(h.id)"
+            >
+              {{ h.text }}
+            </button>
+            <p v-if="!headings.length">{{ t('wiki.render.noHeadings') }}</p>
+            <button v-if="headings.length > tocLimit" type="button" @click="tocLimit += 500">
+              {{ t('wiki.render.more') }}
+            </button>
+          </nav>
+        </details>
+        <p v-if="!formatted || editing" role="status">{{ t('wiki.render.tocUnavailable') }}</p>
+        <details
+          :open="searchOpen"
+          @toggle="searchOpen = ($event.target as HTMLDetailsElement).open"
+        >
+          <summary>{{ t('wiki.panel') }}</summary>
+          <h2 class="wiki-panel-title">{{ t('wiki.panel') }}</h2>
+          <form class="wiki-search" @submit.prevent="search">
+            <label class="wiki-keyword">{{ t('wiki.keyword')
+            }}<input
+              v-model="keyword"
+              data-testid="wiki-keyword"
               :disabled="locked"
-            />{{ t('wiki.and') }}</label>
-            <label><input
-              v-model="keywordMode"
-              type="radio"
-              name="wiki-keyword-mode"
-              value="or"
-              :disabled="locked"
-            />{{ t('wiki.or') }}</label>
-          </fieldset>
-          <button type="submit" :disabled="locked">{{ t('wiki.search') }}</button>
-        </form>
-        <h3 class="wiki-tree-title">{{ t('wiki.tree') }}</h3>
-        <WikiTree
-          :nodes="tree"
-          :selected-id="selectedId"
-          :disabled="locked"
-          @select="select"
-        />
-        <p v-if="!pages.length && !initializing">{{ t('wiki.empty') }}</p>
-        <p v-if="selectedPath">
-          {{ t('wiki.subtree', { path: selectedPath }) }}
-        </p>
+              @keydown.enter="keywordEnter"
+            /></label>
+            <fieldset class="wiki-search-modes">
+              <legend>{{ t('wiki.searchMode') }}</legend>
+              <label><input
+                v-model="keywordMode"
+                type="radio"
+                name="wiki-keyword-mode"
+                value="and"
+                :disabled="locked"
+              />{{ t('wiki.and') }}</label>
+              <label><input
+                v-model="keywordMode"
+                type="radio"
+                name="wiki-keyword-mode"
+                value="or"
+                :disabled="locked"
+              />{{ t('wiki.or') }}</label>
+            </fieldset>
+            <button type="submit" :disabled="locked">{{ t('wiki.search') }}</button>
+          </form>
+          <h3 class="wiki-tree-title">{{ t('wiki.tree') }}</h3>
+          <WikiTree :nodes="tree" :selected-id="selectedId" :disabled="locked" @select="select" />
+          <p v-if="!pages.length && !initializing">{{ t('wiki.empty') }}</p>
+          <p v-if="selectedPath">
+            {{ t('wiki.subtree', { path: selectedPath }) }}
+          </p>
+        </details>
       </aside>
     </div>
     <div v-if="estimate" class="wiki-modal-backdrop">
@@ -609,6 +632,11 @@ async function exportNow() {
   margin: 0.8rem 0;
 }
 .wiki-layout aside {
+  align-self: start;
+  position: sticky;
+  top: 1rem;
+  max-height: calc(100vh - 2rem);
+  overflow-y: auto;
   min-width: 0;
   border-left: var(--border-width) solid var(--border);
   padding-left: 1rem;
@@ -699,9 +727,9 @@ async function exportNow() {
 .wiki-modal button {
   margin-right: 0.6rem;
 }
-@media (max-width: 760px) {
+@media (max-width: 900px) {
   .wiki-layout {
-    grid-template-columns: minmax(0, 1fr) minmax(0, 42%);
+    grid-template-columns: minmax(0, 1fr) minmax(0, 16rem);
     gap: 0.75rem;
   }
   .wiki-layout aside {
@@ -713,5 +741,46 @@ async function exportNow() {
   .wiki-detail dd {
     margin-bottom: 0.5rem;
   }
+}
+@media (max-width: 700px) {
+  .wiki-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .wiki-layout aside {
+    position: static;
+    max-height: none;
+    overflow-y: visible;
+    border-left: 0;
+    border-top: var(--border-width) solid var(--border);
+    padding: 1rem 0;
+  }
+}
+.wiki-toc {
+  max-height: 40vh;
+  overflow-y: auto;
+  display: grid;
+  gap: 0.2rem;
+  margin-block: 0.75rem;
+}
+.wiki-toc button {
+  text-align: left;
+  border: 0;
+  background: var(--surface);
+  box-shadow: var(--shadow-none);
+  color: var(--text);
+}
+.wiki-toc button.current {
+  background: var(--selection-bg);
+  border-left: var(--quote-border-width) solid var(--border);
+  font-weight: var(--strong-weight);
+}
+.wiki-toc .toc-level-2 {
+  padding-left: 1rem;
+}
+.wiki-toc .toc-level-3 {
+  padding-left: 1.5rem;
+}
+.wiki-toc :is(.toc-level-4, .toc-level-5, .toc-level-6) {
+  padding-left: 2rem;
 }
 </style>

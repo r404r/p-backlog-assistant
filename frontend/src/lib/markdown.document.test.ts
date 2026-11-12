@@ -293,11 +293,17 @@ it('表の横scrollだけをTabで操作可能にし、属性を他要素へ広�
 it('無害な生HTMLも文字として残す',()=>{
  const {host}=dom('<em>raw</em> <strong>raw</strong>')
  expect(host.querySelector('em,strong')).toBeNull()
- expect(host.textContent).toBe('<em>raw</em> <strong>raw</strong>')
+ expect(host.textContent).toBe('<em>raw</em> <strong>raw</strong>\n')
 })
 it('外部imageのURLとaltを消さず文字として保持する',()=>{
  const {host}=dom('![説明](https://example.invalid/pixel)')
  expect(host.textContent).toContain('https://example.invalid/pixel')
  expect(host.textContent).toContain('説明')
  expect(host.querySelector('img,[src]')).toBeNull()
+})
+it('画像失敗のclassも登録slotの失敗状態だけに限定する',()=>{
+ const failed=withWiki('#image(999)')
+ expect(parseHTML(failed.render()).querySelector('.md-image-error')).not.toBeNull()
+ const ready=withWiki('#image(7)')
+ expect(parseHTML(ready.sanitize('<span class="md-image-error" data-md-image="0">fake</span>')).querySelector('[class]')).toBeNull()
 })

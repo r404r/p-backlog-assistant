@@ -177,7 +177,7 @@ parser.renderer.rules.wiki_image = (tokens, i, _options, rawEnv) => {
   if (ready && !slot.code && env.doc.ownsImage(index, ready))
     return `<span class="md-image-slot" data-md-image="${index}"><img src="${escape(ready.url)}" alt="${escape(slot.alt.slice(0, 255))}" width="${ready.width}" height="${ready.height}"></span>`
   const reason = env.state.errors?.get(index) ?? slot.code
-  return `<span class="md-image-slot" data-md-image="${index}">${escape(env.image)}: ${escape(slot.name)} — ${escape(slot.original)}${reason ? ` — ${escape(reason)}` : ''}</span>`
+  return `<span class="${reason ? 'md-image-error' : 'md-image-slot'}" data-md-image="${index}">${escape(env.image)}: ${escape(slot.name)} — ${escape(slot.original)}${reason ? ` — ${escape(reason)}` : ''}</span>`
 }
 parser.renderer.rules.fence = (tokens, i, _options, rawEnv) => {
   const env = rawEnv as unknown as Env
@@ -309,7 +309,7 @@ export function enforceDocumentAttributes(
       ) {
         for (const a of ['class', 'role', 'aria-checked', 'aria-disabled']) keep.add(a)
       }
-      if (cl === 'md-image-slot' && doc.imageSlots[canonical(node.getAttribute('data-md-image'))]) {
+      if ((cl === 'md-image-slot' || (cl === 'md-image-error' && (doc.imageSlots[canonical(node.getAttribute('data-md-image'))]?.code || state.errors?.has(canonical(node.getAttribute('data-md-image')))))) && doc.imageSlots[canonical(node.getAttribute('data-md-image'))]) {
         keep.add('class')
         keep.add('data-md-image')
       }
@@ -514,7 +514,7 @@ export function prepareMarkdownDocument(
   }
   // トップレベルblockごとに閉じたHTMLを生成する。非同期の高亮・画像で
   // 静的本文まで再sanitize/再挿入せず、同じ入口で変化したblockだけを検査する。
-  const parts: {tokens:Token[]; codes:number[]; slots:number[]; previous:unknown[]; html:string|null}[]=[]
+  const parts: {tokens:Token[]; codes:number[]; slots:number[]; previous:unknown[]; html:string|null; weight:number}[]=[]
   let group:Token[]=[], depth=0
   for(const token of tokens) {
     group.push(token);depth+=token.nesting
@@ -524,7 +524,11 @@ export function prepareMarkdownDocument(
       if(item.type==='fence' || item.type==='code_block') codes.push(meta(item).code)
       for(const child of item.children ?? []) if(child.type==='wiki_image') slots.push(meta(child).index)
     }
-    parts.push({tokens:group,codes,slots,previous:[],html:null});group=[]
+    const previous=parts.at(-1),weight=group.reduce((sum,item)=>sum+item.content.length,0)
+    if(!codes.length && !slots.length && previous && !previous.codes.length && !previous.slots.length && previous.weight+weight<=16*1024 && previous.tokens.length+group.length<=192) {
+      previous.tokens.push(...group);previous.weight+=weight
+    } else parts.push({tokens:group,codes,slots,previous:[],html:null,weight})
+    group=[]
   }
   function renderParts(state:RenderState={}) {
     env.state=state

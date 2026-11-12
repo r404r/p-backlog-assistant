@@ -1,27 +1,19 @@
 /**
- * 課題詳細・コメントの Markdown レンダリング(設計 §3.2)。
+ * Markdown の設定・URL操作と、編集プレビュー用の互換renderer。
+ * Wiki閲覧・課題詳細・コメントは MarkdownBody と markdownDocument を使用する。
+ * リモート本文は Go binding に到達できる WebView へ表示するため、次を守る。
  *
- * 描画するのは **Backlog から届くリモート由来の文字列** であり、しかも描画先は
- * Go バインディングに到達できる WebView である。XSS はこの機能で最も重い故障に
- * なるため、次の 4 点を「実装の前提」として固定する(変更するときは
- * markdown.test.ts の欠陥注入テストごと見直すこと):
+ * 1. 生HTMLは html:false で文字列として保持する。
+ * 2. 出力は必ずDOMPurifyを通し、style/event/SVG/MathML/form/inputを許可しない。
+ *    共通rendererの追加タグ・属性・classは要素/値/manifestごとに限定する。
+ * 3. リンクはhref無し。外部はHTTP(S)検証、内部は現世代のWiki索引で解決する。
+ * 4. 外部画像は変換時から文字保持。同Wikiの添付をGoで検証・再encodeし、
+ *    共通rendererが自ら生成・登録した現世代のblobだけを例外的に表示する。
+ *    このファイルの文脈無しrenderMarkdownは従来どおり画像を一切生成しない。
  *
- *  1. **生 HTML を通さない**: markdown-it は `html: false`。生 HTML は
- *     タグではなく文字列として表示される。
- *  2. **DOMPurify で二重サニタイズ**: 許可タグ・許可属性を明示した allow-list。
- *     `style` 属性・イベント属性・`img` / SVG / MathML / フォーム系は不許可。
- *  3. **リンクは href を出力しない**: 検証済み(http / https のみ)の URL を
- *     `data-href` に入れ、クリック/Enter キーのハンドラから `openExternalURL` で開く。
- *     href が無いため、中クリック・修飾キー操作でも WebView 内外へのネイティブ遷移は
- *     起こらない。キーボード操作は `role="link"` + `tabindex="0"` で明示的に提供する。
- *  4. **`<img>` を一切生成しない**: DOM へ挿入される前(markdown-it のレンダラ段階)で
- *     プレースホルダ文字列へ変換する。挿入後に置換する方式では、置換前に外部への
- *     画像リクエストが発生しうるため採らない。
- *
- * 対応構文は **CommonMark + table + strikethrough + linkify** と、区切り列が不足する
- * 旧テンプレートの表。単一改行は Backlog に合わせて br にする。
- * (タスクリスト・脚注・絵文字等のプラグインは
- * 対象外)。コードブロックはエスケープ表示のみで、シンタックスハイライトはしない。
+ * 互換入口は表・単一改行と安全なplain codeを維持する。共通rendererは別途
+ * CJK強調・読み取りtask・生成見出しID・コードWorker・限定Wiki参照を扱う。
+ * 両入口の欠陥注入と互換試験を弱めず、非Markdownは画面側で原文表示する。
  */
 import DOMPurify, { type Config } from 'dompurify'
 import MarkdownIt from 'markdown-it'
@@ -246,8 +238,8 @@ function getPurifier(): ReturnType<typeof DOMPurify> {
 /**
  * Markdown を、そのまま v-html で描画してよい HTML へ変換する。
  *
- * 変換(markdown-it)とサニタイズ(DOMPurify)の 2 段を必ず通る唯一の経路。
- * 画面はこの戻り値以外を v-html に渡してはならない。
+ * 互換プレビューでも変換とサニタイズの2段を必ず通す。
+ * 共通MarkdownBodyはmarkdownDocument.renderPartsの検査済み出力を使う。
  */
 export function renderMarkdown(source: string): string {
   if (!source) return ''
