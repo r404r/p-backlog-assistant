@@ -525,15 +525,15 @@ function openMarkdownLinkByKeyboard(event: KeyboardEvent): void {
 
 /* 最大化中であることを見た目でも示す(状態は aria ではなくラベルの文言が伝える) */
 .modal.maximized .maximize-toggle {
-  background: var(--accent-emphasis);
+  background: var(--border);
   border-color: var(--border);
-  color: var(--on-accent);
+  color: var(--surface);
 }
 
 .modal.maximized .maximize-toggle:hover {
-  background: var(--accent-emphasis-hover);
+  background: var(--border);
   border-color: var(--border);
-  color: var(--on-accent);
+  color: var(--surface);
 }
 
 .detail-key {
@@ -622,9 +622,9 @@ pre.detail-description {
 }
 
 .view-toggle button[aria-pressed='true'] {
-  background: var(--accent-emphasis);
+  background: var(--border);
   border-color: var(--border);
-  color: var(--on-accent);
+  color: var(--surface);
 }
 
 .detail-note {
