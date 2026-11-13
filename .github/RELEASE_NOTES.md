@@ -1,21 +1,22 @@
-# backlog-assistant v1.7.0
+# backlog-assistant v1.8.0
 
-Wiki の読みやすさと操作性を高めるリリースです。v1.6.0 以降の変更と依存ライブラリの更新を含みます。コードの構文ハイライト・読み取り専用タスク・CJK 強調・排版は、Wiki に加えて課題詳細とコメントにも適用されます。
+Wiki ページツリーの操作性と、小さいウィンドウでの使いやすさを改善するリリースです。v1.7.0 以降の変更を含みます。ページツリーの表示順は、従来のページ ID 順から名前の Unicode コードポイント順に変わります。
 
-**English summary**: This release includes all changes since v1.6.0. Wiki, issue details, and comments gain syntax highlighting with language labels and copy buttons, read-only task lists, CJK emphasis, and improved typography. Wiki also gains a heading-based table of contents, inline images from the current page’s attachments, and exact-match links to pages in the same project. Markdown parsing and sanitization dependencies are updated to fix slow rendering for certain content. Supported attachment formats are PNG, JPEG, and GIF (first frame only), limited to 8 MiB, 16 million pixels, and 8192 pixels per side. External images and raw HTML are not rendered, Backlog-format pages remain plain text, and pages over 2 MiB show source by default.
+**English summary**: This release includes all changes since v1.7.0. The Wiki tree gains folding, Expand all / Collapse all, distinct directory and page icons, and descendant page counts. The current page and the hierarchy selected for export or new pages have separate indicators; selecting a pure directory keeps the body unchanged. Keyboard support includes Up/Down, Left/Right, Home/End, Enter/Space, and typing a name prefix. Tree display changes from page ID order to unnormalized Unicode code point order: `10` precedes `2`, and uppercase precedes lowercase. The body, contents, and tree scroll separately when space permits. At low heights, the panel stays on the right and scrolls as a whole; below 760 CSS px of actual Wiki layout width, it becomes an initially closed drawer opening from the right. Close it with Close, Escape (except during IME composition), or the backdrop; successfully opening a page or choosing a contents entry also closes it. In both compact modes, contents remain independently scrollable, capped at 25% of visible panel height (up to 192px). Data, synchronization, export content and order, and Wiki write behavior remain unchanged.
 
 ## 新機能
 
-- **コードの構文ハイライトとコピー**: 12 言語のコードブロックに構文ハイライト・言語ラベル・コピー操作を追加しました。未対応言語はコード原文を表示します。
-- **読み取り専用タスクリスト**: 未完了・完了のタスクを見分けやすく表示します。表示上のチェックは変更できません。
-- **Wiki の目次**: 右側の折りたたみ目次から見出しへ移動できます。現在位置の表示とキーボード操作に対応します。
-- **Wiki 添付画像**: 表示中の Wiki 自身に添付された画像を本文内に表示します。読み込みに失敗した場合も原文と理由を残します。
-- **Wiki 内部リンク**: `[[ページ名]]` から同じプロジェクトのページへ移動できます。見つからない場合や同名ページが複数ある場合は理由を表示します。
+- **ページツリーの折りたたみ**: 下位のある行の矢印で展開・折りたたみができます。既定はすべて展開で、「すべて展開」「すべて折りたたむ」は検索で非表示の枝にも適用します。ページ切替・検索・一覧更新・パネルの開閉では状態を維持し、プロジェクト切替・画面への再入場では全展開に戻ります。
+- **ディレクトリとページの区別**: ページを持たないディレクトリはフォルダアイコンと太字、ページは文書アイコン、下位を持つページは文書アイコンと矢印で表示します。ディレクトリと下位を持つページには下位の全ページ数を表示します。検索中の数は表示範囲内のページ数で、出力件数ではありません。
+- **現在ページと選択階層の表示**: 表示中のページは背景色と左線、出力・新規作成の対象階層は破線とチェックで区別します。ディレクトリを選んでも本文は変わらず、矢印は枝の開閉だけを行います。
+- **キーボード操作**: 上下で行移動、右で展開・最初の子へ移動、左で折りたたみ・親へ移動、Home / End で先頭・末尾へ移動、Enter / Space でページや階層を選択できます。文字入力で名前の先頭が一致する行へ移動します。焦点を動かすだけでは本文や出力対象は変わりません。
 
 ## 改善・修正
 
-- **CJK 強調と排版**: 日本語などの句読点に隣接する強調に対応し、本文幅・見出し・引用・区切り線・表の表頭と縞模様を Pop スタイルで整えました。幅の広い表とコードは横スクロールできます。従来の単改行と旧テンプレート表の表示も維持します。
-- **依存ライブラリの更新**: Markdown の解析・サニタイズに関わる依存を更新し、特定の内容で表示が遅くなる問題を修正しました。DOMPurify 3.4.17、markdown-it 15.0.3、Vue と関連コンパイラ 3.5.45、vue-i18n と `@intlify/*` 11.4.18、source-map-js 1.2.2 を使用します。
+- **名前順への変更**: ページツリーを、v1.7.0 のページ ID 順から名前の Unicode コードポイント順へ変更しました。名前の正規化は行わず、`10` は `2` より前、英字の大文字は小文字より前に並びます。ディレクトリとページを混在して並べ、同名ページは ID 付きの別行で表示します。この変更はツリー表示だけに適用します。
+- **独立スクロール**: 高さに余裕がある時は検索を固定し、本文・目次・ページツリーをそれぞれスクロールできます。ツリーの下の方からページを開いても、本文だけが先頭に戻り、すでに見えている行の位置は維持します。検索結果や内部リンクから深いページを開くと、その祖先だけを展開して行を見える位置へ移します。
+- **小さいウィンドウの配置**: 高さが足りない時もパネルは本文の右側に残り、検索とページツリーを含むパネル全体をスクロールできます。Wiki 領域の実際の幅が 760 CSS px 未満になると、右側から開くドロワーに変わり、初めは閉じています。「検索・ツリーを表示」で開き、「閉じる」、Esc（日本語変換中を除く）、背景のオーバーレイのクリックで閉じます。ページを正常に開いた時や目次の項目を選んだ時も閉じます。どちらの状態でも目次は可視パネル高の 25% 以下（最大 192px）に収まり、超えた項目は目次内でスクロールでき、直後にページツリーが続きます。パネルが本文の下に移ることはありません。
+- **既存データと処理の維持**: データ、同期、エクスポートの内容と順序、Wiki の書き込み処理は変更していません。
 
 ## 動作環境
 
