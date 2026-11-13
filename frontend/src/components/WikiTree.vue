@@ -11,7 +11,7 @@ const props = withDefaults(defineProps<{
   outsideId?: number
   filtered?: boolean
   disabled: boolean
-  flow?: boolean
+  scrollPort?: HTMLElement | null
 }>(), { selectedRowKey: '', focusedRowKey: '', collapsed: () => new Set<string>(), outsideId: 0 })
 const emit = defineEmits<{
   select: [path: string, id: number, rowKey: string]
@@ -37,7 +37,8 @@ watch(rows, (current, old) => {
 }, { immediate: true })
 function reveal(key: string) {
   const el = rowElements.get(key)
-  if (port.value && el && !props.flow) revealWikiRow(port.value, el)
+  const owner = props.scrollPort ?? port.value
+  if (owner && el) revealWikiRow(owner, el)
 }
 async function focus(row: WikiTreeRow) {
   focusKey.value = row.rowKey

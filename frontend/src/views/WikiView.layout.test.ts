@@ -21,7 +21,7 @@ beforeEach(() => {
  vi.spyOn(window, 'innerHeight', 'get').mockImplementation(() => height)
  vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockImplementation(function(this: HTMLElement) { return this.classList.contains('wiki-layout') ? width : 320 })
  vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function(this: HTMLElement) {
-  return { x: 0, y: 0, top: 0, left: 0, bottom: height, right: width, width, height: this.tagName === 'DETAILS' ? 400 : 20, toJSON() {} }
+  return { x: 0, y: 0, top: 0, left: 0, bottom: height, right: width, width, height: this.tagName === 'DETAILS' ? 450 : 20, toJSON() {} }
  })
  vi.spyOn(HTMLElement.prototype, 'getClientRects').mockImplementation(function(this: HTMLElement) { return [this.getBoundingClientRect()] as unknown as DOMRectList })
 })

@@ -42,8 +42,10 @@ const selectedRowKey = ref(''), focusedRowKey = ref('')
 const treeComponent = ref<InstanceType<typeof WikiTree> | null>(null)
 const layout = ref<HTMLElement | null>(null), bodyPort = ref<HTMLElement | null>(null)
 const outerPort = ref<HTMLElement | null>(null)
-const flow = ref(true), layoutHeight = ref(0), tocHeight = ref(0)
-const markdownScrollRoot = computed(() => flow.value ? outerPort.value : bodyPort.value)
+const panelPort = ref<HTMLElement | null>(null)
+const panelScroll = ref(false), layoutHeight = ref(160), tocHeight = ref(0)
+const markdownScrollRoot = computed(() => bodyPort.value)
+const treeScrollPort = computed(() => panelScroll.value ? panelPort.value : null)
 const temporaryId = ref(0)
 const fullTree = computed(() => indexWikiTree(buildWikiTree(wikiIndex.value)))
 const hasCollapsed = computed(() => [...fullTree.value.branches].some(key => collapsedNodeKeys.value.has(key)))
@@ -65,7 +67,6 @@ watch(fullTree, index => {
   collapsedNodeKeys.value = new Set([...collapsedNodeKeys.value].filter(key => index.keys.has(key)))
 })
 let layoutObserver: ResizeObserver | undefined, layoutFrame = 0
-let treeAnchor: { key: string; offset: number } | undefined
 function scheduleLayout() {
   if (!layoutFrame) layoutFrame = requestAnimationFrame(() => { layoutFrame = 0; measureLayout() })
 }
@@ -74,11 +75,10 @@ function measureLayout() {
   if (!el) return
   const outer = outerPort.value
   const bottom = Math.min(window.innerHeight, outer?.getBoundingClientRect().bottom ?? window.innerHeight)
-  // 外側スクロール位置に依存しない文書内の上端を使う。
   const top = el.getBoundingClientRect().top + (outer?.scrollTop ?? 0)
-  const available = Math.max(0, bottom - top - 16)
+  const available = Math.max(160, bottom - top - 16)
   layoutHeight.value = available
-  const panel = el.querySelector<HTMLElement>('aside')
+  const panel = panelPort.value
   let fixed = 0, tocNatural = 0
   if (panel && !panelCollapsed.value) {
     for (const child of panel.children) {
@@ -88,39 +88,32 @@ function measureLayout() {
       if (css.display === 'none' || css.position === 'absolute') continue
       let height = node.getBoundingClientRect().height
       if (node.classList.contains('wiki-toc-section') && tocOpen.value) {
-        const summary = node.querySelector('summary')?.getBoundingClientRect().height ?? 0
+        height = node.querySelector('summary')?.getBoundingClientRect().height ?? 0
         tocNatural = node.querySelector('nav')?.scrollHeight ?? 0
-        height = summary
+        // navのmarginは固定予算に含め、全体scrollとの切替でも同じ予算を使う。
+        const nav = node.querySelector('nav')
+        if (nav) { const style = getComputedStyle(nav); fixed += (parseFloat(style.marginTop) || 0) + (parseFloat(style.marginBottom) || 0) }
       }
       fixed += height + (parseFloat(css.marginTop) || 0) + (parseFloat(css.marginBottom) || 0)
     }
   }
   tocHeight.value = Math.max(0, Math.min(192, available * .25, available - fixed - 142))
-  const tocMinimum = tocNatural ? Math.min(tocNatural, 48) : 0
-  const next = window.innerWidth <= 700 || window.innerHeight < 640 || available < 320 || fixed + tocMinimum + 128 + 14 > available
-  if (flow.value !== next) {
-    const body = bodyPort.value, port = treeComponent.value?.port
-    const bodyTop = (flow.value ? outer : body)?.getBoundingClientRect().top ?? 0
-    const anchor = [...(body?.querySelectorAll<HTMLElement>('h1,h2,h3,h4,h5,h6,p,pre,table') ?? [])]
-      .find(node => node.getBoundingClientRect().bottom > bodyTop)
-    const before = anchor?.getBoundingClientRect().top
-    if (port) {
-      const top = flow.value ? (outer?.getBoundingClientRect().top ?? 0) : port.getBoundingClientRect().top
-      const first = [...port.querySelectorAll<HTMLElement>('[data-row-key]')]
-        .find(node => node.getBoundingClientRect().bottom > top)
-      if (first && (!flow.value || port.getBoundingClientRect().top < window.innerHeight))
-        treeAnchor = { key: first.dataset.rowKey!, offset: first.getBoundingClientRect().top - top }
-    }
-    flow.value = next
+  const required = fixed + (tocNatural ? Math.min(tocNatural, 48) : 0) + 142
+  const next = panelScroll.value ? available < required + 8 : available < required
+  if (panelScroll.value !== next) {
+    const previousPort = panelScroll.value ? panel : treeComponent.value?.port
+    const active = document.activeElement as HTMLElement | null
+    const anchor = active && panel?.contains(active) && active.matches('input') ? active
+      : [...(panel?.querySelectorAll<HTMLElement>('summary, .wiki-tree-heading, [data-row-key], .wiki-selected-path') ?? [])]
+        .find(node => node.getBoundingClientRect().bottom > (previousPort?.getBoundingClientRect().top ?? 0) && (panelScroll.value || node.hasAttribute('data-row-key')))
+    const offset = anchor && previousPort ? anchor.getBoundingClientRect().top - previousPort.getBoundingClientRect().top : undefined
+    panelScroll.value = next
     void nextTick(() => {
-      if (!alive || !anchor || before === undefined) return
-      const destination = next ? outer : body
-      if (!next && outer) outer.scrollTop = 0
-      if (destination) destination.scrollTop += anchor.getBoundingClientRect().top - before
-      if (!next && port && treeAnchor) {
-        const row = [...port.querySelectorAll<HTMLElement>('[data-row-key]')].find(node => node.dataset.rowKey === treeAnchor!.key)
-        if (row) port.scrollTop += row.getBoundingClientRect().top - port.getBoundingClientRect().top - treeAnchor.offset
-      }
+      if (!alive || !anchor || offset === undefined) return
+      const destination = next ? panel : treeComponent.value?.port
+      if (destination && destination.contains(anchor)) destination.scrollTop += anchor.getBoundingClientRect().top - destination.getBoundingClientRect().top - offset
+      // 検索に焦点がある場合はツリーより入力の可視性を優先する。
+      if (active && panel?.contains(active) && active.matches('input')) active.focus({ preventScroll: false })
     })
   }
 }
@@ -339,8 +332,10 @@ async function select(path: string, id: number, rowKey = '') {
   await nextTick()
   if (!alive || pid !== selectedProjectId.value || id !== selectedId.value) return
   if (bodyPort.value) { bodyPort.value.scrollTop = 0; bodyPort.value.scrollLeft = 0 }
-  if (flow.value && outerPort.value && bodyPort.value)
-    outerPort.value.scrollTop += bodyPort.value.getBoundingClientRect().top - outerPort.value.getBoundingClientRect().top
+  if (outerPort.value && bodyPort.value && layoutHeight.value === 160) {
+    const delta = bodyPort.value.getBoundingClientRect().top - outerPort.value.getBoundingClientRect().top
+    if (delta > 0) outerPort.value.scrollTop += delta
+  }
   if (!panelCollapsed.value) treeComponent.value?.reveal(target.rowKey)
   return true
 }
@@ -367,6 +362,7 @@ onMounted(async () => {
   if (typeof ResizeObserver !== 'undefined') {
     layoutObserver = new ResizeObserver(scheduleLayout)
     if (outerPort.value) layoutObserver.observe(outerPort.value)
+    if (layout.value) layoutObserver.observe(layout.value)
     const section = layout.value?.closest('.wiki-view')
     if (section) for (const child of section.children) if (child !== layout.value) layoutObserver.observe(child)
     const panel = layout.value?.querySelector('aside')
@@ -564,7 +560,7 @@ async function exportNow() {
         {{ panelCollapsed ? t('wiki.showPanel') : t('wiki.hidePanel') }}
       </button>
     </div>
-    <div ref="layout" class="wiki-layout" :class="{ 'panel-collapsed': panelCollapsed, 'wiki-flow': flow }" :style="{ height: flow ? 'auto' : `${layoutHeight}px` }">
+    <div ref="layout" class="wiki-layout" :class="{ 'panel-collapsed': panelCollapsed, 'panel-scroll': panelScroll }" :style="{ height: `${layoutHeight}px` }">
       <div ref="bodyPort" class="wiki-content">
         <WikiEditor
           v-if="editing"
@@ -642,7 +638,7 @@ async function exportNow() {
         </article>
         <p v-else>{{ t('wiki.choosePage') }}</p>
       </div>
-      <aside id="wiki-search-panel" :hidden="panelCollapsed" :aria-label="t('wiki.panel')">
+      <aside id="wiki-search-panel" ref="panelPort" :class="{ 'wiki-panel-scroll': panelScroll }" :hidden="panelCollapsed" :aria-label="t('wiki.panel')">
         <details
           :open="searchOpen"
           @toggle="searchOpen = ($event.target as HTMLDetailsElement).open"
@@ -683,7 +679,7 @@ async function exportNow() {
           @toggle="tocOpen = ($event.target as HTMLDetailsElement).open"
         >
           <summary>{{ t('wiki.render.toc') }}</summary>
-          <nav :style="{ maxHeight: flow ? '40vh' : `${tocHeight}px` }" class="wiki-toc" :aria-label="t('wiki.render.toc')">
+          <nav :style="{ maxHeight: panelScroll ? 'none' : `${tocHeight}px` }" class="wiki-toc" :aria-label="t('wiki.render.toc')">
             <button
               v-for="h in headings.slice(0, tocLimit)"
               :key="h.id"
@@ -706,7 +702,7 @@ async function exportNow() {
           <button type="button" :disabled="locked || !hasCollapsed" :title="t('wiki.allTreeScope')" @click="expandAll">{{ t('wiki.expandAll') }}</button>
           <button type="button" :disabled="locked || allCollapsed" :title="t('wiki.allTreeScope')" @click="collapseAll">{{ t('wiki.collapseAll') }}</button>
         </div>
-        <WikiTree ref="treeComponent" :nodes="tree" :selected-id="selectedId" :selected-row-key="selectedRowKey" :focused-row-key="focusedRowKey" :collapsed="collapsedNodeKeys" :outside-id="outsideId" :filtered="appliedFilter" :disabled="locked" :flow="flow" @select="select" @toggle="toggleNode" @focus-row="focusedRowKey = $event" />
+        <WikiTree ref="treeComponent" :nodes="tree" :selected-id="selectedId" :selected-row-key="selectedRowKey" :focused-row-key="focusedRowKey" :collapsed="collapsedNodeKeys" :outside-id="outsideId" :filtered="appliedFilter" :disabled="locked" :scroll-port="treeScrollPort" @select="select" @toggle="toggleNode" @focus-row="focusedRowKey = $event" />
         <p v-if="!pages.length && !initializing">{{ t('wiki.empty') }}</p>
         <p v-if="selectedPath" class="wiki-selected-path">{{ t('wiki.subtree', { path: selectedPath }) }}</p>
       </aside>
@@ -889,19 +885,6 @@ async function exportNow() {
     margin-bottom: 0.5rem;
   }
 }
-@media (max-width: 700px) {
-  .wiki-layout {
-    grid-template-columns: minmax(0, 1fr);
-  }
-  .wiki-layout aside {
-    position: static;
-    max-height: none;
-    overflow-y: visible;
-    border-left: 0;
-    border-top: var(--border-width) solid var(--border);
-    padding: 1rem 0;
-  }
-}
 .wiki-toc {
   max-height: 12rem;
   overflow-y: auto;
@@ -935,9 +918,8 @@ async function exportNow() {
 .wiki-layout aside > :not(.wiki-tree) { flex: none; }
 .wiki-tree-heading { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; }
 .wiki-selected-path { overflow-wrap: anywhere; }
-.wiki-layout.wiki-flow { height: auto; grid-template-columns: minmax(0, 1fr); }
-.wiki-flow .wiki-content { overflow: visible; }
-.wiki-flow aside { position: relative; max-width: 20rem; overflow: visible; max-height: none; border-left: 0; border-top: var(--border-width) solid var(--border); padding: 1rem 0; }
-.wiki-flow :deep(.wiki-tree) { overflow-y: visible; flex: none; }
-.wiki-flow .wiki-toc { max-height: 40vh; }
+.wiki-layout.panel-scroll aside { overflow-y: auto; overscroll-behavior: contain; overflow-anchor: none; }
+.panel-scroll :deep(.wiki-tree) { overflow-y: visible; flex: none; }
+.panel-scroll .wiki-toc { overflow: visible; }
+.panel-scroll :deep(.wiki-focus-path) { position: static; }
 </style>
