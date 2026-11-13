@@ -64,7 +64,7 @@ export function useWikiDrawer(open: Ref<boolean>, panel: Ref<HTMLElement | null>
     const current = generation
     await nextTick()
     if (!open.value || current !== generation) return
-    // 背景をaria-hiddenにする前に焦点を抽屉へ移す。
+    // 背景をaria-hiddenにする前に焦点をドロワーへ移す。
     focusFirst(); shield()
     document.addEventListener('keydown', keydown, true); document.addEventListener('focusin', focusin, true)
     observer = new MutationObserver(shield); observer.observe(document.body, { childList: true, subtree: true })
