@@ -13,6 +13,8 @@ function row(key: string) { return Array.from(mounted!.host.querySelectorAll<HTM
 function name(text: string) { return Array.from(mounted!.host.querySelectorAll<HTMLElement>('.wiki-node-name')).find(r => r.textContent === text)! }
 function button(text: string) { return Array.from(mounted!.host.querySelectorAll<HTMLButtonElement>('button')).find(r => r.textContent?.trim() === text)! }
 beforeEach(async () => {
+ // この既存回帰群は横並び条件で実行する。狭幅はlayout試験で扱う。
+ vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockImplementation(function(this: HTMLElement) { return this.classList.contains('wiki-layout') ? 1000 : 0 })
  localStorage.clear()
  backend = createMockBackend()
  backend.getActiveProfile = async () => 'p'; backend.listProfiles = async () => []; backend.syncProjects = async () => {}

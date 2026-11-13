@@ -33,6 +33,8 @@ function toggle() {
   return button!
 }
 beforeEach(async () => {
+ // この既存回帰群は横並び条件で実行する。狭幅はlayout試験で扱う。
+ vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockImplementation(function(this: HTMLElement) { return this.classList.contains('wiki-layout') ? 1000 : 0 })
   localStorage.clear()
   vi.resetModules()
   View = (await import('./WikiView.vue')).default
