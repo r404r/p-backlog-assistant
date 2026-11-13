@@ -271,3 +271,62 @@ func TestAttachmentSecondOwnershipCheckAndMismatch(t *testing.T) {
 		t.Fatal(result, c.calls)
 	}
 }
+
+func TestAttachmentCleanupFailurePreservesTarget(t *testing.T) {
+	s, _, _ := attachmentService(t)
+	dir := t.TempDir()
+	target := filepath.Join(dir, "架空.txt")
+	if err := os.WriteFile(target, []byte("old"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ops := fileutil.DefaultAtomicOps()
+	ops.Rename = func(string, string) error { return os.ErrPermission }
+	ops.Remove = func(string) error { return errors.New("FAKE-SECRET /outside-private/sample") }
+	s.attachmentFileOps = &ops
+	ctx := context.Background()
+	s.BeginWikiAttachmentDownload(ctx, 1, 2, 3)
+	var final WikiAttachmentDownloadProgress
+	result := s.DownloadWikiAttachment(ctx, 1, 2, 3, func(string) (string, error) { return target, nil }, func(p WikiAttachmentDownloadProgress) { final = p })
+	if result.State != "failed" || result.Code != "cleanup_failed" || final.Code != "cleanup_failed" || final.Phase != "failed" {
+		t.Fatalf("後片付け失敗が通知されない: %+v %+v", result, final)
+	}
+	data, err := os.ReadFile(target)
+	if err != nil || string(data) != "old" || s.AttachmentDownloadActive() {
+		t.Fatalf("既存ファイルか予約が変わった: %q %v", data, err)
+	}
+	files, err := os.ReadDir(dir)
+	if err != nil || len(files) != 2 {
+		t.Fatalf("削除失敗した一時ファイルを確認できない: %v %v", files, err)
+	}
+}
+
+func TestWikiOperationWaitsForOrdinaryOperation(t *testing.T) {
+	s, _, _ := attachmentService(t)
+	s.syncMu.Lock()
+	locked := make(chan bool, 1)
+	started := make(chan struct{})
+	go func() {
+		close(started)
+		ok := s.lockWikiOperation()
+		if ok {
+			s.syncMu.Unlock()
+		}
+		locked <- ok
+	}()
+	<-started
+	select {
+	case ok := <-locked:
+		s.syncMu.Unlock()
+		t.Fatalf("通常処理を待たず戻った: %v", ok)
+	case <-time.After(30 * time.Millisecond):
+	}
+	s.syncMu.Unlock()
+	select {
+	case ok := <-locked:
+		if !ok {
+			t.Fatal("先行処理の完了後も取得できない")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("通常処理の完了後に再開しない")
+	}
+}

@@ -125,3 +125,25 @@ it.each(['download','cancel'] as const)('%s が先に完了しても両方の応
  retry.click();await flush()
  expect(b.beginWikiAttachmentDownload).toHaveBeenCalledTimes(2)
 })
+
+it('移動でキャンセルした行を戻った後も表示し、別の接続設定には引き継がない',async()=>{
+ const b=createMockBackend();holder.backend=b
+ let finish!:(value:WikiAttachmentDownloadResult)=>void
+ b.beginWikiAttachmentDownload=vi.fn(async()=>({runId:'run',code:''}))
+ b.downloadWikiAttachment=vi.fn(()=>new Promise<WikiAttachmentDownloadResult>(resolve=>{finish=resolve}))
+ b.cancelWikiAttachmentDownload=vi.fn(async()=>{finish({runId:'run',state:'cancelled',code:'cancelled',bytes:0,sizeChanged:false})})
+ const component=ref<InstanceType<typeof WikiAttachments>|null>(null)
+ const props={profile:'cancelled-profile',projectId:1,wikiId:2,attachments:[{id:3,wikiId:2,name:'架空.txt',size:4}],disabled:false}
+ mounted=mountWithI18n({render:()=>h(WikiAttachments,{...props,ref:component})},{locale:'en'})
+ ;(mounted.host.querySelector('button') as HTMLButtonElement).click();await flush()
+ await component.value!.cancel();await flush()
+ expect(mounted.host.querySelector('.attachment-cancelled')?.textContent).toBe('Cancelled')
+ mounted.unmount()
+ mounted=mountWithI18n({render:()=>h(WikiAttachments,props)},{locale:'en'})
+ expect(mounted.host.querySelector('.attachment-cancelled')?.textContent).toBe('Cancelled')
+ mounted.i18n.global.locale.value='ja';await flush()
+ expect(mounted.host.querySelector('.attachment-cancelled')?.textContent).toBe('キャンセルしました')
+ mounted.unmount()
+ mounted=mountWithI18n({render:()=>h(WikiAttachments,{...props,profile:'other-profile'})},{locale:'en'})
+ expect(mounted.host.querySelector('.attachment-cancelled')).toBeNull()
+})

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"log/slog"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -37,6 +38,11 @@ func TestWikiBeforeCloseDiscardReentry(t *testing.T) {
 		t.Fatal("終了前に後片付けを待つ必要がある")
 	}
 	<-cleanupStarted
+	if a.wikiDirty {
+		t.Error("破棄を選んだ変更が未保存のまま")
+	}
+	// 後片付け中に状態通知が再度届いても、確認を増やさず終了を待つ。
+	a.SetWikiWindowState(true, true, "en")
 	// 後片付け中の再入場でも確認を繰り返さない。
 	blockedDuringCleanup := a.beforeClose(ctx)
 	close(cleanupRelease)
@@ -54,8 +60,41 @@ func TestWikiBeforeCloseDiscardReentry(t *testing.T) {
 	if calls != 1 {
 		t.Errorf("確認回数=%d, want 1", calls)
 	}
-	if a.wikiDirty {
-		t.Error("破棄を選んだ変更が未保存のまま")
+}
+
+func TestWikiBeforeCloseWithoutDraftWaitsForAttachment(t *testing.T) {
+	a := NewApp()
+	a.ctx = context.Background()
+	started, release, quit := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	releaseCleanup := sync.OnceFunc(func() { close(release) })
+	defer releaseCleanup()
+	a.wikiWindowHooks = &wikiWindowHooks{
+		messageDialog: func(context.Context, wailsruntime.MessageDialogOptions) (string, error) {
+			t.Error("未編集で確認を表示した")
+			return "", nil
+		},
+		attachmentActive:  func() bool { return true },
+		cancelAttachments: func() { close(started); <-release },
+		quit:              func(context.Context) { close(quit) },
+	}
+	if !a.beforeClose(a.ctx) {
+		t.Fatal("未編集でもダウンロードの後片付けを待つ必要がある")
+	}
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("キャンセルが開始されない")
+	}
+	select {
+	case <-quit:
+		t.Fatal("後片付けより先に終了した")
+	default:
+	}
+	releaseCleanup()
+	select {
+	case <-quit:
+	case <-time.After(time.Second):
+		t.Fatal("後片付け後に終了しない")
 	}
 }
 

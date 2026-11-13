@@ -86,3 +86,69 @@ func TestAtomicStreamPreservesTarget(t *testing.T) {
 		}
 	}
 }
+
+type atomicFailureFile struct {
+	File
+	stage string
+	err   error
+}
+
+func (f atomicFailureFile) Sync() error {
+	if f.stage == "sync" {
+		return f.err
+	}
+	return f.File.Sync()
+}
+func (f atomicFailureFile) Close() error {
+	err := f.File.Close()
+	if f.stage == "close" {
+		return f.err
+	}
+	return err
+}
+
+func TestAtomicRawWriterPreservesDiskReasons(t *testing.T) {
+	for _, stage := range []string{"create", "sync", "close", "rename", "remove"} {
+		for _, raw := range []bool{false, true} {
+			t.Run(stage+map[bool]string{false: "-attachment", true: "-excel"}[raw], func(t *testing.T) {
+				failure := &os.PathError{Op: stage, Path: "架空.xlsx", Err: os.ErrPermission}
+				ops := DefaultAtomicOps()
+				ops.RawWriter = raw
+				create := ops.CreateTemp
+				ops.CreateTemp = func(dir, pattern string) (File, error) {
+					if stage == "create" {
+						return nil, failure
+					}
+					f, err := create(dir, pattern)
+					return atomicFailureFile{f, stage, failure}, err
+				}
+				if stage == "rename" {
+					ops.Rename = func(string, string) error { return failure }
+				}
+				if stage == "remove" {
+					ops.Remove = func(string) error { return failure }
+				}
+				err := WriteAtomicWithOps(context.Background(), filepath.Join(t.TempDir(), "架空.xlsx"), ".tmp-*", func(w io.Writer) error {
+					if stage == "remove" {
+						return errors.New("書き出し失敗")
+					}
+					_, err := io.WriteString(w, "data")
+					return err
+				}, nil, ops)
+				if raw {
+					if !errors.Is(err, failure) {
+						t.Fatalf("OS の理由が失われた: %v", err)
+					}
+				} else {
+					code := "disk"
+					if stage == "remove" {
+						code = "cleanup_failed"
+					}
+					if err == nil || err.Error() != code {
+						t.Fatalf("固定 code=%s, got %v", code, err)
+					}
+				}
+			})
+		}
+	}
+}
