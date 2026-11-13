@@ -7,6 +7,8 @@ import {
   type AppVersion,
   type Backend,
   type WikiQuery,
+ type WikiAttachmentDownloadTicket,
+ type WikiAttachmentDownloadResult,
  type WikiImageInput,
  type WikiImageResult,
   type WikiList,
@@ -51,6 +53,9 @@ function normalizeStorageMode(value: unknown): StorageMode {
 
 /** Wails が window に注入する Go 側 App メソッド群(実行時参照) */
 export interface WailsApp {
+  BeginWikiAttachmentDownload(projectId:number,wikiId:number,attachmentId:number):Promise<WikiAttachmentDownloadTicket>
+  DownloadWikiAttachment(projectId:number,wikiId:number,attachmentId:number):Promise<WikiAttachmentDownloadResult>
+  CancelWikiAttachmentDownload(projectId:number,wikiId:number,attachmentId:number):Promise<void>
   GetWikiAttachmentImage(profile:string,input:WikiImageInput):Promise<WikiImageResult>
   CancelWikiImageLoads(profile:string,requestId:string):Promise<void>
   BeginWikiEdit(profile: string, projectId: number, id: number): Promise<WikiEdit>
@@ -231,6 +236,9 @@ export function createWailsBackend(app: WailsApp): Backend {
   // Go の nil スライス / nil マップは JSON null として届くため、配列・オブジェクトは
   // ここで必ず正規化する(初回起動時の ListProfiles null で画面が真っ白になった実績あり)
   return {
+    beginWikiAttachmentDownload:(p,w,a)=>app.BeginWikiAttachmentDownload(p,w,a),
+    downloadWikiAttachment:(p,w,a)=>app.DownloadWikiAttachment(p,w,a),
+    cancelWikiAttachmentDownload:(p,w,a)=>app.CancelWikiAttachmentDownload(p,w,a),
     getWikiAttachmentImage: (profile,input) => app.GetWikiAttachmentImage(profile,input),
     cancelWikiImageLoads: (profile,requestId) => app.CancelWikiImageLoads(profile,requestId),
     beginWikiEdit: (profile, projectId, id) => app.BeginWikiEdit(profile, projectId, id),

@@ -804,6 +804,40 @@ export namespace service {
 		    return a;
 		}
 	}
+	export class WikiAttachmentDownloadResult {
+	    runId: string;
+	    state: string;
+	    code: string;
+	    bytes: number;
+	    sizeChanged: boolean;
+
+	    static createFrom(source: any = {}) {
+	        return new WikiAttachmentDownloadResult(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.runId = source["runId"];
+	        this.state = source["state"];
+	        this.code = source["code"];
+	        this.bytes = source["bytes"];
+	        this.sizeChanged = source["sizeChanged"];
+	    }
+	}
+	export class WikiAttachmentDownloadTicket {
+	    runId: string;
+	    code: string;
+
+	    static createFrom(source: any = {}) {
+	        return new WikiAttachmentDownloadTicket(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.runId = source["runId"];
+	        this.code = source["code"];
+	    }
+	}
 	export class WikiCreateInput {
 	    projectId: number;
 	    name: string;
@@ -1279,3 +1313,4 @@ export namespace sync {
 	}
 
 }
+

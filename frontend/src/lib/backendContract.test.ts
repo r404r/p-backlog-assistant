@@ -77,6 +77,9 @@ const PUBLIC_CONTRACT: string[] = [
   'SyncResult',
   'SyncStateRow',
   'WikiAttachment',
+  'WikiAttachmentDownloadTicket',
+  'WikiAttachmentDownloadResult',
+  'WikiAttachmentDownloadProgress',
   'WikiCreateInput',
   'WikiEdit',
   'WikiExportEstimate',
@@ -100,6 +103,7 @@ const PUBLIC_CONTRACT: string[] = [
   'newSyncRunId',
   'onBulkProgress',
   'onSyncProgress',
+  'onWikiAttachmentProgress',
   'openExternalURL',
   'rowStatusLabel',
 ]
@@ -120,6 +124,7 @@ const RUNTIME_EXPORTS: string[] = [
   'newSyncRunId',
   'onBulkProgress',
   'onSyncProgress',
+  'onWikiAttachmentProgress',
   'openExternalURL',
   'rowStatusLabel',
 ]

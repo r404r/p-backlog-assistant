@@ -1529,9 +1529,7 @@ async function exportExcel() {
   min-width: auto;
 }
 
-input[type='text'],
-input[type='date'],
-select {
+input[type='date'] {
   padding: 0.4rem 0.5rem;
   border: var(--border-width) solid var(--border);
   border-radius: var(--radius-ui);

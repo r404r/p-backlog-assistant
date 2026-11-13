@@ -600,16 +600,7 @@ section {
   box-sizing: border-box;
 }
 
-input[type='text'],
-input[type='password'],
-select {
-  padding: 0.4rem 0.5rem;
-  border: var(--border-width) solid var(--border);
-  border-radius: var(--radius-ui);
-  font-size: 0.9rem;
-  background: var(--bg);
-  color: var(--text);
-}
+
 
 .hint {
   font-size: 0.8rem;

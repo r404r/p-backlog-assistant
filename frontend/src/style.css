@@ -61,6 +61,12 @@
   --focus-offset: 3px;
   --button-lift: -2px;
   --motion-duration: 120ms;
+  --control-height: 2.25rem;
+  --control-font-size: .9rem;
+  --control-line-height: 1.4;
+  --control-padding-block: .4rem;
+  --control-padding-inline: .5rem;
+  --control-button-padding-inline: .9rem;
 }
 
 :root[data-theme="dark"] {
@@ -124,6 +130,12 @@
   --focus-offset: 3px;
   --button-lift: -2px;
   --motion-duration: 120ms;
+  --control-height: 2.25rem;
+  --control-font-size: .9rem;
+  --control-line-height: 1.4;
+  --control-padding-block: .4rem;
+  --control-padding-inline: .5rem;
+  --control-button-padding-inline: .9rem;
 }
 
 html,
@@ -314,4 +326,23 @@ body {
 
 .content :is(input[type='checkbox'], input[type='radio']) {
   accent-color: var(--accent-fg);
+}
+
+/* 通常操作だけを同じ寸法へ揃え、図記号・行内リンク・ナビゲーションは維持する。 */
+.content :where(input:not([type]), input[type='text'], input[type='search'], input[type='password'], input[type='number'], input[type='email'], input[type='url'], input[type='tel'], select:not([multiple]):not([size])) {
+  box-sizing: border-box;
+  block-size: var(--control-height);
+  max-inline-size: 100%;
+  padding: var(--control-padding-block) var(--control-padding-inline);
+  font-size: var(--control-font-size);
+  line-height: var(--control-line-height);
+}
+.content :where(button:not(.link):not(.issue-key):not(.copy-icon):not(.maximize-toggle):not([data-md-action]):not(.view-toggle button):not(.wiki-toc button)) {
+  box-sizing: border-box;
+  min-block-size: var(--control-height);
+  max-inline-size: 100%;
+  padding: var(--control-padding-block) var(--control-button-padding-inline);
+  font-size: var(--control-font-size);
+  line-height: var(--control-line-height);
+  white-space: normal;
 }

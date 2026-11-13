@@ -623,14 +623,7 @@ th {
   min-width: auto;
 }
 
-select {
-  padding: 0.4rem 0.5rem;
-  border: var(--border-width) solid var(--border);
-  border-radius: var(--radius-ui);
-  font-size: 0.9rem;
-  background: var(--bg);
-  color: var(--text);
-}
+
 
 select:disabled {
   background: var(--bg-muted);

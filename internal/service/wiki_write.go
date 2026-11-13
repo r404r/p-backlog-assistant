@@ -61,7 +61,9 @@ type wikiCreateAttempt struct {
 func (s *ProfileService) BeginWikiEdit(ctx context.Context, profile string, projectID, id int64) (*WikiEdit, error) {
 	s.profileMu.RLock()
 	defer s.profileMu.RUnlock()
-	s.syncMu.Lock()
+	if !s.lockWikiOperation() {
+		return nil, errors.New("別の処理が実行中です")
+	}
 	defer s.syncMu.Unlock()
 	api, st, identity, err := s.wikiWriterLocked(ctx, profile, projectID)
 	if err != nil {
@@ -127,7 +129,9 @@ func validWikiTarget(p *backlogclient.Wiki, projectID, id int64) bool {
 func (s *ProfileService) SaveWikiEdit(ctx context.Context, profile string, in WikiSaveInput) (*WikiWriteResult, error) {
 	s.profileMu.RLock()
 	defer s.profileMu.RUnlock()
-	s.syncMu.Lock()
+	if !s.lockWikiOperation() {
+		return nil, errors.New("別の処理が実行中です")
+	}
 	defer s.syncMu.Unlock()
 	edit := s.wikiEdits[in.Token]
 	if edit == nil || edit.profile != profile {
@@ -210,7 +214,9 @@ func wikiCreateKey(projectID int64, name string) string {
 func (s *ProfileService) CreateWiki(ctx context.Context, profile string, in WikiCreateInput) (*WikiWriteResult, error) {
 	s.profileMu.RLock()
 	defer s.profileMu.RUnlock()
-	s.syncMu.Lock()
+	if !s.lockWikiOperation() {
+		return nil, errors.New("別の処理が実行中です")
+	}
 	defer s.syncMu.Unlock()
 	if strings.TrimSpace(in.Name) == "" {
 		return nil, errors.New("ページ名が入力されていません")

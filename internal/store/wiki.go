@@ -36,6 +36,12 @@ type WikiFilter struct {
 	KeywordMode string `json:"keywordMode"`
 }
 
+func GetWikiAttachment(ctx context.Context, q dbtx, projectID, wikiID, attachmentID int64) (*WikiAttachment, error) {
+	var a WikiAttachment
+	err := q.QueryRowContext(ctx, `SELECT a.wiki_id,a.id,a.name,a.size FROM wiki_attachments a JOIN wikis w ON w.id=a.wiki_id JOIN projects p ON p.id=w.project_id WHERE w.project_id=? AND w.id=? AND a.id=? AND w.deleted=0`, projectID, wikiID, attachmentID).Scan(&a.WikiID, &a.ID, &a.Name, &a.Size)
+	return &a, err
+}
+
 // UpsertWikiList は本文の取得基準を更新しない。一覧失敗後の再試行を保証する。
 func UpsertWikiList(ctx context.Context, q dbtx, w *Wiki, at string) error {
 	_, err := q.ExecContext(ctx, `INSERT INTO wikis(id,project_id,name,tags_json,created,updated,raw_json,list_fetched_at,search_text) VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name,tags_json=excluded.tags_json,created=excluded.created,updated=excluded.updated,raw_json=excluded.raw_json,list_fetched_at=excluded.list_fetched_at,deleted=0,search_text=? || char(10) || COALESCE(content,'') WHERE wikis.project_id=excluded.project_id`, w.ID, w.ProjectID, w.Name, w.TagsJSON, w.Created, w.Updated, w.RawJSON, at, NormalizeSearchText(w.Name), NormalizeSearchText(w.Name))

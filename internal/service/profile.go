@@ -20,6 +20,7 @@ import (
 	"backlog-assistant/internal/backlogclient"
 	"backlog-assistant/internal/bulk"
 	"backlog-assistant/internal/config"
+	"backlog-assistant/internal/fileutil"
 	"backlog-assistant/internal/secret"
 	"backlog-assistant/internal/storagepath"
 	"backlog-assistant/internal/store"
@@ -59,13 +60,15 @@ type clientEntry struct {
 
 // ProfileService は接続プロファイル関連のユースケースを担う。
 type ProfileService struct {
-	imageMu     sync.Mutex
-	imageRuns   map[string]*wikiImageRun
-	imageSlots  chan struct{}
-	cfg         *config.Manager
-	wikiMu      sync.Mutex
-	wikiExports map[string]*wikiExportRun
-	wikiEdits   map[string]*wikiEditSession
+	attachments       attachmentState
+	attachmentFileOps *fileutil.AtomicOps
+	imageMu           sync.Mutex
+	imageRuns         map[string]*wikiImageRun
+	imageSlots        chan struct{}
+	cfg               *config.Manager
+	wikiMu            sync.Mutex
+	wikiExports       map[string]*wikiExportRun
+	wikiEdits         map[string]*wikiEditSession
 	// newClient はテスト差し替え用のファクトリ。
 	newClient func(spaceURL, apiKey string) (connector, error)
 	// removeDB はローカル DB 削除処理(テスト差し替え用)。
@@ -265,6 +268,8 @@ func (s *ProfileService) GetActiveProfile() (string, error) {
 
 // SetActiveProfile は接続先プロファイル ID を保存する(空文字 = 選択解除)。
 func (s *ProfileService) SetActiveProfile(id string) error {
+	releaseAttachment := s.transitionAttachment(false)
+	defer releaseAttachment()
 	s.cancelProfileImages("")
 	return s.cfg.SetActiveProfileID(id)
 }
@@ -325,6 +330,8 @@ func (s *ProfileService) dbReferencedByOthers(excludeID, host string, userID int
 // さらに config にはキーのフィンガープリントを保存し、キーチェーン保存後・
 // config 保存前のクラッシュで残る「新キー + 旧設定」を読み出し時に検知する(高 1)。
 func (s *ProfileService) SaveProfile(ctx context.Context, id, name, spaceURL, apiKey string) (*SaveProfileResult, error) {
+	releaseAttachment := s.transitionAttachment(false)
+	defer releaseAttachment()
 	s.cancelProfileImages(id)
 	// 実行中の同期・store 利用操作と排他する(高 2。ロック順序 profileMu → opMu)
 	s.profileMu.Lock()
@@ -462,6 +469,8 @@ func (s *ProfileService) SaveProfile(ctx context.Context, id, name, spaceURL, ap
 // config 削除が失敗した場合は、先に消したキーチェーンのキーを復元する
 // (「設定は残っているのにキーだけ消えた」状態を作らないための補償。高 2)。
 func (s *ProfileService) DeleteProfile(id string, deleteDB bool) error {
+	releaseAttachment := s.transitionAttachment(false)
+	defer releaseAttachment()
 	s.cancelProfileImages(id)
 	// 実行中の同期・store 利用操作の完了を待ってから削除する(高 2)。
 	// これにより、削除後に同期が store キャッシュ・DB を再作成することはない。

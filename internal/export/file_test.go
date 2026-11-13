@@ -136,10 +136,39 @@ func TestWriteFileAtomic_RemovesTempOnRenameFailure(t *testing.T) {
 		return err
 	}); err == nil {
 		t.Fatal("ディレクトリへの書き出しが成功してしまった")
+	} else {
+		var linkError *os.LinkError
+		if !errors.As(err, &linkError) || !strings.Contains(err.Error(), linkError.Err.Error()) {
+			t.Fatalf("保存先を置換できない理由が失われた: %v", err)
+		}
 	}
 	names := listDir(t, dir)
 	if len(names) != 1 || names[0] != "サブ" {
 		t.Errorf("ディレクトリ内 = %v, want [サブ](一時ファイルが残っている)", names)
+	}
+}
+
+func TestWriteFileAtomic_ReadOnlyDirectoryExplainsFailure(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows の書込禁止はディレクトリの mode では設定できない")
+	}
+	dir := t.TempDir()
+	if err := os.Chmod(dir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+	probe, err := os.CreateTemp(dir, "probe")
+	if err == nil {
+		_ = probe.Close()
+		_ = os.Remove(probe.Name())
+		t.Skip("この実行ユーザは書込禁止ディレクトリにも書き込める")
+	}
+	err = writeFileAtomic(filepath.Join(dir, "架空.xlsx"), func(w io.Writer) error {
+		t.Error("一時ファイル作成失敗後に呼ばれた")
+		return nil
+	})
+	if !errors.Is(err, os.ErrPermission) {
+		t.Fatalf("権限不足の理由が失われた: %v", err)
 	}
 }
 

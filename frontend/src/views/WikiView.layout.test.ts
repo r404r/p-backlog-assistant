@@ -196,7 +196,7 @@ it('Wiki 同期中の状態行に合わせて本文領域の高さを再計算�
  vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function(this: HTMLElement) {
   const rect = originalRect.call(this)
   if (!this.classList.contains('wiki-layout')) return rect
-  const top = mounted?.host.querySelector('.wiki-view > p[role="status"]') ? 239 : 200
+  const top = mounted?.host.querySelector('.wiki-operation-status p[role="status"]') ? 239 : 200
   return { ...rect, top, y: top, height: height - top }
  })
  const settleLayout = async () => {
@@ -211,7 +211,7 @@ it('Wiki 同期中の状態行に合わせて本文領域の高さを再計算�
   const sync = [...mounted!.host.querySelectorAll('button')].find(button => button.textContent?.trim() === 'Sync Wiki')!
   sync.click(); await settleLayout()
   expect(backend.syncWikis).toHaveBeenCalledOnce()
-  expect(mounted!.host.querySelector('.wiki-view > p[role="status"]')).not.toBeNull()
+  expect(mounted!.host.querySelector('.wiki-operation-status p[role="status"]')).not.toBeNull()
   expect(layout.style.height).toBe(`${before - 39}px`)
  } finally {
   finishSync?.({ mode: 'full', fetched: 1, upserted: 0, deleted: 0, durationMs: 0, disabled: false, warnings: [] })

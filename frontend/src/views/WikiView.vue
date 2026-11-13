@@ -6,6 +6,8 @@ import MarkdownBody from '../components/MarkdownBody.vue'
 import type { Heading } from '../lib/markdownDocument'
 import WikiTree from '../components/WikiTree.vue'
 import WikiEditor from '../components/WikiEditor.vue'
+import WikiAttachments from '../components/WikiAttachments.vue'
+import {registerNavigationGuard} from '../lib/navigationGuard'
 import {
   getBackend,
   newSyncRunId,
@@ -30,7 +32,10 @@ import { useModalFocus } from '../lib/modalFocus'
 import { useWikiDrawer } from '../lib/wikiDrawer'
 import { loadWikiPanelCollapsed, saveWikiPanelCollapsed } from '../lib/wikiPanel'
 
-const { t } = useI18n()
+const { t, locale } = useI18n()
+const attachments = ref<InstanceType<typeof WikiAttachments> | null>(null)
+const attachmentBusy = ref(false)
+const apiLocked = computed(() => locked.value || attachmentBusy.value)
 const pageHeading = ref<HTMLElement | null>(null)
 const markdown = ref<InstanceType<typeof MarkdownBody> | null>(null)
 const headings = ref<Heading[]>([]),
@@ -43,6 +48,7 @@ const selectedRowKey = ref(''), focusedRowKey = ref('')
 const treeComponent = ref<InstanceType<typeof WikiTree> | null>(null)
 const layout = ref<HTMLElement | null>(null), bodyPort = ref<HTMLElement | null>(null)
 const outerPort = ref<HTMLElement | null>(null), contentFrame = ref<HTMLElement | null>(null)
+const header = ref<HTMLElement | null>(null), headerWidth = ref(1000)
 const atMinimum = ref(true)
 const panelPort = ref<HTMLElement | null>(null), tocPort = ref<HTMLElement | null>(null)
 const panelScroll = ref(false), layoutHeight = ref(160), tocHeight = ref(0)
@@ -80,6 +86,7 @@ function scheduleLayout() {
   if (!layoutFrame) layoutFrame = requestAnimationFrame(() => { layoutFrame = 0; measureLayout() })
 }
 function measureLayout() {
+  if (header.value) headerWidth.value = header.value.clientWidth
   const el = layout.value
   if (!el) return
   const outer = outerPort.value
@@ -241,7 +248,7 @@ async function leaveEditor() {
   return true
 }
 async function openEditor(create: boolean) {
-  if (locked.value || disabled.value || !selectedProjectId.value || !(await leaveEditor())) return
+  if (apiLocked.value || disabled.value || !selectedProjectId.value || !(await leaveEditor())) return
   editingId.value = create ? 0 : selectedId.value
   editorGeneration.value++
   editing.value = true
@@ -259,11 +266,13 @@ async function wikiSaved(page: WikiPage) {
 function cancelEditor() {editing.value=false;writingBusy.value=false}
 async function changeProject(event: Event) {
   const select = event.target as HTMLSelectElement
+  const nextProjectId = Number(select.value)
   if (locked.value || !(await leaveEditor())) {
     select.value = String(selectedProjectId.value)
     return
   }
-  selectedProjectId.value = Number(select.value)
+  await attachments.value?.cancel()
+  selectedProjectId.value = nextProjectId
 }
 const dialogOpen = computed(() => estimate.value !== null)
 watch(dialogOpen, open => { if (open) closeDrawer(false) }, { flush: 'sync' })
@@ -378,6 +387,7 @@ async function select(path: string, id: number, rowKey = '') {
     toggleNode(JSON.stringify(path.split('/').filter(Boolean)))
     return
   }
+  if (id !== selectedId.value) await attachments.value?.cancel()
   const target = fullTree.value.pages.get(id)
   if (!target) return
   allowLarge.value = false
@@ -423,10 +433,24 @@ watch(selectedProjectId, () => {
       error.value = errorMessage(e)
     })
 })
+let unregisterDownloadGuard: (() => void) | undefined
+watch(editing, value => {
+  if (!value) {
+    unregisterDownloadGuard?.()
+    unregisterDownloadGuard = registerNavigationGuard(async () => {
+      await attachments.value?.cancel()
+      return true
+    })
+  }
+}, { immediate: true, flush: 'post' })
+watch(locale, language => {
+  if (!editing.value) void backend.setWikiWindowState(false, false, language).catch(() => {})
+}, { immediate: true })
 onMounted(async () => {
   outerPort.value = layout.value?.closest<HTMLElement>('.content') ?? null
   if (typeof ResizeObserver !== 'undefined') {
     layoutObserver = new ResizeObserver(scheduleLayout)
+    if (header.value) layoutObserver.observe(header.value)
     if (outerPort.value) layoutObserver.observe(outerPort.value)
     if (layout.value) layoutObserver.observe(layout.value)
     if (contentFrame.value) layoutObserver.observe(contentFrame.value)
@@ -456,6 +480,7 @@ onMounted(async () => {
   }
 })
 onUnmounted(() => {
+  unregisterDownloadGuard?.()
   layoutObserver?.disconnect()
   window.removeEventListener('resize', scheduleLayout)
   if (layoutFrame) cancelAnimationFrame(layoutFrame)
@@ -467,7 +492,7 @@ onUnmounted(() => {
   if (estimate.value && !exporting.value) finishRun(runId.value)
 })
 async function sync() {
-  if (locked.value || !selectedProjectId.value || !(await leaveEditor())) return
+  if (apiLocked.value || !selectedProjectId.value || !(await leaveEditor())) return
   const id = startRun()
   try {
     await runSharedProjectRefresh(profile.value, () => backend.syncProjects(profile.value))
@@ -489,7 +514,7 @@ async function sync() {
   }
 }
 async function refresh() {
-  if (locked.value || !selected.value || !(await leaveEditor())) return
+  if (apiLocked.value || !selected.value || !(await leaveEditor())) return
   const id = startRun()
   try {
     await backend.refreshWiki(profile.value, selectedProjectId.value, selected.value.id)
@@ -510,7 +535,7 @@ async function copy() {
   }
 }
 async function prepare(subtree: string) {
-  if (locked.value || !selectedProjectId.value || !(await leaveEditor())) return
+  if (apiLocked.value || !selectedProjectId.value || !(await leaveEditor())) return
   const id = startRun()
   preparing.value = true
   try {
@@ -576,19 +601,50 @@ async function exportNow() {
   <section class="wiki-view">
     <h1>{{ t('wiki.title') }}</h1>
     <p v-if="!profile && !initializing">{{ t('wiki.noProfile') }}</p>
-    <div class="toolbar">
-      <label>{{ t('wiki.project') }}
-        <select :value="selectedProjectId" :disabled="locked" @change="changeProject">
-          <option v-for="p in projects" :key="p.id" :value="p.id">
-            {{ p.projectKey }} — {{ p.name }}
-          </option>
-        </select></label>
-      <button :disabled="locked || !selectedProjectId" @click="sync">
-        {{ t('wiki.sync') }}
-      </button>
-      <span>{{
-        lastSynced ? t('wiki.freshness', { at: formatDateTime(lastSynced) }) : t('wiki.unsynced')
-      }}</span>
+    <div ref="header" class="wiki-header" :class="{ compact: headerWidth < 900, stacked: headerWidth < 520 }">
+      <div class="wiki-header-row--project">
+        <div class="wiki-project-sync">
+          <label>{{ t('wiki.project') }}
+            <select :title="projects.filter(p=>p.id===selectedProjectId).map(p=>`${p.projectKey} — ${p.name}`).join('')" :value="selectedProjectId" :disabled="locked" @change="changeProject">
+              <option v-for="p in projects" :key="p.id" :value="p.id">
+                {{ p.projectKey }} — {{ p.name }}
+              </option>
+            </select></label>
+          <button :disabled="apiLocked || !selectedProjectId" @click="sync">
+            {{ t('wiki.sync') }}
+          </button>
+          <span class="wiki-freshness">{{
+            lastSynced ? t('wiki.freshness', { at: formatDateTime(lastSynced) }) : t('wiki.unsynced')
+          }}</span>
+        </div>
+        <button
+          ref="panelToggle"
+          type="button"
+          :aria-expanded="!panelHidden"
+          aria-controls="wiki-search-panel"
+          @click="togglePanel"
+        >
+          {{ panelHidden ? t('wiki.showPanel') : t('wiki.hidePanel') }}
+        </button>
+      </div>
+      <div class="wiki-header-row--export">
+        <button :disabled="apiLocked || disabled || !selectedProjectId" @click="openEditor(true)">
+          {{ t('wiki.newPage') }}
+        </button>
+
+        <span class="wiki-export-separator" aria-hidden="true"></span>
+        <div class="wiki-export-actions">
+          <button :disabled="apiLocked || disabled || !selectedProjectId" @click="prepare('')">
+            {{ t('wiki.exportProject') }}
+          </button>
+          <button :disabled="apiLocked || disabled || !selectedPath" @click="prepare(selectedPath)">
+            {{ t('wiki.exportSubtree') }}
+          </button>
+          <label><input v-model="syncFirst" type="checkbox" :disabled="apiLocked" />{{
+            t('wiki.syncFirst')
+          }}</label>
+        </div>
+      </div>
     </div>
     <p v-if="disabled" role="status">{{ t('wiki.disabled') }}</p>
     <p v-if="error" role="alert" class="error">{{ error }}</p>
@@ -596,36 +652,13 @@ async function exportNow() {
     <ul v-if="warnings.length">
       <li v-for="w in warnings" :key="w">{{ w }}</li>
     </ul>
-    <p v-if="busy" role="status">
-      {{ preparing ? t('wiki.preparing') : exporting ? t('wiki.exporting') : t('wiki.working') }}
-      <span v-if="progress">{{ progress.fetched }} / {{ progress.total }}</span>
-    </p>
-    <button v-if="preparing || exporting" @click="cancelExport">
-      {{ t('wiki.cancel') }}
-    </button>
-    <div class="toolbar">
-      <button :disabled="locked || disabled || !selectedProjectId" @click="openEditor(true)">
-        {{ t('wiki.newPage') }}
-      </button>
-      <label><input v-model="syncFirst" type="checkbox" :disabled="locked" />{{
-        t('wiki.syncFirst')
-      }}</label>
-      <button :disabled="locked || disabled || !selectedProjectId" @click="prepare('')">
-        {{ t('wiki.exportProject') }}
-      </button>
-      <button :disabled="locked || disabled || !selectedPath" @click="prepare(selectedPath)">
-        {{ t('wiki.exportSubtree') }}
-      </button>
-    </div>
-    <div class="wiki-panel-toolbar">
-      <button
-        ref="panelToggle"
-        type="button"
-        :aria-expanded="!panelHidden"
-        aria-controls="wiki-search-panel"
-        @click="togglePanel"
-      >
-        {{ panelHidden ? t('wiki.showPanel') : t('wiki.hidePanel') }}
+    <div v-if="busy" class="wiki-operation-status">
+      <p v-if="busy" role="status">
+        {{ preparing ? t('wiki.preparing') : exporting ? t('wiki.exporting') : t('wiki.working') }}
+        <span v-if="progress">{{ progress.fetched }} / {{ progress.total }}</span>
+      </p>
+      <button v-if="preparing || exporting" @click="cancelExport">
+        {{ t('wiki.cancel') }}
       </button>
     </div>
     <div ref="layout" class="wiki-layout" :class="{ 'panel-collapsed': panelCollapsed || narrow, 'panel-scroll': panelScroll }" :style="{ height: `${layoutHeight}px` }">
@@ -649,10 +682,10 @@ async function exportNow() {
           <article v-else-if="selected" class="wiki-detail">
             <h2 ref="pageHeading" tabindex="-1">{{ selected.name }}</h2>
             <div class="toolbar">
-              <button :disabled="locked || disabled" @click="openEditor(false)">
+              <button :disabled="apiLocked || disabled" @click="openEditor(false)">
                 {{ t('wiki.edit') }}
               </button>
-              <button :disabled="locked" @click="refresh">
+              <button :disabled="apiLocked" @click="refresh">
                 {{ t('wiki.refresh') }}
               </button><button :disabled="!spaceURL" @click="copy">
                 {{ t('wiki.copy') }}
@@ -698,12 +731,16 @@ async function exportNow() {
               @navigate="navigateWiki"
             />
             <pre v-else class="wiki-preview">{{ selected.content }}</pre>
-            <h3>{{ t('wiki.attachments') }}</h3>
-            <ul>
-              <li v-for="a in selected.attachments" :key="a.id">
-                {{ a.name }} ({{ a.size }} {{ t('wiki.bytes') }})
-              </li>
-            </ul>
+            <WikiAttachments
+              :key="`${profile}:${selectedProjectId}:${selected.id}`"
+              ref="attachments"
+              :profile="profile"
+              :project-id="selectedProjectId"
+              :wiki-id="selected.id"
+              :attachments="selected.attachments"
+              :disabled="locked || disabled"
+              @busy="attachmentBusy = $event"
+            />
           </article>
           <p v-else-if="initializing" role="status">{{ t('wiki.working') }}</p>
           <p v-else>{{ t('wiki.choosePage') }}</p>
@@ -1017,4 +1054,21 @@ async function exportNow() {
 .wiki-drawer-close { align-self: flex-end; margin-bottom: .75rem; }
 @keyframes wiki-drawer-enter { from { transform: translateX(100%); } to { transform: translateX(0); } }
 @media (prefers-reduced-motion: reduce) { .wiki-panel.wiki-drawer { animation: none; } }
+
+.wiki-header {margin-bottom:1rem;min-width:0}
+.wiki-header button {overflow-wrap:anywhere}
+.wiki-header-row--project,.wiki-header-row--export,.wiki-project-sync,.wiki-export-actions {display:flex;align-items:center;flex-wrap:wrap;gap:.75rem;min-width:0}
+.wiki-header-row--export {margin-top:.75rem}
+.wiki-project-sync label {display:flex;align-items:center;gap:.5rem;min-width:0;max-width:100%}
+.wiki-project-sync select {width:16rem;max-inline-size:100%;min-width:0;text-overflow:ellipsis;overflow:hidden;white-space:nowrap}
+.wiki-freshness {font-size:.85rem;color:var(--text-muted)}
+.wiki-header-row--project > button {margin-inline-start:auto}
+.wiki-export-separator {border-inline-start:var(--border-width) solid var(--border);height:1.6rem}
+.wiki-export-actions label {display:flex;align-items:center;gap:.3rem;font-size:.9rem}
+.wiki-operation-status {display:flex;align-items:center;gap:.75rem;flex-wrap:wrap;margin-bottom:1rem}
+.wiki-operation-status p {margin:0}
+.wiki-header.compact .wiki-project-sync {flex-basis:100%}
+.wiki-header.stacked .wiki-header-row--export {flex-direction:column;align-items:stretch}
+.wiki-header.stacked .wiki-export-separator {height:0;border-inline-start:0;border-block-start:var(--border-width) solid var(--border);width:100%}
+.wiki-header.stacked .wiki-export-actions {flex-direction:column;align-items:stretch}
 </style>

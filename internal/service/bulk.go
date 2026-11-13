@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"sync/atomic"
 
 	"backlog-assistant/internal/bulk"
@@ -59,7 +60,9 @@ func (s *ProfileService) ImportBulkFile(ctx context.Context, profileID string, p
 	s.profileMu.RLock()
 	defer s.profileMu.RUnlock()
 	// ジョブ行の書き込みを同期処理と直列化する(SQLite の接続数は 1)
-	s.syncMu.Lock()
+	if !s.lockWikiOperation() {
+		return nil, errors.New("別の処理が実行中です")
+	}
 	defer s.syncMu.Unlock()
 
 	master, err := s.masterDataLocked(ctx, profileID, projectID)
@@ -114,7 +117,9 @@ func (s *ProfileService) RunBulkJob(ctx context.Context, profileID string, jobID
 	s.profileMu.RLock()
 	defer s.profileMu.RUnlock()
 	// 書き込み処理のため同期と直列化する
-	s.syncMu.Lock()
+	if !s.lockWikiOperation() {
+		return nil, errors.New("別の処理が実行中です")
+	}
 	defer s.syncMu.Unlock()
 
 	client, err := s.clientForProfile(ctx, profileID)

@@ -99,6 +99,8 @@ func (s *ProfileService) closeStore(profileID string) {
 
 // Close は開いているすべてのローカル DB 接続を閉じる(アプリ終了時)。
 func (s *ProfileService) Close() error {
+	releaseAttachment := s.transitionAttachment(true)
+	defer releaseAttachment()
 	s.wikiMu.Lock()
 	for key, run := range s.wikiExports {
 		run.cancel()
@@ -137,7 +139,9 @@ func (s *ProfileService) SyncProjects(ctx context.Context, profileID string) (*s
 	s.profileMu.RLock()
 	defer s.profileMu.RUnlock()
 	// ローカル DB への書き込みを直列化する(SQLite の接続数は 1)
-	s.syncMu.Lock()
+	if !s.lockWikiOperation() {
+		return nil, errors.New("別の処理が実行中です")
+	}
 	defer s.syncMu.Unlock()
 
 	engine, err := s.engineForProfile(ctx, profileID)
@@ -154,7 +158,9 @@ func (s *ProfileService) SyncIssues(ctx context.Context, profileID string, proje
 	// プロファイルの削除・保存と排他する(高 2。ロック順序 profileMu → syncMu)
 	s.profileMu.RLock()
 	defer s.profileMu.RUnlock()
-	s.syncMu.Lock()
+	if !s.lockWikiOperation() {
+		return nil, errors.New("別の処理が実行中です")
+	}
 	defer s.syncMu.Unlock()
 
 	m := syncpkg.Mode(mode)
@@ -184,7 +190,9 @@ func (s *ProfileService) SyncUsers(ctx context.Context, profileID string) (*sync
 	s.profileMu.RLock()
 	defer s.profileMu.RUnlock()
 	// ローカル DB への書き込みを直列化する(SQLite の接続数は 1)
-	s.syncMu.Lock()
+	if !s.lockWikiOperation() {
+		return nil, errors.New("別の処理が実行中です")
+	}
 	defer s.syncMu.Unlock()
 
 	engine, err := s.engineForProfile(ctx, profileID)
@@ -354,7 +362,9 @@ func (s *ProfileService) RefreshIssue(ctx context.Context, profileID string, pro
 	s.profileMu.RLock()
 	defer s.profileMu.RUnlock()
 	// ローカル DB への書き込みを直列化する(SQLite の接続数は 1)
-	s.syncMu.Lock()
+	if !s.lockWikiOperation() {
+		return nil, errors.New("別の処理が実行中です")
+	}
 	defer s.syncMu.Unlock()
 
 	engine, err := s.engineForProfile(ctx, profileID)

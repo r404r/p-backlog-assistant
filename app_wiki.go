@@ -2,12 +2,37 @@ package main
 
 import (
 	"context"
+	"log/slog"
+	"time"
+
 	wailsruntime "github.com/wailsapp/wails/v2/pkg/runtime"
 
 	"backlog-assistant/internal/service"
 	"backlog-assistant/internal/store"
 	syncpkg "backlog-assistant/internal/sync"
 )
+
+// OS のウィンドウを開かず、終了とダイアログの結線を検証するための差し替え口。
+type wikiWindowHooks struct {
+	messageDialog     func(context.Context, wailsruntime.MessageDialogOptions) (string, error)
+	saveDialog        func(context.Context, wailsruntime.SaveDialogOptions) (string, error)
+	quit              func(context.Context)
+	attachmentActive  func() bool
+	cancelAttachments func()
+}
+
+func (a *App) wikiHooks() wikiWindowHooks {
+	if a.wikiWindowHooks != nil {
+		return *a.wikiWindowHooks
+	}
+	return wikiWindowHooks{
+		messageDialog:     wailsruntime.MessageDialog,
+		saveDialog:        wailsruntime.SaveFileDialog,
+		quit:              wailsruntime.Quit,
+		attachmentActive:  func() bool { return a.profiles != nil && a.profiles.AttachmentDownloadActive() },
+		cancelAttachments: func() { a.profiles.CancelAllWikiAttachmentDownloads() },
+	}
+}
 
 func (a *App) BeginWikiEdit(profile string, projectID, id int64) (*service.WikiEdit, error) {
 	s, err := a.svc()
@@ -41,20 +66,105 @@ func (a *App) SetWikiWindowState(dirty, busy bool, language string) {
 }
 func (a *App) beforeClose(ctx context.Context) bool {
 	a.wikiWindowMu.Lock()
+	if a.wikiClosing {
+		preventClose := !a.wikiCloseReady
+		a.wikiWindowMu.Unlock()
+		return preventClose
+	}
 	dirty, busy, language := a.wikiDirty, a.wikiBusy, a.wikiLanguage
 	a.wikiWindowMu.Unlock()
 	if busy {
 		return true
 	}
 	if !dirty {
-		return false
+		return a.closeAfterAttachmentCleanup()
 	}
 	title, message, discard, cancel := "Wiki の未保存の変更", "Wiki の未保存の変更を破棄して終了しますか？", "破棄して終了", "キャンセル"
 	if language == "en" {
 		title, message, discard, cancel = "Unsaved Wiki changes", "Discard unsaved Wiki changes and quit?", "Discard and quit", "Cancel"
 	}
-	answer, err := wailsruntime.MessageDialog(ctx, wailsruntime.MessageDialogOptions{Type: wailsruntime.WarningDialog, Title: title, Message: message, Buttons: []string{discard, cancel}, DefaultButton: cancel, CancelButton: cancel})
-	return err != nil || answer != discard
+	answer, err := a.wikiHooks().messageDialog(ctx, wailsruntime.MessageDialogOptions{Type: wailsruntime.WarningDialog, Title: title, Message: message, Buttons: []string{discard, cancel}, DefaultButton: cancel, CancelButton: cancel})
+	if err != nil || answer != discard {
+		return true
+	}
+	a.wikiWindowMu.Lock()
+	a.wikiDirty = false
+	a.wikiWindowMu.Unlock()
+	return a.closeAfterAttachmentCleanup()
+}
+
+func (a *App) closeAfterAttachmentCleanup() bool {
+	a.wikiWindowMu.Lock()
+	defer a.wikiWindowMu.Unlock()
+	if a.wikiClosing {
+		return !a.wikiCloseReady
+	}
+	if !a.wikiHooks().attachmentActive() {
+		return false
+	}
+	a.wikiClosing = true
+	go func() {
+		a.wikiHooks().cancelAttachments()
+		a.wikiWindowMu.Lock()
+		a.wikiCloseReady = true
+		a.wikiWindowMu.Unlock()
+		a.wikiHooks().quit(a.ctx)
+	}()
+	return true
+}
+
+func (a *App) BeginWikiAttachmentDownload(projectID, wikiID, attachmentID int64) (*service.WikiAttachmentDownloadTicket, error) {
+	s, err := a.svc()
+	if err != nil {
+		return &service.WikiAttachmentDownloadTicket{Code: "local_data"}, nil
+	}
+	return s.BeginWikiAttachmentDownload(a.ctx, projectID, wikiID, attachmentID), nil
+}
+func (a *App) DownloadWikiAttachment(projectID, wikiID, attachmentID int64) (result *service.WikiAttachmentDownloadResult, err error) {
+	started := time.Now()
+	defer func() {
+		if result != nil {
+			a.log.Op("Wiki 添付の保存", wikiAttachmentLogAttrs(projectID, wikiID, attachmentID, result, time.Since(started))...)
+		}
+	}()
+	s, err := a.svc()
+	if err != nil {
+		return &service.WikiAttachmentDownloadResult{State: "failed", Code: "local_data"}, nil
+	}
+	result = s.DownloadWikiAttachment(a.ctx, projectID, wikiID, attachmentID, func(name string) (string, error) {
+		return a.saveWikiAttachment(name)
+	}, func(progress service.WikiAttachmentDownloadProgress) {
+		wailsruntime.EventsEmit(a.ctx, "wiki:attachment-download-progress", progress)
+	})
+	return result, nil
+}
+
+// ファイル名・保存先・URL・元のエラーは操作ログへ渡さない。
+func wikiAttachmentLogAttrs(projectID, wikiID, attachmentID int64, result *service.WikiAttachmentDownloadResult, elapsed time.Duration) []slog.Attr {
+	return []slog.Attr{
+		slog.Int64("project_id", projectID), slog.Int64("wiki_id", wikiID), slog.Int64("attachment_id", attachmentID),
+		slog.String("code", result.Code), slog.Int64("bytes", result.Bytes), slog.Duration("duration", elapsed),
+		slog.Bool("cancelled", result.State == "cancelled"),
+	}
+}
+
+func (a *App) saveWikiAttachment(name string) (string, error) {
+	a.wikiWindowMu.Lock()
+	language := a.wikiLanguage
+	a.wikiWindowMu.Unlock()
+	title := "添付ファイルを保存"
+	if language == "en" {
+		title = "Save attachment"
+	}
+	// 空のフィルターで任意の種類を許可する。ワイルドカードを拡張子に渡さない。
+	return a.wikiHooks().saveDialog(a.ctx, wailsruntime.SaveDialogOptions{Title: title, DefaultFilename: name})
+}
+func (a *App) CancelWikiAttachmentDownload(projectID, wikiID, attachmentID int64) error {
+	s, err := a.svc()
+	if err == nil {
+		s.CancelWikiAttachmentDownload(projectID, wikiID, attachmentID)
+	}
+	return nil
 }
 
 // Wiki バインディングはページ名・本文・出力先を動作ログに渡さない。

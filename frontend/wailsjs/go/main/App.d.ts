@@ -8,9 +8,13 @@ import {bulk} from '../models';
 import {config} from '../models';
 import {sync} from '../models';
 
+export function BeginWikiAttachmentDownload(arg1:number,arg2:number,arg3:number):Promise<service.WikiAttachmentDownloadTicket>;
+
 export function BeginWikiEdit(arg1:string,arg2:number,arg3:number):Promise<service.WikiEdit>;
 
 export function CancelBulkRun(arg1:string,arg2:number):Promise<void>;
+
+export function CancelWikiAttachmentDownload(arg1:number,arg2:number,arg3:number):Promise<void>;
 
 export function CancelWikiExport(arg1:string,arg2:string):Promise<void>;
 
@@ -19,6 +23,8 @@ export function CancelWikiImageLoads(arg1:string,arg2:string):Promise<void>;
 export function CreateWiki(arg1:string,arg2:service.WikiCreateInput):Promise<service.WikiWriteResult>;
 
 export function DeleteProfile(arg1:string,arg2:boolean):Promise<void>;
+
+export function DownloadWikiAttachment(arg1:number,arg2:number,arg3:number):Promise<service.WikiAttachmentDownloadResult>;
 
 export function ExportBulkResultExcel(arg1:string,arg2:number):Promise<main.ExportResultDTO>;
 

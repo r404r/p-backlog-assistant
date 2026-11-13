@@ -35,11 +35,13 @@ jobs:
           npm run lint
           npm run test
           npm run build
-      # main パッケージ(Wails 本体)は GUI 依存があるため、Linux では internal のみ検査する
+      # Linux では internal と GUI 依存を外した bindings モードの main を検査する
       - name: Go vet / テスト
         run: |
           go vet ./internal/...
           go test -count=1 ./internal/...
+          # bindings タグでは GUI を起動せず、終了ガードとダイアログ引数も検証できる。
+          go test -tags bindings -count=1 .
 
   test-export-windows:
     runs-on: windows-latest
@@ -50,7 +52,7 @@ jobs:
           go-version: '1.26.x'
           cache: true
       - name: Windows のエクスポートテスト
-        run: go test -count=1 ./internal/export/...
+        run: go test -count=1 ./internal/export/... ./internal/fileutil/...
 
   build:
     needs: [test, test-export-windows]

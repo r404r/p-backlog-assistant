@@ -47,7 +47,9 @@ func wikiRunKey(profile, run string) string { return profile + "\x00" + run }
 func (s *ProfileService) SyncWikis(ctx context.Context, profile string, projectID int64, runID string) (*syncpkg.WikiResult, error) {
 	s.profileMu.RLock()
 	defer s.profileMu.RUnlock()
-	s.syncMu.Lock()
+	if !s.lockWikiOperation() {
+		return nil, errors.New("別の処理が実行中です")
+	}
 	defer s.syncMu.Unlock()
 	e, err := s.engineForProfile(ctx, profile)
 	if err != nil {
@@ -131,7 +133,9 @@ func (s *ProfileService) ListWikis(ctx context.Context, profile string, f store.
 func (s *ProfileService) RefreshWiki(ctx context.Context, profile string, projectID, id int64) (*WikiPage, error) {
 	s.profileMu.RLock()
 	defer s.profileMu.RUnlock()
-	s.syncMu.Lock()
+	if !s.lockWikiOperation() {
+		return nil, errors.New("別の処理が実行中です")
+	}
 	defer s.syncMu.Unlock()
 	e, err := s.engineForProfile(ctx, profile)
 	if err != nil {
@@ -178,7 +182,9 @@ func (s *ProfileService) PrepareWikiExport(ctx context.Context, profile string, 
 	}()
 	s.profileMu.RLock()
 	defer s.profileMu.RUnlock()
-	s.syncMu.Lock()
+	if !s.lockWikiOperation() {
+		return nil, errors.New("別の処理が実行中です")
+	}
 	defer s.syncMu.Unlock()
 	warnings := []string{}
 	if syncFirst {
@@ -280,7 +286,9 @@ func (s *ProfileService) ExportWiki(profile, runID, parent, version string) (str
 	defer s.finishWikiExport(key, run)
 	s.profileMu.RLock()
 	defer s.profileMu.RUnlock()
-	s.syncMu.Lock()
+	if !s.lockWikiOperation() {
+		return "", errors.New("別の処理が実行中です")
+	}
 	defer s.syncMu.Unlock()
 	c, err := s.clientForProfile(run.ctx, profile)
 	if err != nil {

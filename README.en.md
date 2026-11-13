@@ -36,6 +36,7 @@ See the [User Guide](docs/USER_GUIDE.en.md) for installation steps, how to use e
 - **Excel export** (selectable columns, up to 1,000,000 matching rows; above that the export fails with an error instead of producing a file). Custom field columns and the parent issue key column can also be selected
 
 ### Wiki
+- Save original Wiki attachments individually through the system save dialog, with progress, cancellation and specific failure guidance; files never open automatically. Two header rows and consistent ordinary control heights
 - Wiki tree expansion/collapse, distinct folders and pages, Unicode code point ordering, keyboard navigation, and separate body/tree scrolling with whole-panel scrolling in short windows and a drawer that opens from the right in narrow windows
 - Sync each project with a dedicated Sync Wiki button, separately from issues. Only new or changed page content is fetched; projects without Wiki show Wiki disabled
 - Browse a hierarchy based on `/`, search page names and content locally (Japanese and multiple words with AND/OR), and view tags, authors, attachments, and the last Wiki sync time
@@ -189,6 +190,8 @@ wails dev
 # Distribution build
 wails build
 ```
+
+Before running `go test -tags bindings .` from the repository root, run `npm ci` and `npm run build` in `frontend/`. The test embeds `frontend/dist` and requires that build output.
 
 Distribution artifacts are built automatically by GitHub Actions (on push to main) as a Windows exe and a macOS .app (zipped) and stored as artifacts. The macOS build runs on a macOS runner.
 

@@ -58,6 +58,7 @@ const CONVERTED_FILES: string[] = [
   'src/views/WikiView.vue',
   'src/components/WikiTree.vue',
   'src/components/WikiEditor.vue',
+  'src/components/WikiAttachments.vue',
 ]
 
 /**

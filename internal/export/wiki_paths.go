@@ -1,55 +1,21 @@
 package export
 
 import (
+	"backlog-assistant/internal/fileutil"
 	"errors"
 	"fmt"
 	"path/filepath"
 	"sort"
 	"strings"
-	"unicode"
-	"unicode/utf8"
 
 	"golang.org/x/text/cases"
 	"golang.org/x/text/unicode/norm"
 )
 
-func wikiNameKey(s string) string { return cases.Fold().String(norm.NFC.String(s)) }
-func cleanWikiComponent(s string) string {
-	s = strings.Map(func(r rune) rune {
-		if unicode.IsControl(r) || strings.ContainsRune(`\:*?"<>|/`, r) {
-			return '_'
-		}
-		return r
-	}, s)
-	s = strings.TrimRight(s, ". ")
-	if s == "" || s == "." || s == ".." {
-		s = "_"
-	}
-	stem := strings.ToUpper(strings.SplitN(s, ".", 2)[0])
-	reserved := stem == "CON" || stem == "PRN" || stem == "AUX" || stem == "NUL" || len(stem) == 4 && (strings.HasPrefix(stem, "COM") || strings.HasPrefix(stem, "LPT")) && stem[3] >= '1' && stem[3] <= '9'
-	if reserved {
-		if i := strings.IndexByte(s, '.'); i >= 0 {
-			s = s[:i] + "_" + s[i:]
-		} else {
-			s += "_"
-		}
-	}
-	return s
-}
+func wikiNameKey(s string) string        { return cases.Fold().String(norm.NFC.String(s)) }
+func cleanWikiComponent(s string) string { return fileutil.CleanComponent(s) }
 func fitWikiComponent(base, suffix, ext string) string {
-	max := 255 - len(suffix) - len(ext)
-	if max < 1 {
-		max = 1
-	}
-	for len(base) > max {
-		_, size := utf8.DecodeLastRuneInString(base)
-		base = base[:len(base)-size]
-	}
-	base = strings.TrimRight(base, ". ")
-	if base == "" {
-		base = "_"
-	}
-	return base + suffix + ext
+	return fileutil.FitComponent(base, suffix, ext)
 }
 
 type wikiPathNode struct {
