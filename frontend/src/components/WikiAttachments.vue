@@ -55,12 +55,13 @@ async function download(id:number){
   try{
    const ticket=await backend.beginWikiAttachmentDownload(project,wiki,id)
    if(!alive||gen!==generation){if(ticket.runId)await backend.cancelWikiAttachmentDownload(project,wiki,id);return}
-   if(ticket.code){results.value[id]={runId:ticket.runId,state:'failed',code:ticket.code,bytes:0,sizeChanged:false};return}
+   if(ticket.code){results.value[id]={runId:ticket.runId,state:'failed',code:ticket.code,bytes:0,sizeChanged:false};announcement.value=errorText(ticket.code);return}
    runId.value=ticket.runId
    const result=await backend.downloadWikiAttachment(project,wiki,id)
    if(alive&&gen===generation){results.value[id]=result;announcement.value=result.state==='failed'?errorText(result.code):t(phaseKeys[result.state])}
   }catch{
-   if(alive&&gen===generation)results.value[id]={runId:runId.value,state:'failed',code:'unexpected',bytes:0,sizeChanged:false}
+   await backend.cancelWikiAttachmentDownload(project,wiki,id).catch(()=>{})
+   if(alive&&gen===generation){results.value[id]={runId:runId.value,state:'failed',code:'unexpected',bytes:0,sizeChanged:false};announcement.value=errorText('unexpected')}
   }finally{
    await cancelPending
    active.value=0;runId.value='';emit('busy',false)
