@@ -118,3 +118,18 @@ it('ignores keyCode 229 even when isComposing is false', async () => {
   await nextTick()
   expect(document.activeElement).toBe(row)
 })
+it('reveals through the owning whole-panel port without scrolling the tree itself', async () => {
+ const owner = document.createElement('aside')
+ const nodes = buildWikiTree([{ id: 1, name: 'Sample' }])
+ const component = ref<InstanceType<typeof WikiTree> | null>(null)
+ mounted = renderTree(() => ({ ref: component, nodes, selectedId: 1, disabled: false, scrollPort: owner }))
+ const row = mounted.host.querySelector<HTMLElement>('[role=treeitem]')!, tree = mounted.host.querySelector<HTMLElement>('.wiki-tree')!
+ vi.spyOn(owner, 'getBoundingClientRect').mockReturnValue({ top: 100, bottom: 300 } as DOMRect)
+ vi.spyOn(row, 'getBoundingClientRect').mockReturnValue({ top: 320, bottom: 350 } as DOMRect)
+ owner.scrollTop = 10; tree.scrollTop = 20
+ component.value!.reveal('p:1')
+ expect(owner.scrollTop).toBe(60); expect(tree.scrollTop).toBe(20)
+ vi.mocked(row.getBoundingClientRect).mockReturnValue({ top: 110, bottom: 140 } as DOMRect)
+ component.value!.reveal('p:1')
+ expect(owner.scrollTop).toBe(60)
+})

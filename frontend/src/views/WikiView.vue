@@ -52,6 +52,7 @@ const panelHidden = computed(() => narrow.value ? !drawerOpen.value : panelColla
 const wholePanel = computed(() => narrow.value || panelScroll.value)
 const treeScrollPort = computed(() => wholePanel.value ? panelPort.value : null)
 const { close: closeDrawer } = useWikiDrawer(drawerOpen, panelPort, drawerHost, panelToggle)
+let pendingReveal = ''
 const temporaryId = ref(0)
 const fullTree = computed(() => indexWikiTree(buildWikiTree(wikiIndex.value)))
 const hasCollapsed = computed(() => [...fullTree.value.branches].some(key => collapsedNodeKeys.value.has(key)))
@@ -90,8 +91,10 @@ function measureLayout() {
     const hadFocus = panelPort.value?.contains(document.activeElement)
     closeDrawer(false)
     narrow.value = nextNarrow
+    void nextTick(scheduleLayout)
     if (hadFocus) void nextTick(() => panelToggle.value?.focus({ preventScroll: true }))
   }
+  if (narrow.value || panelHidden.value) return
   const panel = panelPort.value
   let fixed = 0, tocNatural = 0
   if (panel && !panelHidden.value && !narrow.value) {
@@ -235,7 +238,12 @@ const locked = computed(
   () => initializing.value || busy.value || writingBusy.value || issueSyncRunning.value,
 )
 watch([headings, searchOpen, tocOpen, panelCollapsed, selectedPath, notice, error, editing, initializing, disabled], () => void nextTick(scheduleLayout))
-watch(panelHidden, hidden => { if (!hidden) void nextTick(() => treeComponent.value?.reveal(`p:${selectedId.value}`)) })
+watch(panelHidden, hidden => {
+  if (hidden || (narrow.value && !pendingReveal)) return
+  const key = pendingReveal || `p:${selectedId.value}`
+  pendingReveal = ''
+  void nextTick(() => { if (!panelHidden.value) treeComponent.value?.reveal(key) })
+})
 const tree = computed(() => buildWikiTree(displayedPages.value))
 const selected = computed(
   () =>
@@ -357,11 +365,13 @@ async function select(path: string, id: number, rowKey = '') {
     const delta = bodyPort.value.getBoundingClientRect().top - outerPort.value.getBoundingClientRect().top
     if (delta > 0) outerPort.value.scrollTop += delta
   }
+  if (narrow.value) pendingReveal = target.rowKey
   if (!panelHidden.value) treeComponent.value?.reveal(target.rowKey)
   if (narrow.value && drawerOpen.value) { closeDrawer(false); await nextTick(); pageHeading.value?.focus({ preventScroll: true }) }
   return true
 }
 watch(selectedProjectId, () => {
+  pendingReveal = ''
   closeDrawer(false)
   collapsedNodeKeys.value = new Set()
   selectedRowKey.value = focusedRowKey.value = ''
