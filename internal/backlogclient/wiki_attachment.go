@@ -84,6 +84,9 @@ func (c *Client) downloadWikiAttachmentWithProgress(ctx context.Context, wikiID,
 			written, writeErr := dst.Write(buffer[:n])
 			out.ReceivedBytes += int64(written)
 			if writeErr != nil || written != n {
+				if ctx.Err() != nil {
+					return out, context.Cause(ctx)
+				}
 				return out, &AttachmentError{"disk"}
 			}
 			if time.Since(last) >= 100*time.Millisecond {

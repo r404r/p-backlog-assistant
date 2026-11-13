@@ -262,6 +262,9 @@ func (s *ProfileService) DownloadWikiAttachment(ctx context.Context, project, wi
 	}
 	defer s.syncMu.Unlock()
 	metadata, code = s.attachmentMetadata(r.ctx, r.profile, project, wiki, attachment)
+	if r.ctx.Err() != nil {
+		return fail("cancelled")
+	}
 	if code != "" {
 		return fail(code)
 	}

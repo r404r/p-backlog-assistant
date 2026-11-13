@@ -681,20 +681,22 @@ export function createMockBackend(): Backend {
   const treeNames = ['架空手引', '架空手引/開始', '架空手引/確認事項' + 'あ'.repeat(120), '架空保管/記録', '架空深層/一/二/三/四/五/六/末端', ...['!先頭', '-先頭', '10案', '2案', 'A', 'A/子', 'B', '_先頭', 'a', 'あ', 'ア', 'カ', '仮箱/子', '漢', 'Ａ', 'ｶ'].map(name => '架空並替/' + name)]
   wikiPages.push(...treeNames.map((name, i) => ({ ...wikiPages[0], id: 100 + i, name,
     content: '# 架空の開始\n\n[[架空手引/開始]]\n\n' + Array.from({ length: 20 }, (_, n) => `## 確認 ${n + 1}\n\n合成データによる説明。\n\n`).join(''), attachments: [] })))
+  wikiPages[0]!.attachments.push(...[{id:30,name:'架空手引.pdf',size:524288},{id:31,name:'架空星図.png',size:2097152},{id:32,name:'架空一覧.csv',size:843}].map(a=>({...a,wikiId:1})))
   let attachmentSeq=0
-  let attachmentRun:{runId:string;projectId:number;wikiId:number;attachmentId:number;cancelled:boolean}|undefined
+  let attachmentRun:{runId:string;projectId:number;wikiId:number;attachmentId:number;cancelled:boolean;started:boolean}|undefined
   const copyWiki = (page: typeof wikiPages[number]) => ({ ...page, tags: [...page.tags], attachments: [...page.attachments] })
 
   return {
     async beginWikiAttachmentDownload(projectId,wikiId,attachmentId){
      if(attachmentRun)return {runId:'',code:'busy'}
      if(!wikiPages.some(p=>p.id===wikiId&&p.projectId===projectId&&p.attachments.some(a=>a.id===attachmentId)))return {runId:'',code:'not_found'}
-     attachmentRun={runId:`mock-${++attachmentSeq}`,projectId,wikiId,attachmentId,cancelled:false}
+     attachmentRun={runId:`mock-${++attachmentSeq}`,projectId,wikiId,attachmentId,cancelled:false,started:false}
      return {runId:attachmentRun.runId,code:''}
     },
     async downloadWikiAttachment(projectId,wikiId,attachmentId){
      const run=attachmentRun
      if(!run||run.projectId!==projectId||run.wikiId!==wikiId||run.attachmentId!==attachmentId)return {runId:'',state:'failed',code:'not_found',bytes:0,sizeChanged:false}
+     run.started=true
      const a=wikiPages.find(p=>p.id===wikiId)!.attachments.find(a=>a.id===attachmentId)!
      const scenario=new URLSearchParams(location.search).get('attachment')??'saved'
      try{
@@ -707,7 +709,7 @@ export function createMockBackend(): Backend {
       return {runId:run.runId,state:code==='cancelled'?'cancelled':code?'failed':'saved',code,bytes:code?0:a.size,sizeChanged:false}
      }finally{if(attachmentRun===run)attachmentRun=undefined}
     },
-    async cancelWikiAttachmentDownload(p,w,a){if(attachmentRun?.projectId===p&&attachmentRun.wikiId===w&&attachmentRun.attachmentId===a)attachmentRun.cancelled=true},
+    async cancelWikiAttachmentDownload(p,w,a){if(attachmentRun?.projectId===p&&attachmentRun.wikiId===w&&attachmentRun.attachmentId===a){attachmentRun.cancelled=true;if(!attachmentRun.started)attachmentRun=undefined}},
     async getWikiAttachmentImage(_profile,input) {
       await delay(180)
       const page=wikiPages.find(p=>p.id===input.wikiId && p.projectId===input.projectId)

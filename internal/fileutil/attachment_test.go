@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -16,6 +17,38 @@ func TestSafeAttachmentFilename(t *testing.T) {
 		if got := SafeAttachmentFilename(pair[0]); got != pair[1] || len(got) > 255 || !utf8.ValidString(got) {
 			t.Errorf("%q => %q, want %q", pair[0], got, pair[1])
 		}
+	}
+}
+
+func TestAtomicStreamReplacementAndLockedDestination(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "sample.txt")
+	if err := os.WriteFile(path, []byte("old"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteAtomic(context.Background(), path, ".wiki-attachment-*.tmp", func(w io.Writer) error { _, e := io.WriteString(w, "new"); return e }, nil); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := os.ReadFile(path)
+	if string(data) != "new" {
+		t.Fatal(string(data))
+	}
+	if runtime.GOOS != "windows" {
+		return
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	err = WriteAtomic(context.Background(), path, ".wiki-attachment-*.tmp", func(w io.Writer) error { _, e := io.WriteString(w, "replacement"); return e }, nil)
+	if err == nil {
+		t.Fatal("locked destination was replaced")
+	}
+	data, _ = os.ReadFile(path)
+	entries, _ := os.ReadDir(dir)
+	if string(data) != "new" || len(entries) != 1 {
+		t.Fatal(string(data), len(entries))
 	}
 }
 

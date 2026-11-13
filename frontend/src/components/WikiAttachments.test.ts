@@ -19,3 +19,19 @@ it('hides an empty section and displays saved results without exposing a path',a
  mounted.unmount();mounted=mountWithI18n({render:()=>h(WikiAttachments,{projectId:1,wikiId:2,attachments:[],disabled:false})})
  expect(mounted.host.querySelector('section')).toBeNull()
 })
+
+it('cancels a delayed reservation before download and waits before allowing retry',async()=>{
+ const b=createMockBackend();holder.backend=b
+ let resolve!:(value:{runId:string;code:string})=>void
+ b.beginWikiAttachmentDownload=vi.fn(()=>new Promise<{runId:string;code:string}>(r=>{resolve=r}))
+ b.downloadWikiAttachment=vi.fn()
+ b.cancelWikiAttachmentDownload=vi.fn(async()=>{})
+ mounted=mountWithI18n({render:()=>h(WikiAttachments,{projectId:1,wikiId:2,attachments:[{id:3,wikiId:2,name:'架空.txt',size:4}],disabled:false})})
+ await flush();(mounted.host.querySelector('button') as HTMLButtonElement).click();await flush()
+ ;(mounted.host.querySelector('button') as HTMLButtonElement).click();await flush()
+ resolve({runId:'late',code:''});await flush()
+ expect(b.downloadWikiAttachment).not.toHaveBeenCalled()
+ expect(b.cancelWikiAttachmentDownload).toHaveBeenCalledWith(1,2,3)
+ expect(mounted.host.textContent).not.toContain('保存しました')
+ expect(mounted.host.querySelector('button')?.disabled).toBe(false)
+})
