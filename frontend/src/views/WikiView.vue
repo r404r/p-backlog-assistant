@@ -27,6 +27,7 @@ import {
 import { issueSyncRunning, beginIssueSync, endIssueSync } from '../lib/syncState'
 import { runSharedProjectRefresh, shouldSkipProjectRefreshFor } from '../lib/projectRefresh'
 import { useModalFocus } from '../lib/modalFocus'
+import { useWikiDrawer } from '../lib/wikiDrawer'
 import { loadWikiPanelCollapsed, saveWikiPanelCollapsed } from '../lib/wikiPanel'
 
 const { t } = useI18n()
@@ -45,7 +46,12 @@ const outerPort = ref<HTMLElement | null>(null)
 const panelPort = ref<HTMLElement | null>(null)
 const panelScroll = ref(false), layoutHeight = ref(160), tocHeight = ref(0)
 const markdownScrollRoot = computed(() => bodyPort.value)
-const treeScrollPort = computed(() => panelScroll.value ? panelPort.value : null)
+const narrow = ref(false), drawerOpen = ref(false)
+const drawerHost = ref<HTMLElement | null>(null), panelToggle = ref<HTMLElement | null>(null)
+const panelHidden = computed(() => narrow.value ? !drawerOpen.value : panelCollapsed.value)
+const wholePanel = computed(() => narrow.value || panelScroll.value)
+const treeScrollPort = computed(() => wholePanel.value ? panelPort.value : null)
+const { close: closeDrawer } = useWikiDrawer(drawerOpen, panelPort, drawerHost, panelToggle)
 const temporaryId = ref(0)
 const fullTree = computed(() => indexWikiTree(buildWikiTree(wikiIndex.value)))
 const hasCollapsed = computed(() => [...fullTree.value.branches].some(key => collapsedNodeKeys.value.has(key)))
@@ -78,9 +84,17 @@ function measureLayout() {
   const top = el.getBoundingClientRect().top + (outer?.scrollTop ?? 0)
   const available = Math.max(160, bottom - top - 16)
   layoutHeight.value = available
+  // clientWidthが未計算の初回だけviewportを仮値にし、実寸確定後observerで再測定する。
+  const nextNarrow = (el.clientWidth || window.innerWidth) < 760
+  if (nextNarrow !== narrow.value) {
+    const hadFocus = panelPort.value?.contains(document.activeElement)
+    closeDrawer(false)
+    narrow.value = nextNarrow
+    if (hadFocus) void nextTick(() => panelToggle.value?.focus({ preventScroll: true }))
+  }
   const panel = panelPort.value
   let fixed = 0, tocNatural = 0
-  if (panel && !panelCollapsed.value) {
+  if (panel && !panelHidden.value && !narrow.value) {
     for (const child of panel.children) {
       if (child.classList.contains('wiki-tree')) continue
       const node = child as HTMLElement
@@ -120,9 +134,14 @@ function measureLayout() {
 const tocOpen = ref(true),
   searchOpen = ref(true)
 function openToc() {
-  panelCollapsed.value = false
   tocOpen.value = true
-  saveWikiPanelCollapsed(false)
+  if (narrow.value) drawerOpen.value = true
+  else { panelCollapsed.value = false; saveWikiPanelCollapsed(false) }
+}
+async function goToHeading(id: string) {
+  if (narrow.value) closeDrawer(false)
+  await nextTick()
+  markdown.value?.goToHeading(id)
 }
 async function navigateWiki(id: number) {
   const page = wikiIndex.value.find((p) => p.id === id && p.projectId === selectedProjectId.value)
@@ -134,6 +153,7 @@ async function navigateWiki(id: number) {
 const backend = getBackend()
 const panelCollapsed = ref(loadWikiPanelCollapsed())
 function togglePanel() {
+  if (narrow.value) { if (drawerOpen.value) closeDrawer(); else drawerOpen.value = true; return }
   panelCollapsed.value = !panelCollapsed.value
   saveWikiPanelCollapsed(panelCollapsed.value)
 }
@@ -210,11 +230,12 @@ async function changeProject(event: Event) {
   selectedProjectId.value = Number(select.value)
 }
 const dialogOpen = computed(() => estimate.value !== null)
+watch(dialogOpen, open => { if (open) closeDrawer(false) }, { flush: 'sync' })
 const locked = computed(
   () => initializing.value || busy.value || writingBusy.value || issueSyncRunning.value,
 )
 watch([headings, searchOpen, tocOpen, panelCollapsed, selectedPath, notice, error, editing, initializing, disabled], () => void nextTick(scheduleLayout))
-watch(panelCollapsed, hidden => { if (!hidden) void nextTick(() => treeComponent.value?.reveal(`p:${selectedId.value}`)) })
+watch(panelHidden, hidden => { if (!hidden) void nextTick(() => treeComponent.value?.reveal(`p:${selectedId.value}`)) })
 const tree = computed(() => buildWikiTree(displayedPages.value))
 const selected = computed(
   () =>
@@ -336,10 +357,12 @@ async function select(path: string, id: number, rowKey = '') {
     const delta = bodyPort.value.getBoundingClientRect().top - outerPort.value.getBoundingClientRect().top
     if (delta > 0) outerPort.value.scrollTop += delta
   }
-  if (!panelCollapsed.value) treeComponent.value?.reveal(target.rowKey)
+  if (!panelHidden.value) treeComponent.value?.reveal(target.rowKey)
+  if (narrow.value && drawerOpen.value) { closeDrawer(false); await nextTick(); pageHeading.value?.focus({ preventScroll: true }) }
   return true
 }
 watch(selectedProjectId, () => {
+  closeDrawer(false)
   collapsedNodeKeys.value = new Set()
   selectedRowKey.value = focusedRowKey.value = ''
   temporaryId.value = 0
@@ -553,14 +576,15 @@ async function exportNow() {
     <div class="wiki-panel-toolbar">
       <button
         type="button"
-        :aria-expanded="!panelCollapsed"
+        ref="panelToggle"
+        :aria-expanded="!panelHidden"
         aria-controls="wiki-search-panel"
         @click="togglePanel"
       >
-        {{ panelCollapsed ? t('wiki.showPanel') : t('wiki.hidePanel') }}
+        {{ panelHidden ? t('wiki.showPanel') : t('wiki.hidePanel') }}
       </button>
     </div>
-    <div ref="layout" class="wiki-layout" :class="{ 'panel-collapsed': panelCollapsed, 'panel-scroll': panelScroll }" :style="{ height: `${layoutHeight}px` }">
+    <div ref="layout" class="wiki-layout" :class="{ 'panel-collapsed': panelCollapsed || narrow, 'panel-scroll': panelScroll }" :style="{ height: `${layoutHeight}px` }">
       <div ref="bodyPort" class="wiki-content">
         <WikiEditor
           v-if="editing"
@@ -638,7 +662,10 @@ async function exportNow() {
         </article>
         <p v-else>{{ t('wiki.choosePage') }}</p>
       </div>
-      <aside id="wiki-search-panel" ref="panelPort" :class="{ 'wiki-panel-scroll': panelScroll }" :hidden="panelCollapsed" :aria-label="t('wiki.panel')">
+      <Teleport to="body"><div ref="drawerHost" class="wiki-drawer-host"><div v-if="narrow && drawerOpen" class="wiki-drawer-mask" aria-hidden="true" @click.self="closeDrawer()" /></div></Teleport>
+      <Teleport :to="drawerHost ?? 'body'" :disabled="!narrow">
+      <aside id="wiki-search-panel" ref="panelPort" class="wiki-panel" :class="{ 'wiki-panel-scroll': wholePanel, 'wiki-drawer': narrow }" :hidden="panelHidden" :role="narrow ? 'dialog' : undefined" :aria-modal="narrow && drawerOpen ? true : undefined" :tabindex="narrow ? -1 : undefined" :aria-label="t('wiki.panel')">
+        <button v-if="narrow" type="button" class="wiki-drawer-close" :title="t('wiki.closePanel')" :aria-label="t('wiki.closePanel')" @click="closeDrawer()">{{ t('wiki.closePanel') }}</button>
         <details
           :open="searchOpen"
           @toggle="searchOpen = ($event.target as HTMLDetailsElement).open"
@@ -679,14 +706,14 @@ async function exportNow() {
           @toggle="tocOpen = ($event.target as HTMLDetailsElement).open"
         >
           <summary>{{ t('wiki.render.toc') }}</summary>
-          <nav :style="{ maxHeight: panelScroll ? 'none' : `${tocHeight}px` }" class="wiki-toc" :aria-label="t('wiki.render.toc')">
+          <nav :style="{ maxHeight: wholePanel ? 'none' : `${tocHeight}px` }" class="wiki-toc" :aria-label="t('wiki.render.toc')">
             <button
               v-for="h in headings.slice(0, tocLimit)"
               :key="h.id"
               type="button"
               :class="[`toc-level-${h.level}`, { current: activeHeading === h.id }]"
               :aria-current="activeHeading === h.id ? 'location' : undefined"
-              @click="markdown?.goToHeading(h.id)"
+              @click="goToHeading(h.id)"
             >
               {{ h.text }}
             </button>
@@ -706,6 +733,7 @@ async function exportNow() {
         <p v-if="!pages.length && !initializing">{{ t('wiki.empty') }}</p>
         <p v-if="selectedPath" class="wiki-selected-path">{{ t('wiki.subtree', { path: selectedPath }) }}</p>
       </aside>
+      </Teleport>
     </div>
     <div v-if="estimate" class="wiki-modal-backdrop">
       <div
@@ -769,7 +797,7 @@ async function exportNow() {
   justify-content: flex-end;
   margin: 0.8rem 0;
 }
-.wiki-layout aside {
+.wiki-panel {
   position: relative;
   width: 100%;
   box-sizing: border-box;
@@ -875,7 +903,7 @@ async function exportNow() {
     grid-template-columns: minmax(0, 1fr) minmax(0, 16rem);
     gap: 0.75rem;
   }
-  .wiki-layout aside {
+  .wiki-panel {
     padding-left: 0.75rem;
   }
   .wiki-detail dl {
@@ -914,12 +942,18 @@ async function exportNow() {
   padding-left: 2rem;
 }
 
-.wiki-layout aside[hidden] { display: none; }
-.wiki-layout aside > :not(.wiki-tree) { flex: none; }
+.wiki-panel[hidden] { display: none; }
+.wiki-panel > :not(.wiki-tree) { flex: none; }
 .wiki-tree-heading { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; }
 .wiki-selected-path { overflow-wrap: anywhere; }
-.wiki-layout.panel-scroll aside { overflow-y: auto; overscroll-behavior: contain; overflow-anchor: none; }
-.panel-scroll :deep(.wiki-tree) { overflow-y: visible; flex: none; }
-.panel-scroll .wiki-toc { overflow: visible; }
-.panel-scroll :deep(.wiki-focus-path) { position: static; }
+.wiki-panel-scroll { overflow-y: auto; overscroll-behavior: contain; overflow-anchor: none; }
+.wiki-panel-scroll :deep(.wiki-tree) { overflow-y: visible; flex: none; }
+.wiki-panel-scroll .wiki-toc { overflow: visible; }
+.wiki-panel-scroll :deep(.wiki-focus-path) { position: static; }
+.wiki-drawer-host { position: fixed; inset: 0; z-index: 90; pointer-events: none; }
+.wiki-drawer-mask { position: absolute; inset: 0; background: var(--overlay); pointer-events: auto; touch-action: none; }
+.wiki-panel.wiki-drawer { position: fixed; top: 0; right: 0; width: min(20rem, 100vw); height: 100vh; height: 100dvh; padding: 1rem; background: var(--surface); box-shadow: var(--shadow-dialog); pointer-events: auto; animation: wiki-drawer-enter .15s ease-out; }
+.wiki-drawer-close { align-self: flex-end; margin-bottom: .75rem; }
+@keyframes wiki-drawer-enter { from { transform: translateX(100%); } to { transform: translateX(0); } }
+@media (prefers-reduced-motion: reduce) { .wiki-panel.wiki-drawer { animation: none; } }
 </style>

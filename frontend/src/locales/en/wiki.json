@@ -127,5 +127,6 @@
   "outsideSearch": "Current page outside search results",
   "allTreeScope": "Applies to hierarchies hidden by search",
   "duplicatePage": "Duplicate page ID: {id}",
-  "treeKeyboardHelp": "Use arrows to move or expand; Enter or Space selects"
+  "treeKeyboardHelp": "Use arrows to move or expand; Enter or Space selects",
+  "closePanel": "Close"
 }
