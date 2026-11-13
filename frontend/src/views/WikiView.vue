@@ -933,13 +933,6 @@ async function exportNow() {
   margin-right: 0.6rem;
 }
 @media (max-width: 900px) {
-  .wiki-layout {
-    grid-template-columns: minmax(0, 1fr) minmax(0, 16rem);
-    gap: 0.75rem;
-  }
-  .wiki-panel {
-    padding-left: 0.75rem;
-  }
   .wiki-detail dl {
     grid-template-columns: minmax(0, 1fr);
   }
