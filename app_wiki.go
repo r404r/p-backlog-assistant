@@ -63,6 +63,11 @@ func (a *App) SetWikiWindowState(dirty, busy bool, language string) {
 }
 func (a *App) beforeClose(ctx context.Context) bool {
 	a.wikiWindowMu.Lock()
+	if a.wikiClosing {
+		preventClose := !a.wikiCloseReady
+		a.wikiWindowMu.Unlock()
+		return preventClose
+	}
 	dirty, busy, language := a.wikiDirty, a.wikiBusy, a.wikiLanguage
 	a.wikiWindowMu.Unlock()
 	if busy {
@@ -79,6 +84,9 @@ func (a *App) beforeClose(ctx context.Context) bool {
 	if err != nil || answer != discard {
 		return true
 	}
+	a.wikiWindowMu.Lock()
+	a.wikiDirty = false
+	a.wikiWindowMu.Unlock()
 	return a.closeAfterAttachmentCleanup()
 }
 
@@ -130,7 +138,8 @@ func (a *App) saveWikiAttachment(name string) (string, error) {
 	if language == "en" {
 		title = "Save attachment"
 	}
-	return a.wikiHooks().saveDialog(a.ctx, wailsruntime.SaveDialogOptions{Title: title, DefaultFilename: name, Filters: []wailsruntime.FileFilter{{DisplayName: "*", Pattern: "*"}}})
+	// 空のフィルターで任意の種類を許可する。ワイルドカードを拡張子に渡さない。
+	return a.wikiHooks().saveDialog(a.ctx, wailsruntime.SaveDialogOptions{Title: title, DefaultFilename: name})
 }
 func (a *App) CancelWikiAttachmentDownload(projectID, wikiID, attachmentID int64) error {
 	s, err := a.svc()

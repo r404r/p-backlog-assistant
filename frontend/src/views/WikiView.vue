@@ -265,12 +265,13 @@ async function wikiSaved(page: WikiPage) {
 function cancelEditor() {editing.value=false;writingBusy.value=false}
 async function changeProject(event: Event) {
   const select = event.target as HTMLSelectElement
+  const nextProjectId = Number(select.value)
   if (locked.value || !(await leaveEditor())) {
     select.value = String(selectedProjectId.value)
     return
   }
   await attachments.value?.cancel()
-  selectedProjectId.value = Number(select.value)
+  selectedProjectId.value = nextProjectId
 }
 const dialogOpen = computed(() => estimate.value !== null)
 watch(dialogOpen, open => { if (open) closeDrawer(false) }, { flush: 'sync' })
@@ -433,7 +434,7 @@ watch(selectedProjectId, () => {
 })
 let unregisterDownloadGuard: (()=>void)|undefined
 watch(editing, value=>{
- if(!value){unregisterDownloadGuard?.();unregisterDownloadGuard=registerNavigationGuard(async()=>{if(locked.value)return false;await attachments.value?.cancel();return true})}
+ if(!value){unregisterDownloadGuard?.();unregisterDownloadGuard=registerNavigationGuard(async()=>{await attachments.value?.cancel();return true})}
 },{immediate:true,flush:'post'})
 watch(locale,language=>{if(!editing.value)void backend.setWikiWindowState(false,false,language).catch(()=>{})},{immediate:true})
 onMounted(async () => {
