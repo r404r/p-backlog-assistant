@@ -71,10 +71,10 @@ it('進捗・読上げ名・他行の排他・遅いイベントと結果・焦�
  mounted.unmount();mounted=undefined;expect(holder.off).toHaveBeenCalledOnce()
 })
 
-it('処理中は開始せず、取消済みの結果をエラー表示しない',async()=>{
+it.each([false,true])('処理中は開始せず、予約の取消=%s の結果をエラー表示しない',async cancelledTicket=>{
  const b=createMockBackend();holder.backend=b
  const disabled=ref(true)
- b.beginWikiAttachmentDownload=vi.fn(async()=>({runId:'run',code:''}))
+ b.beginWikiAttachmentDownload=vi.fn(async()=>({runId:'run',code:cancelledTicket?'cancelled':''}))
  b.downloadWikiAttachment=vi.fn(async()=>({runId:'run',state:'cancelled' as const,code:'cancelled',bytes:0,sizeChanged:false}))
  mounted=mountWithI18n({render:()=>h(WikiAttachments,{projectId:1,wikiId:2,attachments:[{id:3,wikiId:2,name:'sample.txt',size:4}],disabled:disabled.value})},{locale:'en'})
  expect(mounted.host.querySelector('button')?.disabled).toBe(true)
@@ -82,6 +82,7 @@ it('処理中は開始せず、取消済みの結果をエラー表示しない'
  disabled.value=false;await flush();(mounted.host.querySelector('button') as HTMLButtonElement).click();await flush()
  expect(mounted.host.querySelector('.attachment-failed,.attachment-saved')).toBeNull()
  expect(mounted.host.querySelector('[aria-live=polite]')?.textContent).toBe('Cancelled')
+ expect(b.downloadWikiAttachment).toHaveBeenCalledTimes(cancelledTicket?0:1)
 })
 
 it('cancels a delayed reservation before download and waits before allowing retry',async()=>{

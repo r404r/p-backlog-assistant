@@ -1,12 +1,17 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
 	wailsruntime "github.com/wailsapp/wails/v2/pkg/runtime"
+
+	"backlog-assistant/internal/service"
 )
 
 func TestWikiBeforeCloseDiscardReentry(t *testing.T) {
@@ -51,6 +56,22 @@ func TestWikiBeforeCloseDiscardReentry(t *testing.T) {
 	}
 	if a.wikiDirty {
 		t.Error("破棄を選んだ変更が未保存のまま")
+	}
+}
+
+func TestWikiAttachmentLogUsesOnlySafeMetadata(t *testing.T) {
+	var output bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&output, nil))
+	result := &service.WikiAttachmentDownloadResult{RunID: "https://example.invalid/?apiKey=FAKE-SECRET /outside-private/sample", State: "failed", Code: "disk", Bytes: 4}
+	attrs := wikiAttachmentLogAttrs(1, 2, 3, result, time.Second)
+	logger.LogAttrs(context.Background(), slog.LevelInfo, "Wiki 添付の保存", attrs...)
+	for _, private := range []string{"example.invalid", "FAKE-SECRET", "outside-private"} {
+		if strings.Contains(output.String(), private) {
+			t.Fatal(output.String())
+		}
+	}
+	if len(attrs) != 7 || !strings.Contains(output.String(), `"code":"disk"`) || !strings.Contains(output.String(), `"bytes":4`) {
+		t.Fatal(output.String())
 	}
 }
 

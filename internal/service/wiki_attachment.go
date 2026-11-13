@@ -210,7 +210,7 @@ func attachmentCode(err error) string {
 
 // ダイアログ注入により、保存先選択前の通信がないことを GUI なしで検査する。
 func (s *ProfileService) DownloadWikiAttachment(ctx context.Context, project, wiki, attachment int64, dialog func(string) (string, error), progress func(WikiAttachmentDownloadProgress)) *WikiAttachmentDownloadResult {
-	out := &WikiAttachmentDownloadResult{State: "failed", Code: "cancelled"}
+	out := &WikiAttachmentDownloadResult{State: "cancelled", Code: "cancelled"}
 	s.attachments.mu.Lock()
 	r := s.attachments.run
 	if !matchesAttachment(r, project, wiki, attachment) || r.started {
@@ -230,6 +230,7 @@ func (s *ProfileService) DownloadWikiAttachment(ctx context.Context, project, wi
 	defer func() { emit(out.State, out.Bytes, -1, out.Code) }()
 	fail := func(code string) *WikiAttachmentDownloadResult {
 		out.Code = code
+		out.State = "failed"
 		if code == "cancelled" {
 			out.State = "cancelled"
 		}

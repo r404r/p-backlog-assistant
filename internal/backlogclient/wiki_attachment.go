@@ -65,6 +65,11 @@ func (c *Client) downloadWikiAttachmentWithProgress(ctx context.Context, wikiID,
 	if resp.StatusCode != 200 || (resp.Header.Get("Content-Encoding") != "" && resp.Header.Get("Content-Encoding") != "identity") {
 		return out, &AttachmentError{"network"}
 	}
+	return copyWikiAttachmentBody(ctx, cancel, resp, dst, onProgress, idle)
+}
+
+// 正常 EOF でも長さが一致しない応答を、HTTP 実装の UnexpectedEOF に依存せず検査する。
+func copyWikiAttachmentBody(ctx context.Context, cancel context.CancelCauseFunc, resp *http.Response, dst io.Writer, onProgress func(int64, int64), idle time.Duration) (out AttachmentTransfer, err error) {
 	out.ContentLength = resp.ContentLength
 	emit := func() {
 		if onProgress != nil {

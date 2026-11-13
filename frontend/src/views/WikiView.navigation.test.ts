@@ -66,7 +66,7 @@ it('課題同期中に入った Wiki から別画面へ戻れる', async () => {
 it.each(['sync', 'refresh', 'prepare', 'export'] as const)('%s 中も画面を離れられ、出力はアンマウントで取り消す', async operation => {
   await open(); button('Start').click(); await flush()
   const done = deferred<void>()
-  backend.syncWikis = vi.fn(async () => { await done.promise; return { disabled: false, warnings: [], mode: 'full' as const, upserted: 0, deleted: 0, durationMs: 0 } })
+  backend.syncWikis = vi.fn(async () => { await done.promise; return { disabled: false, warnings: [], mode: 'full' as const, fetched: 0, upserted: 0, deleted: 0, durationMs: 0 } })
   backend.refreshWiki = vi.fn(async () => { await done.promise; return page })
   backend.prepareWikiExport = vi.fn(async () => {
     if (operation === 'prepare') await done.promise

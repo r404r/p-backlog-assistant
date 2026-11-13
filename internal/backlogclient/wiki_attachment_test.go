@@ -73,3 +73,21 @@ func TestAttachmentUnknownLengthEmptyAndIdle(t *testing.T) {
 		})
 	}
 }
+
+func TestAttachmentNormalEOFMustMatchContentLength(t *testing.T) {
+	for _, length := range []int64{3, 4, 5, -1} {
+		ctx, cancel := context.WithCancelCause(context.Background())
+		var dst strings.Builder
+		response := &http.Response{ContentLength: length, Body: io.NopCloser(strings.NewReader("data"))}
+		out, err := copyWikiAttachmentBody(ctx, cancel, response, &dst, nil, time.Second)
+		cancel(nil)
+		if length == 3 || length == 5 {
+			var failure *AttachmentError
+			if !errors.As(err, &failure) || failure.Code != "truncated" {
+				t.Fatalf("length=%d, out=%+v, err=%v", length, out, err)
+			}
+		} else if err != nil || out.ReceivedBytes != 4 {
+			t.Fatalf("length=%d, out=%+v, err=%v", length, out, err)
+		}
+	}
+}

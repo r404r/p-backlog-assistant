@@ -1,6 +1,7 @@
 import { expect,it } from 'vitest'
 import {readFileSync} from 'node:fs'
-it('defines identical ordinary control dimensions in both themes',()=>{
+// ここでは宣言だけを検査し、実矩形と例外への適用はブラウザで検証する。
+it('declares shared control dimension tokens in both themes',()=>{
  const css=readFileSync('src/style.css','utf8')
  expect(css.match(/--control-height:\s*2.25rem/g)).toHaveLength(2)
  expect(css).toContain('min-block-size: var(--control-height)')

@@ -55,7 +55,7 @@ async function download(id:number){
   try{
    const ticket=await backend.beginWikiAttachmentDownload(project,wiki,id)
    if(!alive||gen!==generation){if(ticket.runId)await backend.cancelWikiAttachmentDownload(project,wiki,id);return}
-   if(ticket.code){results.value[id]={runId:ticket.runId,state:'failed',code:ticket.code,bytes:0,sizeChanged:false};announcement.value=errorText(ticket.code);return}
+   if(ticket.code){results.value[id]={runId:ticket.runId,state:ticket.code==='cancelled'?'cancelled':'failed',code:ticket.code,bytes:0,sizeChanged:false};announcement.value=ticket.code==='cancelled'?t(phaseKeys.cancelled):errorText(ticket.code);return}
    runId.value=ticket.runId
    const result=await backend.downloadWikiAttachment(project,wiki,id)
    if(alive&&gen===generation){results.value[id]=result;announcement.value=result.state==='failed'?errorText(result.code):t(phaseKeys[result.state])}

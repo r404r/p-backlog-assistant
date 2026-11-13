@@ -13,6 +13,16 @@ import (
 )
 
 func TestSafeAttachmentFilename(t *testing.T) {
+	for _, pair := range [][2]string{
+		{".", "_"}, {"nul", "nul_"}, {"lpt9.csv", "lpt9_.csv"}, {"AUX.log", "AUX_.log"},
+		{"name... ", "name"}, {".環境", "_.環境"}, {"a." + strings.Repeat("x", 40), "a." + strings.Repeat("x", 40)},
+		{"全角ＡＢＣ１２３．資料.txt", "全角ＡＢＣ１２３．資料.txt"}, {"計画:案?内*.pdf", "計画_案_内_.pdf"},
+		{"a\x7f\u0085b.txt", "a__b.txt"}, {"a\xffb.txt", "a_b.txt"},
+	} {
+		if got := SafeAttachmentFilename(pair[0]); got != pair[1] || len(got) > 255 || !utf8.ValidString(got) {
+			t.Errorf("%q => %q, want %q", pair[0], got, pair[1])
+		}
+	}
 	for _, pair := range [][2]string{{"案内/図.png", "案内_図.png"}, {`案内\図.png`, "案内_図.png"}, {"../案内.txt", ".._案内.txt"}, {"..", "_"}, {"", "_"}, {"a\n\x00b.txt", "a__b.txt"}, {"CON", "CON_"}, {"COM1.txt", "COM1_.txt"}, {"PRN.tar.gz", "PRN_.tar.gz"}, {"COM¹.pdf", "COM¹_.pdf"}, {"計画.txt. ", "計画.txt"}, {".txt", "_.txt"}, {strings.Repeat("a", 300) + ".pdf", strings.Repeat("a", 251) + ".pdf"}, {strings.Repeat("あ", 100) + ".txt", strings.Repeat("あ", 83) + ".txt"}} {
 		if got := SafeAttachmentFilename(pair[0]); got != pair[1] || len(got) > 255 || !utf8.ValidString(got) {
 			t.Errorf("%q => %q, want %q", pair[0], got, pair[1])

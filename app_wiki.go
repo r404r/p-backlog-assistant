@@ -2,6 +2,9 @@ package main
 
 import (
 	"context"
+	"log/slog"
+	"time"
+
 	wailsruntime "github.com/wailsapp/wails/v2/pkg/runtime"
 
 	"backlog-assistant/internal/service"
@@ -117,17 +120,32 @@ func (a *App) BeginWikiAttachmentDownload(projectID, wikiID, attachmentID int64)
 	}
 	return s.BeginWikiAttachmentDownload(a.ctx, projectID, wikiID, attachmentID), nil
 }
-func (a *App) DownloadWikiAttachment(projectID, wikiID, attachmentID int64) (*service.WikiAttachmentDownloadResult, error) {
+func (a *App) DownloadWikiAttachment(projectID, wikiID, attachmentID int64) (result *service.WikiAttachmentDownloadResult, err error) {
+	started := time.Now()
+	defer func() {
+		if result != nil {
+			a.log.Op("Wiki 添付の保存", wikiAttachmentLogAttrs(projectID, wikiID, attachmentID, result, time.Since(started))...)
+		}
+	}()
 	s, err := a.svc()
 	if err != nil {
 		return &service.WikiAttachmentDownloadResult{State: "failed", Code: "local_data"}, nil
 	}
-	result := s.DownloadWikiAttachment(a.ctx, projectID, wikiID, attachmentID, func(name string) (string, error) {
+	result = s.DownloadWikiAttachment(a.ctx, projectID, wikiID, attachmentID, func(name string) (string, error) {
 		return a.saveWikiAttachment(name)
 	}, func(progress service.WikiAttachmentDownloadProgress) {
 		wailsruntime.EventsEmit(a.ctx, "wiki:attachment-download-progress", progress)
 	})
 	return result, nil
+}
+
+// ファイル名・保存先・URL・元のエラーは操作ログへ渡さない。
+func wikiAttachmentLogAttrs(projectID, wikiID, attachmentID int64, result *service.WikiAttachmentDownloadResult, elapsed time.Duration) []slog.Attr {
+	return []slog.Attr{
+		slog.Int64("project_id", projectID), slog.Int64("wiki_id", wikiID), slog.Int64("attachment_id", attachmentID),
+		slog.String("code", result.Code), slog.Int64("bytes", result.Bytes), slog.Duration("duration", elapsed),
+		slog.Bool("cancelled", result.State == "cancelled"),
+	}
 }
 
 func (a *App) saveWikiAttachment(name string) (string, error) {

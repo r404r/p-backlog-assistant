@@ -40,8 +40,8 @@ it('二つの操作行の順序を保ち、処理表示は両行の後にだけ�
   mounted = mountWithI18n(WikiView, { locale: 'en' }); await flush()
   const host = mounted.host, project = host.querySelector('.wiki-header-row--project')!, exports = host.querySelector('.wiki-header-row--export')!
   expect(project.querySelector('select')?.title).toBe('SAMPLE — Sample')
-  expect([...project.querySelectorAll('button')].map(n => n.textContent?.trim())).toEqual(['Sync Wiki', 'Hide search / tree'])
-  expect([...exports.querySelectorAll('button')].map(n => n.textContent?.trim())).toEqual(['New page', 'Export project', 'Export selected hierarchy'])
+  expect([...project.querySelectorAll('button')].map(n => n.textContent?.trim())).toEqual(['Sync Wiki', 'Hide search and tree'])
+  expect([...exports.querySelectorAll('button')].map(n => n.textContent?.trim())).toEqual(['New page', 'Export project', 'Export selected subtree'])
   expect(host.querySelector('.wiki-operation-status')).toBeNull()
   exports.querySelectorAll<HTMLButtonElement>('button')[1]!.click(); await flush()
   const status = host.querySelector('.wiki-operation-status')!
