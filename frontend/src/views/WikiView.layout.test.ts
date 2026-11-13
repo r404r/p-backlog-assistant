@@ -129,12 +129,17 @@ it.each([1000, 759])('caps contents in a scrolling panel at layout width %i', as
 
 it('reveals the active contents entry within contents without moving the panel', async () => {
  await open(); await selectPage()
- const nav = panel().querySelector<HTMLElement>('.wiki-toc')!, buttons = nav.querySelectorAll('button')
- vi.spyOn(nav, 'getBoundingClientRect').mockReturnValue({ top: 100, bottom: 200 } as DOMRect)
- vi.spyOn(buttons[1]!, 'getBoundingClientRect').mockReturnValue({ top: 300, bottom: 330 } as DOMRect)
- panel().scrollTop = 75; nav.scrollTop = 0
- markdownNode(mounted!.app._instance?.subTree)!.component!.emit('active', buttons[1]!.getAttribute('data-heading-id') ?? 'end')
+ panel().querySelector<HTMLDetailsElement>('.wiki-toc-section')!.open = true
  await flush()
+ const nav = panel().querySelector<HTMLElement>('.wiki-toc')!, buttons = nav.querySelectorAll('button')
+ Object.defineProperty(nav, 'getBoundingClientRect', { value: () => ({ top: 100, bottom: 200 }) })
+ Object.defineProperty(buttons[1]!, 'getBoundingClientRect', { value: () => ({ top: 300, bottom: 330 }) })
+ panel().scrollTop = 75; nav.scrollTop = 0
+ markdownNode(mounted!.app._instance?.subTree)!.component!.emit('active', '')
+ await flush()
+ markdownNode(mounted!.app._instance?.subTree)!.component!.emit('active', mounted!.host.querySelector('.wiki-content h2[id]')!.id)
+ await flush()
+ expect(buttons[1]!.getAttribute('aria-current')).toBe('location')
  expect(nav.scrollTop).toBe(130)
  expect(panel().scrollTop).toBe(75)
 })

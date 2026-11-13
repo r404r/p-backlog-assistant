@@ -43,7 +43,7 @@ const selectedRowKey = ref(''), focusedRowKey = ref('')
 const treeComponent = ref<InstanceType<typeof WikiTree> | null>(null)
 const layout = ref<HTMLElement | null>(null), bodyPort = ref<HTMLElement | null>(null)
 const outerPort = ref<HTMLElement | null>(null)
-const panelPort = ref<HTMLElement | null>(null)
+const panelPort = ref<HTMLElement | null>(null), tocPort = ref<HTMLElement | null>(null)
 const panelScroll = ref(false), layoutHeight = ref(160), tocHeight = ref(0)
 const markdownScrollRoot = computed(() => bodyPort.value)
 const narrow = ref(false), drawerOpen = ref(false)
@@ -94,7 +94,12 @@ function measureLayout() {
     void nextTick(scheduleLayout)
     if (hadFocus) void nextTick(() => panelToggle.value?.focus({ preventScroll: true }))
   }
-  if (narrow.value || panelHidden.value) return
+  if (narrow.value) {
+    // ドロワーは画面全高を使う。閉じていて実寸がない時はviewport高を用いる。
+    tocHeight.value = Math.min(192, (panelPort.value?.clientHeight || window.innerHeight) * .25)
+    return
+  }
+  if (panelHidden.value) return
   const panel = panelPort.value
   let fixed = 0, tocNatural = 0
   if (panel && !panelHidden.value && !narrow.value) {
@@ -114,9 +119,10 @@ function measureLayout() {
       fixed += height + (parseFloat(css.marginTop) || 0) + (parseFloat(css.marginBottom) || 0)
     }
   }
-  tocHeight.value = Math.max(0, Math.min(192, available * .25, available - fixed - 142))
   const required = fixed + (tocNatural ? Math.min(tocNatural, 48) : 0) + 142
   const next = panelScroll.value ? available < required + 8 : available < required
+  const cap = Math.min(192, available * .25)
+  tocHeight.value = next ? cap : Math.max(0, Math.min(cap, available - fixed - 142))
   if (panelScroll.value !== next) {
     const previousPort = panelScroll.value ? panel : treeComponent.value?.port
     const active = document.activeElement as HTMLElement | null
@@ -136,6 +142,22 @@ function measureLayout() {
 }
 const tocOpen = ref(true),
   searchOpen = ref(true)
+function revealWithin(port: HTMLElement, target: HTMLElement) {
+  const bounds = port.getBoundingClientRect(), rect = target.getBoundingClientRect()
+  if (rect.top < bounds.top) port.scrollTop += rect.top - bounds.top
+  else if (rect.bottom > bounds.bottom) port.scrollTop += rect.bottom - bounds.bottom
+}
+watch(activeHeading, () => {
+  const nav = tocPort.value, current = nav?.querySelector<HTMLElement>('[aria-current="location"]')
+  // 追従で祖先のパネルや本文を動かさない。
+  if (nav && current && tocOpen.value && !panelHidden.value) revealWithin(nav, current)
+}, { flush: 'post' })
+function revealTocFocus(event: FocusEvent) {
+  const target = event.target as HTMLElement
+  if (tocPort.value) revealWithin(tocPort.value, target)
+  // キーボード操作では目次自体がパネル外にある場合も可視化する。
+  if (wholePanel.value && panelPort.value) revealWithin(panelPort.value, target)
+}
 function openToc() {
   tocOpen.value = true
   if (narrow.value) drawerOpen.value = true
@@ -716,7 +738,7 @@ async function exportNow() {
             @toggle="tocOpen = ($event.target as HTMLDetailsElement).open"
           >
             <summary>{{ t('wiki.render.toc') }}</summary>
-            <nav :style="{ maxHeight: wholePanel ? 'none' : `${tocHeight}px` }" class="wiki-toc" :aria-label="t('wiki.render.toc')">
+            <nav ref="tocPort" :style="{ maxHeight: `${tocHeight}px` }" class="wiki-toc" :aria-label="t('wiki.render.toc')" @focusin="revealTocFocus">
               <button
                 v-for="h in headings.slice(0, tocLimit)"
                 :key="h.id"
@@ -961,7 +983,6 @@ async function exportNow() {
 .wiki-selected-path { overflow-wrap: anywhere; }
 .wiki-panel-scroll { overflow-y: auto; overscroll-behavior: contain; overflow-anchor: none; }
 .wiki-panel-scroll :deep(.wiki-tree) { overflow-y: visible; flex: none; }
-.wiki-panel-scroll .wiki-toc { overflow: visible; }
 .wiki-panel-scroll :deep(.wiki-focus-path) { position: static; }
 .wiki-drawer-host { position: fixed; inset: 0; z-index: 90; pointer-events: none; }
 .wiki-drawer-mask { position: absolute; inset: 0; background: var(--overlay); pointer-events: auto; touch-action: none; }
