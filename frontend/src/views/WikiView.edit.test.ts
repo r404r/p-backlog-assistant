@@ -42,6 +42,7 @@ it('refuses editing if detail GET fails',async()=>{
   button('Edit').click();await flush()
   expect(mounted!.host.querySelector('textarea')).toBeNull()
   expect(mounted!.host.textContent).toContain('offline')
+  expect(mounted!.host.querySelector('.wiki-content-frame .wiki-detail')).not.toBeNull()
 })
 it('keeps local edits and shows the remote version on conflict; overwrite needs confirmation',async()=>{
   backend.saveWikiEdit=vi.fn(async()=>({status:'conflict' as const,page:{...page,content:'remote',updated:'T2'}}))
@@ -92,4 +93,25 @@ it('keeps an uncertain edit immutable and allows checking its result',async()=>{
   expect(mounted!.host.querySelector<HTMLTextAreaElement>('textarea')?.disabled).toBe(true)
   button('Check result').click();await flush()
   expect(backend.saveWikiEdit).toHaveBeenCalledTimes(2)
+})
+
+it('編集の読込中と取消後も同じ枠に表示する', async () => {
+  let resolve!: (value: Awaited<ReturnType<typeof backend.beginWikiEdit>>) => void
+  backend.beginWikiEdit = () => new Promise(done => { resolve = done })
+  const frame = mounted!.host.querySelector('.wiki-content-frame')!
+  const root = frame.querySelector('.wiki-content')!
+  button('Edit').click(); await flush()
+  expect(root.querySelector('.wiki-editor [role="status"]')?.textContent).toContain('Fetching Wiki')
+  resolve({ token: 'edit', page, baselineUpdated: 'T1' }); await flush()
+  expect(root.querySelector('textarea')).not.toBeNull()
+  button('Cancel editing').click(); await flush()
+  expect(mounted!.host.querySelector('.wiki-content-frame')).toBe(frame)
+  expect(root.querySelector('.wiki-detail h2')?.textContent).toBe('Guide/Start')
+})
+it('保存エラーは枠内の編集画面に残す', async () => {
+  backend.saveWikiEdit = async () => { throw new Error('offline') }
+  button('Edit').click(); await flush(); input('textarea', 'draft')
+  button('Save').click(); await flush()
+  expect(mounted!.host.querySelector('.wiki-content-frame .wiki-editor [role="alert"]')?.textContent).toContain('offline')
+  expect(mounted!.host.querySelector<HTMLTextAreaElement>('textarea')?.value).toBe('draft')
 })

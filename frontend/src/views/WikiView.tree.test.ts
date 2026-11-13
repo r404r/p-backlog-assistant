@@ -121,7 +121,7 @@ it('measures the initial layout before the first animation frame', async () => {
  const width = vi.spyOn(window, 'innerWidth', 'get').mockReturnValue(1280)
  const height = vi.spyOn(window, 'innerHeight', 'get').mockReturnValue(800)
  mounted = mountWithI18n(WikiView, { locale: 'en' }); await flush()
- expect(mounted.host.querySelector<HTMLElement>('.wiki-layout')!.style.height).toBe('784px')
+ expect(mounted.host.querySelector<HTMLElement>('.wiki-layout')!.style.height).toBe('800px')
  expect(mounted.host.querySelector<HTMLElement>('.wiki-content')).not.toBeNull()
  expect(mounted.host.querySelector<HTMLElement>('.wiki-panel')!.hidden).toBe(false)
  frame.mockRestore(); width.mockRestore(); height.mockRestore()

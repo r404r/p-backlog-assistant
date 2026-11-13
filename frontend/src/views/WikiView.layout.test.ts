@@ -40,12 +40,28 @@ beforeEach(() => {
  vi.spyOn(HTMLElement.prototype, 'getClientRects').mockImplementation(function(this: HTMLElement) { return [this.getBoundingClientRect()] as unknown as DOMRectList })
 })
 afterEach(() => { mounted?.unmount(); mounted = undefined; vi.restoreAllMocks(); localStorage.clear() })
+it('Wiki の外枠を ResizeObserver の監視対象に含める', async () => {
+ const observe = vi.fn(), disconnect = vi.fn()
+ vi.stubGlobal('ResizeObserver', class {
+  observe = observe
+  disconnect = disconnect
+ })
+ try {
+  await open()
+  const frame = mounted!.host.querySelector('.wiki-content-frame')!
+  expect(frame).not.toBeNull()
+  expect(observe).toHaveBeenCalledWith(frame)
+ } finally {
+  mounted?.unmount(); mounted = undefined
+  vi.unstubAllGlobals()
+ }
+})
 it('keeps the right panel and the same body root at height 600 before any frame', async () => {
  vi.spyOn(window, 'requestAnimationFrame').mockImplementation(() => 1)
  await open()
  const layout = mounted!.host.querySelector<HTMLElement>('.wiki-layout')!
  mounted!.host.querySelectorAll<HTMLElement>('.wiki-node-name')[1]!.click(); await flush()
- expect(panel().previousElementSibling?.classList.contains('wiki-content')).toBe(true)
+ expect(panel().previousElementSibling?.querySelector('.wiki-content')).toBe(mounted!.host.querySelector('.wiki-content'))
  // 共通MarkdownBodyのroot参照を検査し、低高時の外側rootへの退避を検知する。
  function find(node: VNode | undefined): unknown {
   if (node?.component?.type === MarkdownBody) return node.component.props.scrollContainer
@@ -54,7 +70,7 @@ it('keeps the right panel and the same body root at height 600 before any frame'
  }
  expect(find(mounted!.app._instance?.subTree)).toBe(mounted!.host.querySelector('.wiki-content'))
  expect(layout.classList.contains('panel-scroll')).toBe(true)
- expect(layout.style.height).toBe('584px')
+ expect(layout.style.height).toBe('600px')
 })
 it.each([759, 760])('uses actual layout width %i and separates drawer state from saved preference', async value => {
  width = value; localStorage.setItem('ba.wikiPanelCollapsed', '0'); await open()
@@ -123,7 +139,7 @@ it.each([1000, 759])('caps contents in a scrolling panel at layout width %i', as
  await selectPage()
  const nav = panel().querySelector<HTMLElement>('.wiki-toc')!
  expect(panel().classList.contains('wiki-panel-scroll')).toBe(true)
- expect(nav.style.maxHeight).toBe(value < 760 ? '120px' : '146px')
+ expect(nav.style.maxHeight).toBe(value < 760 ? '120px' : '150px')
  expect(nav.parentElement!.nextElementSibling?.classList.contains('wiki-tree-heading')).toBe(true)
 })
 
@@ -169,4 +185,74 @@ it.each(['drawer', 'contents'] as const)('reveals the current entry when reopeni
  await flush()
  expect(nav.scrollTop).toBe(130)
  expect(panel().scrollTop).toBe(75)
+})
+
+it('Wiki 同期中の状態行に合わせて本文領域の高さを再計算する', async () => {
+ const backend = holder.backend as ReturnType<typeof createMockBackend>
+ let finishSync!: (result: Awaited<ReturnType<typeof backend.syncWikis>>) => void
+ backend.syncWikis = vi.fn(() => new Promise<Awaited<ReturnType<typeof backend.syncWikis>>>(resolve => { finishSync = resolve }))
+ height = 800
+ const originalRect = vi.mocked(HTMLElement.prototype.getBoundingClientRect).getMockImplementation()!
+ vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function(this: HTMLElement) {
+  const rect = originalRect.call(this)
+  if (!this.classList.contains('wiki-layout')) return rect
+  const top = mounted?.host.querySelector('.wiki-view > p[role="status"]') ? 239 : 200
+  return { ...rect, top, y: top, height: height - top }
+ })
+ const settleLayout = async () => {
+  await flush()
+  await new Promise<void>(resolve => requestAnimationFrame(() => resolve()))
+  await flush()
+ }
+ try {
+  await open(); await selectPage(); await settleLayout()
+  const layout = mounted!.host.querySelector<HTMLElement>('.wiki-layout')!
+  const before = Number.parseFloat(layout.style.height)
+  const sync = [...mounted!.host.querySelectorAll('button')].find(button => button.textContent?.trim() === 'Sync Wiki')!
+  sync.click(); await settleLayout()
+  expect(backend.syncWikis).toHaveBeenCalledOnce()
+  expect(mounted!.host.querySelector('.wiki-view > p[role="status"]')).not.toBeNull()
+  expect(layout.style.height).toBe(`${before - 39}px`)
+ } finally {
+  finishSync?.({ mode: 'full', fetched: 1, upserted: 0, deleted: 0, durationMs: 0, disabled: false, warnings: [] })
+  await settleLayout()
+ }
+})
+
+it.each([
+ { name: '標準の余白', viewport: 800, outerHeight: 800, clientTop: 0, scroll: 0, padding: 24, section: 20, top: 200, expected: 556 },
+ { name: '外側スクロール後', viewport: 800, outerHeight: 800, clientTop: 0, scroll: 80, padding: 24, section: 20, top: 120, expected: 556 },
+ { name: 'client 領域の下端', viewport: 800, outerHeight: 740, clientTop: 2, scroll: 0, padding: 24, section: 20, top: 200, expected: 498 },
+ { name: 'ルート文字サイズの変化', viewport: 800, outerHeight: 800, clientTop: 0, scroll: 0, padding: 30, section: 25, top: 200, expected: 545 },
+ { name: '通知で上端が下がる', viewport: 800, outerHeight: 800, clientTop: 0, scroll: 0, padding: 24, section: 20, top: 350, expected: 406 },
+ { name: '内側 160px の下限', viewport: 240, outerHeight: 240, clientTop: 0, scroll: 0, padding: 24, section: 20, top: 200, expected: 170 },
+])('$name を実寸から計算する', async sample => {
+ height = sample.viewport
+ const outer = document.createElement('main'); outer.className = 'content'; document.body.append(outer)
+ outer.scrollTop = sample.scroll
+ Object.defineProperties(outer, { clientHeight: { value: sample.outerHeight }, clientTop: { value: sample.clientTop } })
+ const originalRect = vi.mocked(HTMLElement.prototype.getBoundingClientRect).getMockImplementation()!
+ vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function(this: HTMLElement) {
+  if (this === outer) return { top: 0, bottom: height, height, left: 0, right: width, width, x: 0, y: 0, toJSON() {} }
+  if (this.classList.contains('wiki-layout') || this.classList.contains('wiki-content')) return { top: sample.top, bottom: height, height: height - sample.top, left: 0, right: width, width, x: 0, y: sample.top, toJSON() {} }
+  return originalRect.call(this)
+ })
+ const originalStyle = window.getComputedStyle.bind(window)
+ vi.spyOn(window, 'getComputedStyle').mockImplementation((el, pseudo) => {
+  const css = originalStyle(el, pseudo)
+  const values: Record<string, string> = el === outer ? { paddingBottom: `${sample.padding}px` }
+   : el.classList.contains('wiki-view') ? { paddingBottom: `${sample.section}px` }
+   : el.classList.contains('wiki-content-frame') ? { paddingTop: '4px', paddingBottom: '4px', borderTopWidth: '1px', borderBottomWidth: '1px' } : {}
+  return new Proxy(css, { get: (target, key) => typeof key === 'string' && key in values ? values[key] : Reflect.get(target, key) })
+ })
+ // マウント時から外側コンテナを持たせ、初回同期測定も検査する。
+ const append = document.body.appendChild.bind(document.body)
+ vi.spyOn(document.body, 'appendChild').mockImplementation(<T extends Node>(node: T): T => node.nodeName === 'DIV' ? outer.appendChild(node) : append(node))
+ try {
+  await open()
+  expect(mounted!.host.querySelector<HTMLElement>('.wiki-layout')!.style.height).toBe(`${sample.expected}px`)
+  const before = outer.scrollTop
+  mounted!.host.querySelector<HTMLElement>('[data-row-key="p:1"] .wiki-node-name')!.click(); await flush()
+  expect(outer.scrollTop).toBe(sample.expected === 170 ? before + sample.top : before)
+ } finally { mounted?.unmount(); mounted = undefined; outer.remove() }
 })
