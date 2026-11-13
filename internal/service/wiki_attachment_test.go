@@ -212,6 +212,41 @@ func TestAttachmentOwnershipDialogAndOriginalBytes(t *testing.T) {
 		t.Fatal(result, string(data), c.calls)
 	}
 }
+
+func TestAttachmentMissingReservationIsCancelled(t *testing.T) {
+	s, c, _ := attachmentService(t)
+	ctx := context.Background()
+	dialogs := 0
+	dialog := func(string) (string, error) { dialogs++; return "", nil }
+	for _, scenario := range []string{"missing", "cancelled", "expired", "started"} {
+		t.Run(scenario, func(t *testing.T) {
+			if scenario != "missing" {
+				s.BeginWikiAttachmentDownload(ctx, 1, 2, 3)
+				switch scenario {
+				case "cancelled":
+					s.CancelWikiAttachmentDownload(1, 2, 3)
+				case "expired":
+					s.attachments.mu.Lock()
+					s.finishAttachmentLocked(s.attachments.run)
+					s.attachments.mu.Unlock()
+				case "started":
+					s.attachments.mu.Lock()
+					s.attachments.run.started = true
+					s.attachments.mu.Unlock()
+					t.Cleanup(func() {
+						s.attachments.mu.Lock()
+						s.finishAttachmentLocked(s.attachments.run)
+						s.attachments.mu.Unlock()
+					})
+				}
+			}
+			out := s.DownloadWikiAttachment(ctx, 1, 2, 3, dialog, nil)
+			if out.State != "cancelled" || out.Code != "cancelled" || dialogs != 0 || c.calls != 0 {
+				t.Fatalf("%+v dialogs=%d http=%d", out, dialogs, c.calls)
+			}
+		})
+	}
+}
 func TestAttachmentSecondOwnershipCheckAndMismatch(t *testing.T) {
 	s, c, st := attachmentService(t)
 	ctx := context.Background()
