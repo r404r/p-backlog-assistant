@@ -133,3 +133,31 @@ it('reveals through the owning whole-panel port without scrolling the tree itsel
  component.value!.reveal('p:1')
  expect(owner.scrollTop).toBe(60)
 })
+
+it('updates row state and translations after focus changes without rebuilding nodes', async () => {
+ const nodes = buildWikiTree([{ id: 1, name: 'a' }, { id: 2, name: 'a/b' }])
+ const current = ref(1), selection = ref('p:1'), outside = ref(0), disabled = ref(false), filtered = ref(false)
+ mounted = renderTree(() => ({ nodes, selectedId: current.value, selectedRowKey: selection.value,
+  outsideId: outside.value, disabled: disabled.value, filtered: filtered.value }))
+ const row = (id: number) => mounted!.host.querySelector<HTMLElement>(`[data-row-key="p:${id}"]`)!
+ row(1).focus(); key(row(1), 'ArrowDown'); await nextTick()
+ expect(row(2).tabIndex).toBe(0); expect(row(1).tabIndex).toBe(-1)
+ current.value = 2; selection.value = 'p:2'; outside.value = 2; disabled.value = true
+ await nextTick()
+ expect(row(1).hasAttribute('aria-current')).toBe(false)
+ expect(row(2).getAttribute('aria-current')).toBe('page')
+ expect(row(1).getAttribute('aria-selected')).toBe('false')
+ expect(row(2).getAttribute('aria-selected')).toBe('true')
+ expect(row(1).getAttribute('aria-disabled')).toBe('true')
+ expect(row(2).getAttribute('aria-disabled')).toBe('true')
+ const previousLabel = row(2).querySelector('.wiki-outside')!.textContent
+ mounted.i18n.global.locale.value = 'en'; await nextTick()
+ expect(row(2).querySelector('.wiki-outside')?.textContent).not.toBe(previousLabel)
+ expect(row(2).querySelector('.wiki-outside')?.textContent).toBe(mounted.i18n.global.t('wiki.outsideSearch'))
+ expect(row(2).querySelector('.wiki-sr-only')?.textContent).toBe(mounted.i18n.global.t('wiki.currentPage'))
+ filtered.value = true; await nextTick()
+ expect(row(1).querySelector('.wiki-node-count')?.getAttribute('aria-label')).toBe(mounted.i18n.global.t('wiki.filteredDescendantPages', { count: 1 }))
+ outside.value = 0; disabled.value = false; await nextTick()
+ expect(row(2).querySelector('.wiki-outside')).toBeNull()
+ expect(row(2).getAttribute('aria-disabled')).toBe('false')
+})

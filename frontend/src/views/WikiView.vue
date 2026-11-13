@@ -47,6 +47,7 @@ const panelPort = ref<HTMLElement | null>(null), tocPort = ref<HTMLElement | nul
 const panelScroll = ref(false), layoutHeight = ref(160), tocHeight = ref(0)
 const markdownScrollRoot = computed(() => bodyPort.value)
 const narrow = ref(false), drawerOpen = ref(false)
+const panelCollapsed = ref(loadWikiPanelCollapsed())
 const drawerHost = ref<HTMLElement | null>(null), panelToggle = ref<HTMLElement | null>(null)
 const panelHidden = computed(() => narrow.value ? !drawerOpen.value : panelCollapsed.value)
 const wholePanel = computed(() => narrow.value || panelScroll.value)
@@ -147,7 +148,7 @@ function revealWithin(port: HTMLElement, target: HTMLElement) {
   if (rect.top < bounds.top) port.scrollTop += rect.top - bounds.top
   else if (rect.bottom > bounds.bottom) port.scrollTop += rect.bottom - bounds.bottom
 }
-watch(activeHeading, () => {
+watch([activeHeading, panelHidden, tocOpen], () => {
   const nav = tocPort.value, current = nav?.querySelector<HTMLElement>('[aria-current="location"]')
   // 追従で祖先のパネルや本文を動かさない。
   if (nav && current && tocOpen.value && !panelHidden.value) revealWithin(nav, current)
@@ -176,7 +177,6 @@ async function navigateWiki(id: number) {
   pageHeading.value?.focus({ preventScroll: true })
 }
 const backend = getBackend()
-const panelCollapsed = ref(loadWikiPanelCollapsed())
 function togglePanel() {
   if (narrow.value) { if (drawerOpen.value) closeDrawer(); else drawerOpen.value = true; return }
   panelCollapsed.value = !panelCollapsed.value

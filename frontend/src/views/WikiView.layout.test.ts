@@ -143,3 +143,30 @@ it('reveals the active contents entry within contents without moving the panel',
  expect(nav.scrollTop).toBe(130)
  expect(panel().scrollTop).toBe(75)
 })
+
+it.each(['drawer', 'contents'] as const)('reveals the current entry when reopening %s without moving the panel', async mode => {
+ width = mode === 'drawer' ? 759 : 1000
+ await open()
+ if (panel().hidden) { toggle().click(); await flush() }
+ await selectPage()
+ const details = panel().querySelector<HTMLDetailsElement>('.wiki-toc-section')!
+ details.open = true; await flush()
+ const nav = panel().querySelector<HTMLElement>('.wiki-toc')!, current = nav.querySelectorAll('button')[1]!
+ Object.defineProperty(nav, 'getBoundingClientRect', { value: () => ({ top: 100, bottom: 200 }) })
+ Object.defineProperty(current, 'getBoundingClientRect', { value: () => ({ top: 300, bottom: 330 }) })
+ markdownNode(mounted!.app._instance?.subTree)!.component!.emit('active', '')
+ await flush()
+ if (mode === 'drawer') toggle().click()
+ else { details.open = false; details.dispatchEvent(new Event('toggle')) }
+ await flush()
+ panel().scrollTop = 75; nav.scrollTop = 0
+ markdownNode(mounted!.app._instance?.subTree)!.component!.emit('active', mounted!.host.querySelector('.wiki-content h2[id]')!.id)
+ await flush()
+ expect(current.getAttribute('aria-current')).toBe('location')
+ expect(nav.scrollTop).toBe(0)
+ if (mode === 'drawer') toggle().click()
+ else { details.open = true; details.dispatchEvent(new Event('toggle')) }
+ await flush()
+ expect(nav.scrollTop).toBe(130)
+ expect(panel().scrollTop).toBe(75)
+})

@@ -18,7 +18,7 @@ const emit = defineEmits<{
   toggle: [nodeKey: string]
   focusRow: [rowKey: string]
 }>()
-const { t } = useI18n()
+const { t, locale } = useI18n()
 const port = ref<HTMLElement | null>(null), focusKey = ref('')
 const rows = computed(() => flattenWikiTree(props.nodes, props.collapsed))
 const rowElements = new Map<string, HTMLElement>()
@@ -97,6 +97,7 @@ defineExpose({ reveal, port })
     <div
       v-for="row in rows" :key="row.rowKey"
       :ref="el => { if (el) rowElements.set(row.rowKey, el as HTMLElement); else rowElements.delete(row.rowKey) }"
+      v-memo="[row, focusKey === row.rowKey, selectedId === row.pageId, selectedRowKey === row.rowKey, collapsed.has(row.node.key), disabled, outsideId === row.pageId, filtered, locale]"
       class="wiki-tree-row" :class="{ current: selectedId === row.pageId && row.pageId !== 0, selected: selectedRowKey === row.rowKey, folder: !row.pageId }"
       role="treeitem" :data-row-key="row.rowKey" :tabindex="focusKey === row.rowKey ? 0 : -1"
       :aria-level="row.level" :aria-posinset="row.posinset" :aria-setsize="row.setsize"
