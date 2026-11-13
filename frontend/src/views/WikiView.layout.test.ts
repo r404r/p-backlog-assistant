@@ -10,6 +10,20 @@ let mounted: MountedApp | undefined, width = 1000, height = 600
 async function flush() { for (let i = 0; i < 30; i++) await nextTick() }
 const panel = () => document.querySelector<HTMLElement>('#wiki-search-panel')!
 const toggle = () => mounted!.host.querySelector<HTMLButtonElement>('[aria-controls="wiki-search-panel"]')!
+// 背景オーバーレイのpointer遮断と本文下へのCSS配置はhappy-domでは検証できない。
+// 主庫のdrawer-interactions.mjs（hit-test）とpanel-layout.mjs（128条件の矩形比較）が担当する。
+function markdownNode(node: VNode | undefined): VNode | undefined {
+ if (node?.component?.type === MarkdownBody) return node
+ if (node?.component) { const found = markdownNode(node.component.subTree); if (found) return found }
+ if (Array.isArray(node?.children)) for (const child of node.children) if (child && typeof child === 'object' && 'type' in child) {
+  const found = markdownNode(child as VNode); if (found) return found
+ }
+}
+async function selectPage() {
+ panel().querySelector<HTMLElement>('[data-row-key="p:1"] .wiki-node-name')!.click(); await flush()
+ if (panel().hidden) { toggle().click(); await flush() }
+ await new Promise<void>(resolve => requestAnimationFrame(() => resolve())); await flush()
+}
 async function open() { mounted = mountWithI18n(WikiView, { locale: 'en' }); await flush() }
 beforeEach(() => {
  localStorage.clear()
@@ -100,4 +114,27 @@ it('keeps both text actions together on a dedicated row after the tree title', a
  expect(actions.previousElementSibling?.tagName).toBe('H3')
  expect(actions.textContent).toContain('Expand all')
  expect(actions.textContent).toContain('Collapse all')
+})
+
+it.each([1000, 759])('caps contents in a scrolling panel at layout width %i', async value => {
+ width = value
+ vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockReturnValue(480)
+ await open(); if (panel().hidden) { toggle().click(); await flush() }
+ await selectPage()
+ const nav = panel().querySelector<HTMLElement>('.wiki-toc')!
+ expect(panel().classList.contains('wiki-panel-scroll')).toBe(true)
+ expect(nav.style.maxHeight).toBe(value < 760 ? '120px' : '146px')
+ expect(nav.parentElement!.nextElementSibling?.classList.contains('wiki-tree-heading')).toBe(true)
+})
+
+it('reveals the active contents entry within contents without moving the panel', async () => {
+ await open(); await selectPage()
+ const nav = panel().querySelector<HTMLElement>('.wiki-toc')!, buttons = nav.querySelectorAll('button')
+ vi.spyOn(nav, 'getBoundingClientRect').mockReturnValue({ top: 100, bottom: 200 } as DOMRect)
+ vi.spyOn(buttons[1]!, 'getBoundingClientRect').mockReturnValue({ top: 300, bottom: 330 } as DOMRect)
+ panel().scrollTop = 75; nav.scrollTop = 0
+ markdownNode(mounted!.app._instance?.subTree)!.component!.emit('active', buttons[1]!.getAttribute('data-heading-id') ?? 'end')
+ await flush()
+ expect(nav.scrollTop).toBe(130)
+ expect(panel().scrollTop).toBe(75)
 })
