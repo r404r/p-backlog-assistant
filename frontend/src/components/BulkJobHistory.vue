@@ -282,8 +282,9 @@ td.actions {
   gap: 0.3rem;
 }
 
-
-
+td.actions button {
+  white-space: nowrap;
+}
 .detail-cell {
   background: var(--bg-muted);
   padding: 0.5rem 0.75rem;

@@ -185,6 +185,8 @@ wails dev
 wails build
 ```
 
+ルートで `go test -tags bindings .` を実行する場合は、先に `frontend/` で `npm ci` と `npm run build` を実行してください。埋め込み対象の `frontend/dist` が必要です。
+
 配布物は GitHub Actions(main への push)で Windows exe / macOS .app(zip)を自動ビルドし、Artifacts に保存します。macOS ビルドは macOS ランナーで行います。
 
 ## 開発ルール

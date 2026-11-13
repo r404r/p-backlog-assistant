@@ -20,7 +20,7 @@ type File interface {
 	Name() string
 }
 type AtomicOps struct {
-	// 既存 Excel callback の *os.File 契約を保持する場合だけ使用する。
+	// 既存 Excel callback の *os.File と OS エラーの契約を保持する場合だけ使用する。
 	RawWriter  bool
 	CreateTemp func(string, string) (File, error)
 	Rename     func(string, string) error
@@ -38,12 +38,18 @@ func WriteAtomic(ctx context.Context, path, pattern string, write func(io.Writer
 	return WriteAtomicWithOps(ctx, path, pattern, write, publish, DefaultAtomicOps())
 }
 func WriteAtomicWithOps(ctx context.Context, path, pattern string, write func(io.Writer) error, publish func(func() error) error, ops AtomicOps) (err error) {
+	diskError := func(cause error) error {
+		if ops.RawWriter {
+			return cause
+		}
+		return &Error{"disk"}
+	}
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
 	f, e := ops.CreateTemp(filepath.Dir(path), pattern)
 	if e != nil {
-		return &Error{"disk"}
+		return diskError(e)
 	}
 	closed := false
 	committed := false
@@ -53,7 +59,11 @@ func WriteAtomicWithOps(ctx context.Context, path, pattern string, write func(io
 		}
 		if !committed {
 			if e := ops.Remove(f.Name()); e != nil && !errors.Is(e, os.ErrNotExist) {
-				err = &Error{"cleanup_failed"}
+				if ops.RawWriter {
+					err = errors.Join(err, e)
+				} else {
+					err = &Error{"cleanup_failed"}
+				}
 			}
 		}
 	}()
@@ -71,20 +81,20 @@ func WriteAtomicWithOps(ctx context.Context, path, pattern string, write func(io
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
-	if f.Sync() != nil {
-		return &Error{"disk"}
+	if e = f.Sync(); e != nil {
+		return diskError(e)
 	}
 	e = f.Close()
 	closed = true
 	if e != nil {
-		return &Error{"disk"}
+		return diskError(e)
 	}
 	rename := func() error {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		if ops.Rename(f.Name(), path) != nil {
-			return &Error{"disk"}
+		if e := ops.Rename(f.Name(), path); e != nil {
+			return diskError(e)
 		}
 		return nil
 	}

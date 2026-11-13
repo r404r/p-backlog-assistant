@@ -137,8 +137,8 @@ func TestWriteFileAtomic_RemovesTempOnRenameFailure(t *testing.T) {
 	}); err == nil {
 		t.Fatal("ディレクトリへの書き出しが成功してしまった")
 	} else {
-		var pathError *os.PathError
-		if !errors.As(err, &pathError) || !strings.Contains(err.Error(), pathError.Err.Error()) {
+		var linkError *os.LinkError
+		if !errors.As(err, &linkError) || !strings.Contains(err.Error(), linkError.Err.Error()) {
 			t.Fatalf("保存先を置換できない理由が失われた: %v", err)
 		}
 	}

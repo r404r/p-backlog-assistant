@@ -345,5 +345,4 @@ body {
   font-size: var(--control-font-size);
   line-height: var(--control-line-height);
   white-space: normal;
-  overflow-wrap: anywhere;
 }

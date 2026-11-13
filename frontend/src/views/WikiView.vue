@@ -33,8 +33,9 @@ import { useWikiDrawer } from '../lib/wikiDrawer'
 import { loadWikiPanelCollapsed, saveWikiPanelCollapsed } from '../lib/wikiPanel'
 
 const { t, locale } = useI18n()
-const attachments=ref<InstanceType<typeof WikiAttachments>|null>(null),attachmentBusy=ref(false)
-const apiLocked=computed(()=>locked.value||attachmentBusy.value)
+const attachments = ref<InstanceType<typeof WikiAttachments> | null>(null)
+const attachmentBusy = ref(false)
+const apiLocked = computed(() => locked.value || attachmentBusy.value)
 const pageHeading = ref<HTMLElement | null>(null)
 const markdown = ref<InstanceType<typeof MarkdownBody> | null>(null)
 const headings = ref<Heading[]>([]),
@@ -47,7 +48,7 @@ const selectedRowKey = ref(''), focusedRowKey = ref('')
 const treeComponent = ref<InstanceType<typeof WikiTree> | null>(null)
 const layout = ref<HTMLElement | null>(null), bodyPort = ref<HTMLElement | null>(null)
 const outerPort = ref<HTMLElement | null>(null), contentFrame = ref<HTMLElement | null>(null)
-const header=ref<HTMLElement|null>(null),headerWidth=ref(1000)
+const header = ref<HTMLElement | null>(null), headerWidth = ref(1000)
 const atMinimum = ref(true)
 const panelPort = ref<HTMLElement | null>(null), tocPort = ref<HTMLElement | null>(null)
 const panelScroll = ref(false), layoutHeight = ref(160), tocHeight = ref(0)
@@ -85,7 +86,7 @@ function scheduleLayout() {
   if (!layoutFrame) layoutFrame = requestAnimationFrame(() => { layoutFrame = 0; measureLayout() })
 }
 function measureLayout() {
-  if(header.value)headerWidth.value=header.value.clientWidth
+  if (header.value) headerWidth.value = header.value.clientWidth
   const el = layout.value
   if (!el) return
   const outer = outerPort.value
@@ -386,7 +387,7 @@ async function select(path: string, id: number, rowKey = '') {
     toggleNode(JSON.stringify(path.split('/').filter(Boolean)))
     return
   }
-  if(id!==selectedId.value)await attachments.value?.cancel()
+  if (id !== selectedId.value) await attachments.value?.cancel()
   const target = fullTree.value.pages.get(id)
   if (!target) return
   allowLarge.value = false
@@ -432,16 +433,24 @@ watch(selectedProjectId, () => {
       error.value = errorMessage(e)
     })
 })
-let unregisterDownloadGuard: (()=>void)|undefined
-watch(editing, value=>{
- if(!value){unregisterDownloadGuard?.();unregisterDownloadGuard=registerNavigationGuard(async()=>{await attachments.value?.cancel();return true})}
-},{immediate:true,flush:'post'})
-watch(locale,language=>{if(!editing.value)void backend.setWikiWindowState(false,false,language).catch(()=>{})},{immediate:true})
+let unregisterDownloadGuard: (() => void) | undefined
+watch(editing, value => {
+  if (!value) {
+    unregisterDownloadGuard?.()
+    unregisterDownloadGuard = registerNavigationGuard(async () => {
+      await attachments.value?.cancel()
+      return true
+    })
+  }
+}, { immediate: true, flush: 'post' })
+watch(locale, language => {
+  if (!editing.value) void backend.setWikiWindowState(false, false, language).catch(() => {})
+}, { immediate: true })
 onMounted(async () => {
   outerPort.value = layout.value?.closest<HTMLElement>('.content') ?? null
   if (typeof ResizeObserver !== 'undefined') {
     layoutObserver = new ResizeObserver(scheduleLayout)
-    if(header.value)layoutObserver.observe(header.value)
+    if (header.value) layoutObserver.observe(header.value)
     if (outerPort.value) layoutObserver.observe(outerPort.value)
     if (layout.value) layoutObserver.observe(layout.value)
     if (contentFrame.value) layoutObserver.observe(contentFrame.value)
@@ -592,7 +601,7 @@ async function exportNow() {
   <section class="wiki-view">
     <h1>{{ t('wiki.title') }}</h1>
     <p v-if="!profile && !initializing">{{ t('wiki.noProfile') }}</p>
-    <div ref="header" class="wiki-header" :class="{compact:headerWidth < 900, stacked:headerWidth < 520}">
+    <div ref="header" class="wiki-header" :class="{ compact: headerWidth < 900, stacked: headerWidth < 520 }">
       <div class="wiki-header-row--project">
         <div class="wiki-project-sync">
           <label>{{ t('wiki.project') }}
@@ -722,7 +731,16 @@ async function exportNow() {
               @navigate="navigateWiki"
             />
             <pre v-else class="wiki-preview">{{ selected.content }}</pre>
-            <WikiAttachments :key="`${profile}:${selectedProjectId}:${selected.id}`" ref="attachments" :project-id="selectedProjectId" :wiki-id="selected.id" :attachments="selected.attachments" :disabled="locked || disabled" @busy="attachmentBusy=$event" />
+            <WikiAttachments
+              :key="`${profile}:${selectedProjectId}:${selected.id}`"
+              ref="attachments"
+              :profile="profile"
+              :project-id="selectedProjectId"
+              :wiki-id="selected.id"
+              :attachments="selected.attachments"
+              :disabled="locked || disabled"
+              @busy="attachmentBusy = $event"
+            />
           </article>
           <p v-else-if="initializing" role="status">{{ t('wiki.working') }}</p>
           <p v-else>{{ t('wiki.choosePage') }}</p>
@@ -1037,7 +1055,8 @@ async function exportNow() {
 @keyframes wiki-drawer-enter { from { transform: translateX(100%); } to { transform: translateX(0); } }
 @media (prefers-reduced-motion: reduce) { .wiki-panel.wiki-drawer { animation: none; } }
 
-.wiki-header {container-type:inline-size;margin-bottom:1rem;min-width:0}
+.wiki-header {margin-bottom:1rem;min-width:0}
+.wiki-header button {overflow-wrap:anywhere}
 .wiki-header-row--project,.wiki-header-row--export,.wiki-project-sync,.wiki-export-actions {display:flex;align-items:center;flex-wrap:wrap;gap:.75rem;min-width:0}
 .wiki-header-row--export {margin-top:.75rem}
 .wiki-project-sync label {display:flex;align-items:center;gap:.5rem;min-width:0;max-width:100%}
@@ -1052,6 +1071,4 @@ async function exportNow() {
 .wiki-header.stacked .wiki-header-row--export {flex-direction:column;align-items:stretch}
 .wiki-header.stacked .wiki-export-separator {height:0;border-inline-start:0;border-block-start:var(--border-width) solid var(--border);width:100%}
 .wiki-header.stacked .wiki-export-actions {flex-direction:column;align-items:stretch}
-@container (max-width:899px){.wiki-project-sync {flex-basis:100%}}
-@container (max-width:519px){.wiki-header-row--export {flex-direction:column;align-items:stretch}.wiki-export-actions {flex-direction:column;align-items:stretch}.wiki-export-separator {height:0;border-inline-start:0;border-block-start:var(--border-width) solid var(--border);width:100%}}
 </style>

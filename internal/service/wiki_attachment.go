@@ -312,9 +312,20 @@ func (s *ProfileService) DownloadWikiAttachment(ctx context.Context, project, wi
 
 func (s *ProfileService) lockWikiOperation() bool {
 	s.attachments.mu.Lock()
-	defer s.attachments.mu.Unlock()
-	if s.attachments.run != nil {
+	active := s.attachments.run != nil
+	s.attachments.mu.Unlock()
+	if active {
 		return false
 	}
-	return s.syncMu.TryLock()
+	// 通常処理同士は従来どおり待つ。待機中は予約ロックを保持しない。
+	s.syncMu.Lock()
+	s.attachments.mu.Lock()
+	active = s.attachments.run != nil
+	s.attachments.mu.Unlock()
+	// 待機の間に成立した予約も優先し、保存ダイアログと競合させない。
+	if active {
+		s.syncMu.Unlock()
+		return false
+	}
+	return true
 }

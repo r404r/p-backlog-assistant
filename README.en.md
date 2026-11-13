@@ -191,6 +191,8 @@ wails dev
 wails build
 ```
 
+Before running `go test -tags bindings .` from the repository root, run `npm ci` and `npm run build` in `frontend/`. The test embeds `frontend/dist` and requires that build output.
+
 Distribution artifacts are built automatically by GitHub Actions (on push to main) as a Windows exe and a macOS .app (zipped) and stored as artifacts. The macOS build runs on a macOS runner.
 
 ## Development rules

@@ -357,6 +357,11 @@ Pages with attachments show a counted list after the body. Press Download on a r
 
 The Wiki header has two logical rows: project, sync, timestamp and panel toggle; then new page, exports and sync-before-export. Groups wrap in narrow windows and operation progress and cancellation appear below the rows. Ordinary buttons, single-select lists and single-line inputs share one height, including ordinary history action buttons. Icons, inline links, dates and multiline inputs retain their existing dimensions.
 
+- Attachments cancelled by navigation show “Cancelled” when you return to their page until the app exits. Retrying clears the message.
+- On POSIX systems such as macOS, saved files have mode 0600 (read and write for the owner only). Overwriting an existing 0644 file also changes its mode to 0600.
+
+On older WKWebView versions equivalent to Safari before 14, which do not support `:where()`, controls retain their previous heights.
+
 #### Export with attachments
 
 1. Sync before export is on by default. Press Export project, or select a branch in the tree and press Export selected subtree. Search conditions do not limit the export; all pages in the selected subtree are included.
