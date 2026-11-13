@@ -187,6 +187,38 @@ it.each(['drawer', 'contents'] as const)('reveals the current entry when reopeni
  expect(panel().scrollTop).toBe(75)
 })
 
+it('Wiki 同期中の状態行に合わせて本文領域の高さを再計算する', async () => {
+ const backend = holder.backend as ReturnType<typeof createMockBackend>
+ let finishSync!: (result: Awaited<ReturnType<typeof backend.syncWikis>>) => void
+ backend.syncWikis = vi.fn(() => new Promise<Awaited<ReturnType<typeof backend.syncWikis>>>(resolve => { finishSync = resolve }))
+ height = 800
+ const originalRect = vi.mocked(HTMLElement.prototype.getBoundingClientRect).getMockImplementation()!
+ vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function(this: HTMLElement) {
+  const rect = originalRect.call(this)
+  if (!this.classList.contains('wiki-layout')) return rect
+  const top = mounted?.host.querySelector('.wiki-view > p[role="status"]') ? 239 : 200
+  return { ...rect, top, y: top, height: height - top }
+ })
+ const settleLayout = async () => {
+  await flush()
+  await new Promise<void>(resolve => requestAnimationFrame(() => resolve()))
+  await flush()
+ }
+ try {
+  await open(); await selectPage(); await settleLayout()
+  const layout = mounted!.host.querySelector<HTMLElement>('.wiki-layout')!
+  const before = Number.parseFloat(layout.style.height)
+  const sync = [...mounted!.host.querySelectorAll('button')].find(button => button.textContent?.trim() === 'Sync Wiki')!
+  sync.click(); await settleLayout()
+  expect(backend.syncWikis).toHaveBeenCalledOnce()
+  expect(mounted!.host.querySelector('.wiki-view > p[role="status"]')).not.toBeNull()
+  expect(layout.style.height).toBe(`${before - 39}px`)
+ } finally {
+  finishSync?.({ mode: 'full', fetched: 1, upserted: 0, deleted: 0, durationMs: 0, disabled: false, warnings: [] })
+  await settleLayout()
+ }
+})
+
 it.each([
  { name: '標準の余白', viewport: 800, outerHeight: 800, clientTop: 0, scroll: 0, padding: 24, section: 20, top: 200, expected: 556 },
  { name: '外側スクロール後', viewport: 800, outerHeight: 800, clientTop: 0, scroll: 80, padding: 24, section: 20, top: 120, expected: 556 },

@@ -270,7 +270,7 @@ watch(dialogOpen, open => { if (open) closeDrawer(false) }, { flush: 'sync' })
 const locked = computed(
   () => initializing.value || busy.value || writingBusy.value || issueSyncRunning.value,
 )
-watch([headings, searchOpen, tocOpen, panelCollapsed, selectedPath, notice, error, editing, initializing, disabled], () => void nextTick(scheduleLayout))
+watch([headings, searchOpen, tocOpen, panelCollapsed, selectedPath, notice, error, editing, initializing, disabled, busy, warnings, preparing, exporting], () => void nextTick(scheduleLayout))
 watch(panelHidden, hidden => {
   if (hidden || (narrow.value && !pendingReveal)) return
   const key = pendingReveal || `p:${selectedId.value}`
