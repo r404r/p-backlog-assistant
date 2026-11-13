@@ -170,3 +170,41 @@ it.each(['drawer', 'contents'] as const)('reveals the current entry when reopeni
  expect(nav.scrollTop).toBe(130)
  expect(panel().scrollTop).toBe(75)
 })
+
+it.each([
+ { name: '標準の余白', viewport: 800, outerHeight: 800, clientTop: 0, scroll: 0, padding: 24, section: 20, top: 200, expected: 556 },
+ { name: '外側スクロール後', viewport: 800, outerHeight: 800, clientTop: 0, scroll: 80, padding: 24, section: 20, top: 120, expected: 556 },
+ { name: 'client 領域の下端', viewport: 800, outerHeight: 740, clientTop: 2, scroll: 0, padding: 24, section: 20, top: 200, expected: 498 },
+ { name: 'ルート文字サイズの変化', viewport: 800, outerHeight: 800, clientTop: 0, scroll: 0, padding: 30, section: 25, top: 200, expected: 545 },
+ { name: '通知で上端が下がる', viewport: 800, outerHeight: 800, clientTop: 0, scroll: 0, padding: 24, section: 20, top: 350, expected: 406 },
+ { name: '内側 160px の下限', viewport: 240, outerHeight: 240, clientTop: 0, scroll: 0, padding: 24, section: 20, top: 200, expected: 170 },
+])('$name を実寸から計算する', async sample => {
+ height = sample.viewport
+ const outer = document.createElement('main'); outer.className = 'content'; document.body.append(outer)
+ outer.scrollTop = sample.scroll
+ Object.defineProperties(outer, { clientHeight: { value: sample.outerHeight }, clientTop: { value: sample.clientTop } })
+ const originalRect = vi.mocked(HTMLElement.prototype.getBoundingClientRect).getMockImplementation()!
+ vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function(this: HTMLElement) {
+  if (this === outer) return { top: 0, bottom: height, height, left: 0, right: width, width, x: 0, y: 0, toJSON() {} }
+  if (this.classList.contains('wiki-layout') || this.classList.contains('wiki-content')) return { top: sample.top, bottom: height, height: height - sample.top, left: 0, right: width, width, x: 0, y: sample.top, toJSON() {} }
+  return originalRect.call(this)
+ })
+ const originalStyle = window.getComputedStyle.bind(window)
+ vi.spyOn(window, 'getComputedStyle').mockImplementation((el, pseudo) => {
+  const css = originalStyle(el, pseudo)
+  const values: Record<string, string> = el === outer ? { paddingBottom: `${sample.padding}px` }
+   : el.classList.contains('wiki-view') ? { paddingBottom: `${sample.section}px` }
+   : el.classList.contains('wiki-content-frame') ? { paddingTop: '4px', paddingBottom: '4px', borderTopWidth: '1px', borderBottomWidth: '1px' } : {}
+  return new Proxy(css, { get: (target, key) => typeof key === 'string' && key in values ? values[key] : Reflect.get(target, key) })
+ })
+ // マウント時から外側コンテナを持たせ、初回同期測定も検査する。
+ const append = document.body.appendChild.bind(document.body)
+ vi.spyOn(document.body, 'appendChild').mockImplementation(<T extends Node>(node: T): T => node.nodeName === 'DIV' ? outer.appendChild(node) : append(node))
+ try {
+  await open()
+  expect(mounted!.host.querySelector<HTMLElement>('.wiki-layout')!.style.height).toBe(`${sample.expected}px`)
+  const before = outer.scrollTop
+  mounted!.host.querySelector<HTMLElement>('[data-row-key="p:1"] .wiki-node-name')!.click(); await flush()
+  expect(outer.scrollTop).toBe(sample.expected === 170 ? before + sample.top : before)
+ } finally { mounted?.unmount(); mounted = undefined; outer.remove() }
+})

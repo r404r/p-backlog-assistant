@@ -122,14 +122,58 @@ describe('デザイントークンの定義', () => {
 // 参照の整合・残存色
 // ---------------------------------------------------------------------------
 
+const wikiFilename = 'src/views/WikiView.vue'
+const wikiSource = STYLE_SOURCES.find(file => file.name === wikiFilename)!.source
+const wikiPadding = '--wiki-frame-padding'
+
+/** Wiki の余白変数だけを、定義位置と宣言の用途を確認して解決する。 */
+function validateWikiPadding(name: string, source: string): boolean {
+  const clean = stripCssComments(source)
+  const references = [...clean.matchAll(/var\(\s*--wiki-frame-padding\b/g)].length
+  const { descriptor } = parse(clean)
+  let definitions = 0, allowedReferences = 0
+  for (const block of descriptor.styles) {
+    const compiled = compileStyle({ source: block.content, filename: name, id: 'data-v-padding-check', scoped: false })
+    if (compiled.errors.length) throw new Error('CSS を解析できません')
+    compiled.rawResult!.root.walkDecls(decl => {
+      const rule = decl.parent
+      if (decl.prop === wikiPadding) {
+        if (name !== wikiFilename || !block.scoped || rule?.type !== 'rule' || rule.selector !== '.wiki-view' || decl.value !== '1rem') throw new Error('Wiki 余白変数の定義位置または値が不正です')
+        definitions++
+      }
+      if (decl.value.includes(wikiPadding)) {
+        if (name !== wikiFilename || !block.scoped || rule?.type !== 'rule' || !['.wiki-view .wiki-content-frame', '.wiki-view .wiki-content'].includes(rule.selector) || decl.prop !== 'padding') throw new Error('Wiki 余白変数の参照範囲が不正です')
+        allowedReferences += [...decl.value.matchAll(/var\(\s*--wiki-frame-padding\b/g)].length
+      }
+    })
+  }
+  if (name === wikiFilename && definitions !== 1) throw new Error('Wiki 余白変数の定義が必要です')
+  if (references !== allowedReferences) throw new Error('Wiki 余白変数の参照範囲が不正です')
+  if (references && !definitions) throw new Error('Wiki 余白変数が未定義です')
+  return name === wikiFilename && definitions === 1
+}
+
+it('Wiki の余白変数の定義削除を拒否する', () => {
+  expect(() => validateWikiPadding(wikiFilename, wikiSource.replace(/--wiki-frame-padding:\s*1rem;/, ''))).toThrow()
+})
+it('Wiki の余白変数の名前の誤記を拒否する', () => {
+  expect(() => validateWikiPadding(wikiFilename, wikiSource.replace('--wiki-frame-padding:', '--wiki-frame-paddding:'))).toThrow()
+})
+it('Wiki の外での余白変数の参照を拒否する', () => {
+  expect(() => validateWikiPadding('src/App.vue', '<style scoped>.content { padding: var(--wiki-frame-padding); }</style>')).toThrow()
+  expect(() => validateWikiPadding(wikiFilename, wikiSource.replace('</style>', '.toolbar { padding: var(--wiki-frame-padding); }</style>'))).toThrow()
+  expect(() => validateWikiPadding(wikiFilename, wikiSource.replace('<section', '<section :style="{ padding: \'var(--wiki-frame-padding)\' }"'))).toThrow()
+})
+
 describe('トークンの参照', () => {
   it('未定義の var(--…) を参照していない', () => {
     for (const { name, source } of STYLE_SOURCES) {
+      const localPadding = validateWikiPadding(name, source)
       const referenced = new Set<string>()
       for (const m of stripCssComments(source).matchAll(/var\(\s*(--[\w-]+)/g)) {
         referenced.add(m[1])
       }
-      const undefinedTokens = [...referenced].filter((t) => !lightTokens.has(t)).sort()
+      const undefinedTokens = [...referenced].filter((t) => !lightTokens.has(t) && !(localPadding && t === wikiPadding)).sort()
       expect(undefinedTokens, `${name} が未定義のトークンを参照しています`).toEqual([])
     }
   })
@@ -339,6 +383,23 @@ describe('共通フォームと画面固有スタイルのカスケード', () =
     host.querySelectorAll('*').forEach((element) => element.setAttribute(scopeId, ''))
     return host.querySelector(selector)!
   }
+
+  it('Wiki の枠は本番カスケードでも既存の面・文字・輪郭を使う', () => {
+    const styles = formStyles('views/WikiView.vue')
+    const frame = fixture('<section class="wiki-view"><div class="wiki-content-frame"><div class="wiki-content"></div></div></section>', '.wiki-content-frame')
+    for (const [property, value] of [['background', 'var(--surface)'], ['color', 'var(--text)'], ['border', 'var(--border-width) solid var(--border)'], ['border-radius', 'var(--radius-ui)'], ['box-shadow', 'var(--shadow-none)']]) {
+      expect(winningValue(styles, frame, property), property).toBe(value)
+    }
+    const fill = winningValue(styles, frame, 'background')!.match(/var\((--[\w-]+)\)/)![1]
+    const line = winningValue(styles, frame, 'border')!.match(/var\((--border)\)/)![1]
+    for (const tokens of [lightTokens, darkTokens]) {
+      for (const foreground of ['--text', '--text-muted', '--text-faint', '--accent-fg']) expect(contrast(tokens.get(foreground)!, tokens.get(fill)!)).toBeGreaterThanOrEqual(4.5)
+      for (const background of [fill, '--bg']) {
+        expect(contrast(tokens.get(line)!, tokens.get(background)!)).toBeGreaterThanOrEqual(3)
+        expect(contrast(tokens.get('--focus-ring')!, tokens.get(background)!)).toBeGreaterThanOrEqual(3)
+      }
+    }
+  })
 
   for (const [view, types] of [
     ['IssuesView', ['select', 'text', 'date']],
