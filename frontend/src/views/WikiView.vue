@@ -672,7 +672,7 @@ async function exportNow() {
         </article>
         <p v-else>{{ t('wiki.choosePage') }}</p>
       </div>
-      <Teleport to="body"><div ref="drawerHost" class="wiki-drawer-host"><div v-if="narrow && drawerOpen" class="wiki-drawer-mask" aria-hidden="true" @click.self="closeDrawer()" /></div></Teleport>
+      <Teleport to="body"><div ref="drawerHost" class="wiki-drawer-host content"><div v-if="narrow && drawerOpen" class="wiki-drawer-mask" aria-hidden="true" @click.self="closeDrawer()" /></div></Teleport>
       <Teleport :to="drawerHost ?? 'body'" :disabled="!narrow">
         <aside id="wiki-search-panel" ref="panelPort" class="wiki-panel" :class="{ 'wiki-panel-scroll': wholePanel, 'wiki-drawer': narrow }" :hidden="panelHidden" :role="narrow ? 'dialog' : undefined" :aria-modal="narrow && drawerOpen ? true : undefined" :tabindex="narrow ? -1 : undefined" :aria-label="t('wiki.panel')">
           <button v-if="narrow" type="button" class="wiki-drawer-close" :title="t('wiki.closePanel')" :aria-label="t('wiki.closePanel')" @click="closeDrawer()">{{ t('wiki.closePanel') }}</button>
