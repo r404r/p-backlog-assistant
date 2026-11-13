@@ -100,3 +100,28 @@ it('cancels a delayed reservation before download and waits before allowing retr
  expect(mounted.host.textContent).not.toContain('保存しました')
  expect(mounted.host.querySelector('button')?.disabled).toBe(false)
 })
+
+it.each(['download','cancel'] as const)('%s が先に完了しても両方の応答まで同じ行を再開始しない',async first=>{
+ const b=createMockBackend();holder.backend=b
+ let finishDownload!:(value:WikiAttachmentDownloadResult)=>void,finishCancel!:()=>void
+ b.beginWikiAttachmentDownload=vi.fn(async()=>({runId:'run',code:''}))
+ b.downloadWikiAttachment=vi.fn(()=>new Promise<WikiAttachmentDownloadResult>(resolve=>{finishDownload=resolve}))
+ b.cancelWikiAttachmentDownload=vi.fn(()=>new Promise<void>(resolve=>{finishCancel=resolve}))
+ mounted=mountWithI18n({render:()=>h(WikiAttachments,{projectId:1,wikiId:2,attachments:[{id:3,wikiId:2,name:'sample.txt',size:4}],disabled:false})},{locale:'en'})
+ ;(mounted.host.querySelector('button') as HTMLButtonElement).click();await flush()
+ ;(mounted.host.querySelector('button') as HTMLButtonElement).click();await flush()
+ expect(b.cancelWikiAttachmentDownload).toHaveBeenCalledWith(1,2,3)
+ const completeDownload=()=>finishDownload({runId:'run',state:'cancelled',code:'cancelled',bytes:0,sizeChanged:false})
+ if(first==='download')completeDownload();else finishCancel()
+ await flush()
+ expect(mounted.host.querySelector('#wiki-attachment-download-3')).toBeNull()
+ expect(mounted.host.querySelector('button')?.getAttribute('aria-label')).toBe('Cancel downloading sample.txt')
+ expect(b.beginWikiAttachmentDownload).toHaveBeenCalledOnce()
+ if(first==='download')finishCancel();else completeDownload()
+ await flush()
+ const retry=mounted.host.querySelector<HTMLButtonElement>('#wiki-attachment-download-3')!
+ expect(retry.disabled).toBe(false)
+ b.downloadWikiAttachment=vi.fn(async()=>({runId:'run',state:'cancelled' as const,code:'cancelled',bytes:0,sizeChanged:false}))
+ retry.click();await flush()
+ expect(b.beginWikiAttachmentDownload).toHaveBeenCalledTimes(2)
+})

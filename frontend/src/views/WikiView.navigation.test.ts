@@ -96,7 +96,7 @@ async function startDownload() {
 }
 
 it.each(['screen', 'page', 'project', 'link'] as const)('%s への移動はダウンロードの後片付け完了を待つ', async target => {
-  const { cleanup } = await startDownload()
+  const { cleanup, download } = await startDownload()
   let left = false
   let leaving: Promise<void> | undefined
   if (target === 'screen') leaving = canLeaveCurrentView().then(ok => { left = ok })
@@ -108,6 +108,9 @@ it.each(['screen', 'page', 'project', 'link'] as const)('%s への移動はダ�
   if (target === 'link') mounted!.host.querySelector<HTMLAnchorElement>('.wiki-preview a')!.click()
   await flush()
   expect(backend.cancelWikiAttachmentDownload).toHaveBeenCalledWith(1, 10, 30)
+  // Download だけが先に返っても、Cancel の応答前には移動しない。
+  download.resolve({ runId: 'download', state: 'cancelled', code: 'cancelled', bytes: 0, sizeChanged: false })
+  await flush()
   expect(left).toBe(false)
   expect(selectedProjectId.value).toBe(1)
   expect(mounted!.host.querySelector('.wiki-detail h2')?.textContent).toBe('Guide/Start')
