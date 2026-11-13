@@ -47,6 +47,7 @@ const selectedRowKey = ref(''), focusedRowKey = ref('')
 const treeComponent = ref<InstanceType<typeof WikiTree> | null>(null)
 const layout = ref<HTMLElement | null>(null), bodyPort = ref<HTMLElement | null>(null)
 const outerPort = ref<HTMLElement | null>(null), contentFrame = ref<HTMLElement | null>(null)
+const header=ref<HTMLElement|null>(null),headerWidth=ref(1000)
 const atMinimum = ref(true)
 const panelPort = ref<HTMLElement | null>(null), tocPort = ref<HTMLElement | null>(null)
 const panelScroll = ref(false), layoutHeight = ref(160), tocHeight = ref(0)
@@ -84,6 +85,7 @@ function scheduleLayout() {
   if (!layoutFrame) layoutFrame = requestAnimationFrame(() => { layoutFrame = 0; measureLayout() })
 }
 function measureLayout() {
+  if(header.value)headerWidth.value=header.value.clientWidth
   const el = layout.value
   if (!el) return
   const outer = outerPort.value
@@ -438,6 +440,7 @@ onMounted(async () => {
   outerPort.value = layout.value?.closest<HTMLElement>('.content') ?? null
   if (typeof ResizeObserver !== 'undefined') {
     layoutObserver = new ResizeObserver(scheduleLayout)
+    if(header.value)layoutObserver.observe(header.value)
     if (outerPort.value) layoutObserver.observe(outerPort.value)
     if (layout.value) layoutObserver.observe(layout.value)
     if (contentFrame.value) layoutObserver.observe(contentFrame.value)
@@ -588,19 +591,50 @@ async function exportNow() {
   <section class="wiki-view">
     <h1>{{ t('wiki.title') }}</h1>
     <p v-if="!profile && !initializing">{{ t('wiki.noProfile') }}</p>
-    <div class="toolbar">
-      <label>{{ t('wiki.project') }}
-        <select :value="selectedProjectId" :disabled="locked" @change="changeProject">
-          <option v-for="p in projects" :key="p.id" :value="p.id">
-            {{ p.projectKey }} — {{ p.name }}
-          </option>
-        </select></label>
-      <button :disabled="apiLocked || !selectedProjectId" @click="sync">
-        {{ t('wiki.sync') }}
-      </button>
-      <span>{{
-        lastSynced ? t('wiki.freshness', { at: formatDateTime(lastSynced) }) : t('wiki.unsynced')
-      }}</span>
+    <div ref="header" class="wiki-header" :class="{compact:headerWidth < 900, stacked:headerWidth < 520}">
+      <div class="wiki-header-row--project">
+        <div class="wiki-project-sync">
+          <label>{{ t('wiki.project') }}
+            <select :title="projects.filter(p=>p.id===selectedProjectId).map(p=>`${p.projectKey} — ${p.name}`).join('')" :value="selectedProjectId" :disabled="locked" @change="changeProject">
+              <option v-for="p in projects" :key="p.id" :value="p.id">
+                {{ p.projectKey }} — {{ p.name }}
+              </option>
+            </select></label>
+          <button :disabled="apiLocked || !selectedProjectId" @click="sync">
+            {{ t('wiki.sync') }}
+          </button>
+          <span class="wiki-freshness">{{
+            lastSynced ? t('wiki.freshness', { at: formatDateTime(lastSynced) }) : t('wiki.unsynced')
+          }}</span>
+        </div>
+        <button
+          ref="panelToggle"
+          type="button"
+          :aria-expanded="!panelHidden"
+          aria-controls="wiki-search-panel"
+          @click="togglePanel"
+        >
+          {{ panelHidden ? t('wiki.showPanel') : t('wiki.hidePanel') }}
+        </button>
+      </div>
+      <div class="wiki-header-row--export">
+        <button :disabled="apiLocked || disabled || !selectedProjectId" @click="openEditor(true)">
+          {{ t('wiki.newPage') }}
+        </button>
+
+        <span class="wiki-export-separator" aria-hidden="true"></span>
+        <div class="wiki-export-actions">
+          <button :disabled="apiLocked || disabled || !selectedProjectId" @click="prepare('')">
+            {{ t('wiki.exportProject') }}
+          </button>
+          <button :disabled="apiLocked || disabled || !selectedPath" @click="prepare(selectedPath)">
+            {{ t('wiki.exportSubtree') }}
+          </button>
+          <label><input v-model="syncFirst" type="checkbox" :disabled="apiLocked" />{{
+            t('wiki.syncFirst')
+          }}</label>
+        </div>
+      </div>
     </div>
     <p v-if="disabled" role="status">{{ t('wiki.disabled') }}</p>
     <p v-if="error" role="alert" class="error">{{ error }}</p>
@@ -608,36 +642,13 @@ async function exportNow() {
     <ul v-if="warnings.length">
       <li v-for="w in warnings" :key="w">{{ w }}</li>
     </ul>
-    <p v-if="busy" role="status">
-      {{ preparing ? t('wiki.preparing') : exporting ? t('wiki.exporting') : t('wiki.working') }}
-      <span v-if="progress">{{ progress.fetched }} / {{ progress.total }}</span>
-    </p>
-    <button v-if="preparing || exporting" @click="cancelExport">
-      {{ t('wiki.cancel') }}
-    </button>
-    <div class="toolbar">
-      <button :disabled="apiLocked || disabled || !selectedProjectId" @click="openEditor(true)">
-        {{ t('wiki.newPage') }}
-      </button>
-      <label><input v-model="syncFirst" type="checkbox" :disabled="apiLocked" />{{
-        t('wiki.syncFirst')
-      }}</label>
-      <button :disabled="apiLocked || disabled || !selectedProjectId" @click="prepare('')">
-        {{ t('wiki.exportProject') }}
-      </button>
-      <button :disabled="apiLocked || disabled || !selectedPath" @click="prepare(selectedPath)">
-        {{ t('wiki.exportSubtree') }}
-      </button>
-    </div>
-    <div class="wiki-panel-toolbar">
-      <button
-        ref="panelToggle"
-        type="button"
-        :aria-expanded="!panelHidden"
-        aria-controls="wiki-search-panel"
-        @click="togglePanel"
-      >
-        {{ panelHidden ? t('wiki.showPanel') : t('wiki.hidePanel') }}
+    <div v-if="busy" class="wiki-operation-status">
+      <p v-if="busy" role="status">
+        {{ preparing ? t('wiki.preparing') : exporting ? t('wiki.exporting') : t('wiki.working') }}
+        <span v-if="progress">{{ progress.fetched }} / {{ progress.total }}</span>
+      </p>
+      <button v-if="preparing || exporting" @click="cancelExport">
+        {{ t('wiki.cancel') }}
       </button>
     </div>
     <div ref="layout" class="wiki-layout" :class="{ 'panel-collapsed': panelCollapsed || narrow, 'panel-scroll': panelScroll }" :style="{ height: `${layoutHeight}px` }">
@@ -1024,4 +1035,22 @@ async function exportNow() {
 .wiki-drawer-close { align-self: flex-end; margin-bottom: .75rem; }
 @keyframes wiki-drawer-enter { from { transform: translateX(100%); } to { transform: translateX(0); } }
 @media (prefers-reduced-motion: reduce) { .wiki-panel.wiki-drawer { animation: none; } }
+
+.wiki-header {container-type:inline-size;margin-bottom:1rem;min-width:0}
+.wiki-header-row--project,.wiki-header-row--export,.wiki-project-sync,.wiki-export-actions {display:flex;align-items:center;flex-wrap:wrap;gap:.75rem;min-width:0}
+.wiki-header-row--export {margin-top:.75rem}
+.wiki-project-sync label {display:flex;align-items:center;gap:.5rem;min-width:0;max-width:100%}
+.wiki-project-sync select {width:16rem;max-inline-size:100%;min-width:0;text-overflow:ellipsis;overflow:hidden;white-space:nowrap}
+.wiki-freshness {font-size:.85rem;color:var(--text-muted)}
+.wiki-header-row--project > button {margin-inline-start:auto}
+.wiki-export-separator {border-inline-start:var(--border-width) solid var(--border);height:1.6rem}
+.wiki-export-actions label {display:flex;align-items:center;gap:.3rem;font-size:.9rem}
+.wiki-operation-status {display:flex;align-items:center;gap:.75rem;flex-wrap:wrap;margin-bottom:1rem}
+.wiki-operation-status p {margin:0}
+.wiki-header.compact .wiki-project-sync {flex-basis:100%}
+.wiki-header.stacked .wiki-header-row--export {flex-direction:column;align-items:stretch}
+.wiki-header.stacked .wiki-export-separator {height:0;border-inline-start:0;border-block-start:var(--border-width) solid var(--border);width:100%}
+.wiki-header.stacked .wiki-export-actions {flex-direction:column;align-items:stretch}
+@container (max-width:899px){.wiki-project-sync {flex-basis:100%}}
+@container (max-width:519px){.wiki-header-row--export {flex-direction:column;align-items:stretch}.wiki-export-actions {flex-direction:column;align-items:stretch}.wiki-export-separator {height:0;border-inline-start:0;border-block-start:var(--border-width) solid var(--border);width:100%}}
 </style>

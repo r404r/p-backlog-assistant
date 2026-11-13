@@ -13,8 +13,26 @@ const announcement=ref('')
 let alive=true, generation=0, pending:Promise<void>|undefined, cancelPending:Promise<void>|undefined
 const percent=computed(()=>total.value>0?Math.min(100,Math.floor(received.value/total.value*100)):undefined)
 const size=(n:number)=>formatAttachmentSize(n,locale.value)??t('wiki.attachmentDownload.unknownSize')
-const errorKeys:Record<string,string>={not_found:'notFound',rate_limited:'rateLimited',cleanup_failed:'cleanupFailed',size_mismatch:'sizeMismatch',local_data:'localData'}
-const errorText=(code:string)=>t(`wiki.attachmentDownload.error.${errorKeys[code]??(['unauthorized','forbidden','network','timeout','disk','truncated','disabled','busy','dialog'].includes(code)?code:'unexpected')}`)
+const errorKeys={
+not_found:'wiki.attachmentDownload.error.notFound',
+unauthorized:'wiki.attachmentDownload.error.unauthorized',
+forbidden:'wiki.attachmentDownload.error.forbidden',
+network:'wiki.attachmentDownload.error.network',
+timeout:'wiki.attachmentDownload.error.timeout',
+rate_limited:'wiki.attachmentDownload.error.rateLimited',
+disk:'wiki.attachmentDownload.error.disk',
+cleanup_failed:'wiki.attachmentDownload.error.cleanupFailed',
+truncated:'wiki.attachmentDownload.error.truncated',
+size_mismatch:'wiki.attachmentDownload.error.sizeMismatch',
+local_data:'wiki.attachmentDownload.error.localData',
+disabled:'wiki.attachmentDownload.error.disabled',
+busy:'wiki.attachmentDownload.error.busy',
+dialog:'wiki.attachmentDownload.error.dialog',
+unexpected:'wiki.attachmentDownload.error.unexpected',
+}
+const phaseKeys={selecting:'wiki.attachmentDownload.selecting',downloading:'wiki.attachmentDownload.downloading',saving:'wiki.attachmentDownload.saving',saved:'wiki.attachmentDownload.saved',cancelled:'wiki.attachmentDownload.cancelled'}
+const actionKeys={download:'wiki.attachmentDownload.download',downloadAgain:'wiki.attachmentDownload.downloadAgain',retry:'wiki.attachmentDownload.retry'}
+const errorText=(code:string)=>t(errorKeys[Object.hasOwn(errorKeys,code)?code as keyof typeof errorKeys:'unexpected'])
 const off=onWikiAttachmentProgress((p:WikiAttachmentDownloadProgress)=>{
  if(!alive||p.runId!==runId.value||p.projectId!==props.projectId||p.wikiId!==props.wikiId||p.attachmentId!==active.value)return
  phase.value=p.phase;received.value=p.receivedBytes;total.value=p.totalBytes
@@ -40,7 +58,7 @@ async function download(id:number){
    if(ticket.code){results.value[id]={runId:ticket.runId,state:'failed',code:ticket.code,bytes:0,sizeChanged:false};return}
    runId.value=ticket.runId
    const result=await backend.downloadWikiAttachment(project,wiki,id)
-   if(alive&&gen===generation){results.value[id]=result;announcement.value=result.state==='failed'?errorText(result.code):t(`wiki.attachmentDownload.${result.state}`)}
+   if(alive&&gen===generation){results.value[id]=result;announcement.value=result.state==='failed'?errorText(result.code):t(phaseKeys[result.state])}
   }catch{
    if(alive&&gen===generation)results.value[id]={runId:runId.value,state:'failed',code:'unexpected',bytes:0,sizeChanged:false}
   }finally{
@@ -55,30 +73,30 @@ async function download(id:number){
 onUnmounted(()=>{alive=false;off();void cancel()})
 </script>
 <template>
- <section v-if="attachments.length" class="wiki-attachments" aria-labelledby="wiki-attachments-title">
-  <h3 id="wiki-attachments-title">{{t('wiki.attachmentDownload.title',{count:attachments.length})}}</h3>
-  <p class="sr-only" aria-live="polite" aria-atomic="true">{{announcement}}</p>
-  <ul>
-   <li v-for="a in attachments" :key="a.id" class="wiki-attachment-row">
-    <div class="wiki-attachment-name"><strong>{{a.name}}</strong><span :id="`wiki-attachment-size-${a.id}`">{{size(a.size)}}</span></div>
-    <div class="wiki-attachment-actions">
-     <template v-if="active===a.id">
-      <span>{{t(`wiki.attachmentDownload.${['selecting','downloading','saving'].includes(phase)?phase:'saving'}`)}}</span>
-      <template v-if="phase==='downloading'||phase==='saving'">
-       <progress :value="percent" max="100" :aria-label="t('wiki.attachmentDownload.progressLabel',{name:a.name})" />
-       <span>{{total>=0?t('wiki.attachmentDownload.progressKnown',{received:size(received),total:size(total),percent:percent??100}):t('wiki.attachmentDownload.progressUnknown',{received:size(received)})}}</span>
-      </template>
-      <button :aria-label="t('wiki.attachmentDownload.cancelLabel',{name:a.name})" @click="cancel">{{t('wiki.attachmentDownload.cancel')}}</button>
-     </template>
-     <template v-else>
-      <span v-if="results[a.id]?.state==='saved'" class="attachment-saved">{{t('wiki.attachmentDownload.saved')}}</span>
-      <span v-if="results[a.id]?.state==='failed'" class="attachment-failed">{{errorText(results[a.id]!.code)}}</span>
-      <button :id="`wiki-attachment-download-${a.id}`" :disabled="disabled||active!==0" :aria-describedby="`wiki-attachment-size-${a.id}`" :aria-label="t('wiki.attachmentDownload.downloadLabel',{name:a.name})" @click="download(a.id)">{{t(`wiki.attachmentDownload.${results[a.id]?.state==='saved'?'downloadAgain':results[a.id]?.state==='failed'?'retry':'download'}`)}}</button>
-     </template>
-    </div>
-   </li>
-  </ul>
- </section>
+  <section v-if="attachments.length" class="wiki-attachments" aria-labelledby="wiki-attachments-title">
+    <h3 id="wiki-attachments-title">{{ t('wiki.attachmentDownload.title',{count:attachments.length}) }}</h3>
+    <p class="sr-only" aria-live="polite" aria-atomic="true">{{ announcement }}</p>
+    <ul>
+      <li v-for="a in attachments" :key="a.id" class="wiki-attachment-row">
+        <div class="wiki-attachment-name"><strong>{{ a.name }}</strong><span :id="`wiki-attachment-size-${a.id}`">{{ size(a.size) }}</span></div>
+        <div class="wiki-attachment-actions">
+          <template v-if="active===a.id">
+            <span>{{ t(phaseKeys[Object.hasOwn(phaseKeys,phase)?phase as keyof typeof phaseKeys:'saving']) }}</span>
+            <template v-if="phase==='downloading'||phase==='saving'">
+              <progress :value="percent" max="100" :aria-label="t('wiki.attachmentDownload.progressLabel',{name:a.name})" />
+              <span>{{ total>=0?t('wiki.attachmentDownload.progressKnown',{received:size(received),total:size(total),percent:percent??100}):t('wiki.attachmentDownload.progressUnknown',{received:size(received)}) }}</span>
+            </template>
+            <button :aria-label="t('wiki.attachmentDownload.cancelLabel',{name:a.name})" @click="cancel">{{ t('wiki.attachmentDownload.cancel') }}</button>
+          </template>
+          <template v-else>
+            <span v-if="results[a.id]?.state==='saved'" class="attachment-saved">{{ t('wiki.attachmentDownload.saved') }}</span>
+            <span v-if="results[a.id]?.state==='failed'" class="attachment-failed">{{ errorText(results[a.id]!.code) }}</span>
+            <button :id="`wiki-attachment-download-${a.id}`" :disabled="disabled||active!==0" :aria-describedby="`wiki-attachment-size-${a.id}`" :aria-label="t('wiki.attachmentDownload.downloadLabel',{name:a.name})" @click="download(a.id)">{{ t(actionKeys[results[a.id]?.state==='saved'?'downloadAgain':results[a.id]?.state==='failed'?'retry':'download']) }}</button>
+          </template>
+        </div>
+      </li>
+    </ul>
+  </section>
 </template>
 <style scoped>
 .wiki-attachments ul {list-style:none;padding:0}
