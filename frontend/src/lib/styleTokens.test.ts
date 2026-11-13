@@ -147,6 +147,7 @@ function validateWikiPadding(name: string, source: string): boolean {
       }
     })
   }
+  if ([...clean.matchAll(/--wiki-frame-padding\s*:/g)].length !== definitions) throw new Error('Wiki 余白変数の定義範囲が不正です')
   if (name === wikiFilename && definitions !== 1) throw new Error('Wiki 余白変数の定義が必要です')
   if (references !== allowedReferences) throw new Error('Wiki 余白変数の参照範囲が不正です')
   if (references && !definitions) throw new Error('Wiki 余白変数が未定義です')

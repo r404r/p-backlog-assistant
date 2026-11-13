@@ -39,3 +39,28 @@ it('未選択・整形・原文・編集で同じ枠と本文スクロール要�
   expect(host.querySelector('.wiki-content-frame')).toBe(frame)
   expect(frame.querySelector('.wiki-content')).toBe(root)
 })
+
+it('初期読込中は枠内の status と aria-busy を示す', async () => {
+  const backend = holder.backend as ReturnType<typeof createMockBackend>
+  let resolve!: (profile: string) => void
+  backend.getActiveProfile = () => new Promise<string>(done => { resolve = done })
+  mounted = mountWithI18n(WikiView, { locale: 'en' }); await flush()
+  const root = mounted.host.querySelector('.wiki-content-frame .wiki-content')!
+  expect(root.getAttribute('aria-busy')).toBe('true')
+  expect(root.querySelector('[role="status"]')?.textContent).toContain('Fetching Wiki')
+  resolve('p'); await flush()
+  expect(root.getAttribute('aria-busy')).toBe('false')
+  expect(root.querySelector('[role="status"]')).toBeNull()
+})
+it('再取得が失敗しても本文と枠を保持し、外側に既存 alert を表示する', async () => {
+  mounted = mountWithI18n(WikiView, { locale: 'en' }); await flush()
+  mounted.host.querySelector<HTMLElement>('[data-row-key="p:1"] .wiki-node-name')!.click(); await flush()
+  const frame = mounted.host.querySelector('.wiki-content-frame')!
+  const backend = holder.backend as ReturnType<typeof createMockBackend>
+  backend.refreshWiki = async () => { throw new Error('offline') }
+  ;[...frame.querySelectorAll('button')].find(b => b.textContent?.trim() === 'Fetch latest')!.click(); await flush()
+  expect(mounted.host.querySelector('.wiki-content-frame')).toBe(frame)
+  expect(frame.querySelector('.markdown-body')?.textContent).toContain('Sample')
+  expect(mounted.host.querySelector('[role="alert"]')?.textContent).toContain('offline')
+  expect(frame.querySelector('[role="alert"]')).toBeNull()
+})
