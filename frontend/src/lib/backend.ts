@@ -9,12 +9,13 @@
 //
 // 公開契約とruntime分岐はbackend.test.tsおよび各画面テストで固定する。
 
-import type { Backend, BulkProgress, SyncProgress } from './backend/contract'
+import type { Backend, BulkProgress, SyncProgress, WikiAttachmentDownloadProgress } from './backend/contract'
 import { globalTranslate } from './format'
 import {
   createMockBackend,
   onMockBulkProgress,
   onMockSyncProgress,
+ onMockWikiAttachmentProgress,
 } from './backend/mock'
 import {
   createWailsBackend,
@@ -144,4 +145,10 @@ export function onSyncProgress(cb: (p: SyncProgress) => void): () => void {
     return typeof off === 'function' ? off : () => {}
   }
   return onMockSyncProgress(cb)
+}
+
+export function onWikiAttachmentProgress(cb:(p:WikiAttachmentDownloadProgress)=>void):()=>void {
+ const rt=findWailsRuntime()
+ if(rt){const off=rt.EventsOn('wiki:attachment-download-progress',(...data:unknown[])=>{const p=data[0] as WikiAttachmentDownloadProgress|undefined;if(p)cb(p)});return typeof off==='function'?off:()=>{}}
+ return onMockWikiAttachmentProgress(cb)
 }

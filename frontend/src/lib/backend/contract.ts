@@ -827,7 +827,13 @@ export interface WikiWriteResult {
   status: 'saved' | 'conflict' | 'uncertain' | 'not_saved' | 'duplicate'
   page: WikiPage | null
 }
+export interface WikiAttachmentDownloadTicket {runId:string;code:string}
+export interface WikiAttachmentDownloadResult {runId:string;state:'saved'|'failed'|'cancelled';code:string;bytes:number;sizeChanged:boolean}
+export interface WikiAttachmentDownloadProgress {runId:string;projectId:number;wikiId:number;attachmentId:number;phase:string;receivedBytes:number;totalBytes:number;code:string}
 export interface Backend {
+ beginWikiAttachmentDownload(projectId:number,wikiId:number,attachmentId:number):Promise<WikiAttachmentDownloadTicket>
+ downloadWikiAttachment(projectId:number,wikiId:number,attachmentId:number):Promise<WikiAttachmentDownloadResult>
+ cancelWikiAttachmentDownload(projectId:number,wikiId:number,attachmentId:number):Promise<void>
  getWikiAttachmentImage(profile:string,input:WikiImageInput):Promise<WikiImageResult>
  cancelWikiImageLoads(profile:string,requestId:string):Promise<void>
   beginWikiEdit(profile: string, projectId: number, id: number): Promise<WikiEdit>

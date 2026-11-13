@@ -6,6 +6,8 @@ import MarkdownBody from '../components/MarkdownBody.vue'
 import type { Heading } from '../lib/markdownDocument'
 import WikiTree from '../components/WikiTree.vue'
 import WikiEditor from '../components/WikiEditor.vue'
+import WikiAttachments from '../components/WikiAttachments.vue'
+import {registerNavigationGuard} from '../lib/navigationGuard'
 import {
   getBackend,
   newSyncRunId,
@@ -30,7 +32,9 @@ import { useModalFocus } from '../lib/modalFocus'
 import { useWikiDrawer } from '../lib/wikiDrawer'
 import { loadWikiPanelCollapsed, saveWikiPanelCollapsed } from '../lib/wikiPanel'
 
-const { t } = useI18n()
+const { t, locale } = useI18n()
+const attachments=ref<InstanceType<typeof WikiAttachments>|null>(null),attachmentBusy=ref(false)
+const apiLocked=computed(()=>locked.value||attachmentBusy.value)
 const pageHeading = ref<HTMLElement | null>(null)
 const markdown = ref<InstanceType<typeof MarkdownBody> | null>(null)
 const headings = ref<Heading[]>([]),
@@ -241,7 +245,7 @@ async function leaveEditor() {
   return true
 }
 async function openEditor(create: boolean) {
-  if (locked.value || disabled.value || !selectedProjectId.value || !(await leaveEditor())) return
+  if (apiLocked.value || disabled.value || !selectedProjectId.value || !(await leaveEditor())) return
   editingId.value = create ? 0 : selectedId.value
   editorGeneration.value++
   editing.value = true
@@ -263,6 +267,7 @@ async function changeProject(event: Event) {
     select.value = String(selectedProjectId.value)
     return
   }
+  await attachments.value?.cancel()
   selectedProjectId.value = Number(select.value)
 }
 const dialogOpen = computed(() => estimate.value !== null)
@@ -378,6 +383,7 @@ async function select(path: string, id: number, rowKey = '') {
     toggleNode(JSON.stringify(path.split('/').filter(Boolean)))
     return
   }
+  if(id!==selectedId.value)await attachments.value?.cancel()
   const target = fullTree.value.pages.get(id)
   if (!target) return
   allowLarge.value = false
@@ -423,6 +429,11 @@ watch(selectedProjectId, () => {
       error.value = errorMessage(e)
     })
 })
+let unregisterDownloadGuard: (()=>void)|undefined
+watch(editing, value=>{
+ if(!value){unregisterDownloadGuard?.();unregisterDownloadGuard=registerNavigationGuard(async()=>{if(locked.value)return false;await attachments.value?.cancel();return true})}
+},{immediate:true,flush:'post'})
+watch(locale,language=>{if(!editing.value)void backend.setWikiWindowState(false,false,language).catch(()=>{})},{immediate:true})
 onMounted(async () => {
   outerPort.value = layout.value?.closest<HTMLElement>('.content') ?? null
   if (typeof ResizeObserver !== 'undefined') {
@@ -456,6 +467,7 @@ onMounted(async () => {
   }
 })
 onUnmounted(() => {
+  unregisterDownloadGuard?.()
   layoutObserver?.disconnect()
   window.removeEventListener('resize', scheduleLayout)
   if (layoutFrame) cancelAnimationFrame(layoutFrame)
@@ -467,7 +479,7 @@ onUnmounted(() => {
   if (estimate.value && !exporting.value) finishRun(runId.value)
 })
 async function sync() {
-  if (locked.value || !selectedProjectId.value || !(await leaveEditor())) return
+  if (apiLocked.value || !selectedProjectId.value || !(await leaveEditor())) return
   const id = startRun()
   try {
     await runSharedProjectRefresh(profile.value, () => backend.syncProjects(profile.value))
@@ -489,7 +501,7 @@ async function sync() {
   }
 }
 async function refresh() {
-  if (locked.value || !selected.value || !(await leaveEditor())) return
+  if (apiLocked.value || !selected.value || !(await leaveEditor())) return
   const id = startRun()
   try {
     await backend.refreshWiki(profile.value, selectedProjectId.value, selected.value.id)
@@ -510,7 +522,7 @@ async function copy() {
   }
 }
 async function prepare(subtree: string) {
-  if (locked.value || !selectedProjectId.value || !(await leaveEditor())) return
+  if (apiLocked.value || !selectedProjectId.value || !(await leaveEditor())) return
   const id = startRun()
   preparing.value = true
   try {
@@ -583,7 +595,7 @@ async function exportNow() {
             {{ p.projectKey }} — {{ p.name }}
           </option>
         </select></label>
-      <button :disabled="locked || !selectedProjectId" @click="sync">
+      <button :disabled="apiLocked || !selectedProjectId" @click="sync">
         {{ t('wiki.sync') }}
       </button>
       <span>{{
@@ -604,16 +616,16 @@ async function exportNow() {
       {{ t('wiki.cancel') }}
     </button>
     <div class="toolbar">
-      <button :disabled="locked || disabled || !selectedProjectId" @click="openEditor(true)">
+      <button :disabled="apiLocked || disabled || !selectedProjectId" @click="openEditor(true)">
         {{ t('wiki.newPage') }}
       </button>
-      <label><input v-model="syncFirst" type="checkbox" :disabled="locked" />{{
+      <label><input v-model="syncFirst" type="checkbox" :disabled="apiLocked" />{{
         t('wiki.syncFirst')
       }}</label>
-      <button :disabled="locked || disabled || !selectedProjectId" @click="prepare('')">
+      <button :disabled="apiLocked || disabled || !selectedProjectId" @click="prepare('')">
         {{ t('wiki.exportProject') }}
       </button>
-      <button :disabled="locked || disabled || !selectedPath" @click="prepare(selectedPath)">
+      <button :disabled="apiLocked || disabled || !selectedPath" @click="prepare(selectedPath)">
         {{ t('wiki.exportSubtree') }}
       </button>
     </div>
@@ -649,10 +661,10 @@ async function exportNow() {
           <article v-else-if="selected" class="wiki-detail">
             <h2 ref="pageHeading" tabindex="-1">{{ selected.name }}</h2>
             <div class="toolbar">
-              <button :disabled="locked || disabled" @click="openEditor(false)">
+              <button :disabled="apiLocked || disabled" @click="openEditor(false)">
                 {{ t('wiki.edit') }}
               </button>
-              <button :disabled="locked" @click="refresh">
+              <button :disabled="apiLocked" @click="refresh">
                 {{ t('wiki.refresh') }}
               </button><button :disabled="!spaceURL" @click="copy">
                 {{ t('wiki.copy') }}
@@ -698,12 +710,7 @@ async function exportNow() {
               @navigate="navigateWiki"
             />
             <pre v-else class="wiki-preview">{{ selected.content }}</pre>
-            <h3>{{ t('wiki.attachments') }}</h3>
-            <ul>
-              <li v-for="a in selected.attachments" :key="a.id">
-                {{ a.name }} ({{ a.size }} {{ t('wiki.bytes') }})
-              </li>
-            </ul>
+            <WikiAttachments :key="`${profile}:${selectedProjectId}:${selected.id}`" ref="attachments" :project-id="selectedProjectId" :wiki-id="selected.id" :attachments="selected.attachments" :disabled="locked || disabled" @busy="attachmentBusy=$event" />
           </article>
           <p v-else-if="initializing" role="status">{{ t('wiki.working') }}</p>
           <p v-else>{{ t('wiki.choosePage') }}</p>
