@@ -9,6 +9,28 @@ import (
 	syncpkg "backlog-assistant/internal/sync"
 )
 
+// OS のウィンドウを開かず、終了とダイアログの結線を検証するための差し替え口。
+type wikiWindowHooks struct {
+	messageDialog     func(context.Context, wailsruntime.MessageDialogOptions) (string, error)
+	saveDialog        func(context.Context, wailsruntime.SaveDialogOptions) (string, error)
+	quit              func(context.Context)
+	attachmentActive  func() bool
+	cancelAttachments func()
+}
+
+func (a *App) wikiHooks() wikiWindowHooks {
+	if a.wikiWindowHooks != nil {
+		return *a.wikiWindowHooks
+	}
+	return wikiWindowHooks{
+		messageDialog:     wailsruntime.MessageDialog,
+		saveDialog:        wailsruntime.SaveFileDialog,
+		quit:              wailsruntime.Quit,
+		attachmentActive:  func() bool { return a.profiles != nil && a.profiles.AttachmentDownloadActive() },
+		cancelAttachments: func() { a.profiles.CancelAllWikiAttachmentDownloads() },
+	}
+}
+
 func (a *App) BeginWikiEdit(profile string, projectID, id int64) (*service.WikiEdit, error) {
 	s, err := a.svc()
 	if err != nil {
@@ -53,7 +75,7 @@ func (a *App) beforeClose(ctx context.Context) bool {
 	if language == "en" {
 		title, message, discard, cancel = "Unsaved Wiki changes", "Discard unsaved Wiki changes and quit?", "Discard and quit", "Cancel"
 	}
-	answer, err := wailsruntime.MessageDialog(ctx, wailsruntime.MessageDialogOptions{Type: wailsruntime.WarningDialog, Title: title, Message: message, Buttons: []string{discard, cancel}, DefaultButton: cancel, CancelButton: cancel})
+	answer, err := a.wikiHooks().messageDialog(ctx, wailsruntime.MessageDialogOptions{Type: wailsruntime.WarningDialog, Title: title, Message: message, Buttons: []string{discard, cancel}, DefaultButton: cancel, CancelButton: cancel})
 	if err != nil || answer != discard {
 		return true
 	}
@@ -66,16 +88,16 @@ func (a *App) closeAfterAttachmentCleanup() bool {
 	if a.wikiClosing {
 		return !a.wikiCloseReady
 	}
-	if a.profiles == nil || !a.profiles.AttachmentDownloadActive() {
+	if !a.wikiHooks().attachmentActive() {
 		return false
 	}
 	a.wikiClosing = true
 	go func() {
-		a.profiles.CancelAllWikiAttachmentDownloads()
+		a.wikiHooks().cancelAttachments()
 		a.wikiWindowMu.Lock()
 		a.wikiCloseReady = true
 		a.wikiWindowMu.Unlock()
-		wailsruntime.Quit(a.ctx)
+		a.wikiHooks().quit(a.ctx)
 	}()
 	return true
 }
@@ -93,18 +115,22 @@ func (a *App) DownloadWikiAttachment(projectID, wikiID, attachmentID int64) (*se
 		return &service.WikiAttachmentDownloadResult{State: "failed", Code: "local_data"}, nil
 	}
 	result := s.DownloadWikiAttachment(a.ctx, projectID, wikiID, attachmentID, func(name string) (string, error) {
-		a.wikiWindowMu.Lock()
-		language := a.wikiLanguage
-		a.wikiWindowMu.Unlock()
-		title := "添付ファイルを保存"
-		if language == "en" {
-			title = "Save attachment"
-		}
-		return wailsruntime.SaveFileDialog(a.ctx, wailsruntime.SaveDialogOptions{Title: title, DefaultFilename: name, Filters: []wailsruntime.FileFilter{{DisplayName: "*", Pattern: "*"}}})
+		return a.saveWikiAttachment(name)
 	}, func(progress service.WikiAttachmentDownloadProgress) {
 		wailsruntime.EventsEmit(a.ctx, "wiki:attachment-download-progress", progress)
 	})
 	return result, nil
+}
+
+func (a *App) saveWikiAttachment(name string) (string, error) {
+	a.wikiWindowMu.Lock()
+	language := a.wikiLanguage
+	a.wikiWindowMu.Unlock()
+	title := "添付ファイルを保存"
+	if language == "en" {
+		title = "Save attachment"
+	}
+	return a.wikiHooks().saveDialog(a.ctx, wailsruntime.SaveDialogOptions{Title: title, DefaultFilename: name, Filters: []wailsruntime.FileFilter{{DisplayName: "*", Pattern: "*"}}})
 }
 func (a *App) CancelWikiAttachmentDownload(projectID, wikiID, attachmentID int64) error {
 	s, err := a.svc()

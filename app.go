@@ -37,6 +37,7 @@ type App struct {
 	wikiLanguage        string
 	wikiClosing         bool
 	wikiCloseReady      bool
+	wikiWindowHooks     *wikiWindowHooks
 	// log は動作ログ。初期化に失敗した場合は nil のまま(全メソッドが nil セーフ)。
 	log *applog.Logger
 }
