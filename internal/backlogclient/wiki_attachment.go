@@ -20,6 +20,9 @@ type AttachmentError struct{ Code string }
 func (e *AttachmentError) Error() string { return e.Code }
 
 func (c *Client) DownloadWikiAttachmentWithProgress(ctx context.Context, wikiID, attachmentID int64, dst io.Writer, onProgress func(int64, int64)) (out AttachmentTransfer, err error) {
+	return c.downloadWikiAttachmentWithProgress(ctx, wikiID, attachmentID, dst, onProgress, 30*time.Second)
+}
+func (c *Client) downloadWikiAttachmentWithProgress(ctx context.Context, wikiID, attachmentID int64, dst io.Writer, onProgress func(int64, int64), idle time.Duration) (out AttachmentTransfer, err error) {
 	out.ContentLength = -1
 	if wikiID <= 0 || attachmentID <= 0 {
 		return out, &AttachmentError{"not_found"}
@@ -70,14 +73,14 @@ func (c *Client) DownloadWikiAttachmentWithProgress(ctx context.Context, wikiID,
 	}
 	emit()
 	timeout := &AttachmentError{"timeout"}
-	timer := time.AfterFunc(30*time.Second, func() { cancel(timeout) })
+	timer := time.AfterFunc(idle, func() { cancel(timeout) })
 	defer timer.Stop()
 	last := time.Now()
 	buffer := make([]byte, 32*1024)
 	for {
 		n, readErr := resp.Body.Read(buffer)
 		if n > 0 {
-			timer.Reset(30 * time.Second)
+			timer.Reset(idle)
 			written, writeErr := dst.Write(buffer[:n])
 			out.ReceivedBytes += int64(written)
 			if writeErr != nil || written != n {

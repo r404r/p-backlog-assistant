@@ -4,25 +4,34 @@ import (
 	"backlog-assistant/internal/backlogclient"
 	"backlog-assistant/internal/fileutil"
 	"backlog-assistant/internal/store"
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 type attachmentConnector struct {
 	*fakeConnector
 	calls   int
 	failure error
+	started chan struct{}
 }
 
 func (c *attachmentConnector) DownloadWikiAttachmentWithProgress(ctx context.Context, _, _ int64, w io.Writer, progress func(int64, int64)) (backlogclient.AttachmentTransfer, error) {
 	c.calls++
+	if c.started != nil {
+		close(c.started)
+		<-ctx.Done()
+		return backlogclient.AttachmentTransfer{}, ctx.Err()
+	}
 	if c.failure != nil {
 		return backlogclient.AttachmentTransfer{}, c.failure
 	}
@@ -54,6 +63,10 @@ func TestAttachmentFailuresNeverExposeSourceErrors(t *testing.T) {
 	for _, stage := range []string{"read", "write", "close", "rename"} {
 		t.Run(stage, func(t *testing.T) {
 			s, c, _ := attachmentService(t)
+			var logs bytes.Buffer
+			previous := slog.Default()
+			slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+			defer slog.SetDefault(previous)
 			ctx := context.Background()
 			failure := errors.New("https://example.invalid/file?apiKey=FAKE-SECRET /outside-private/sample")
 			ops := fileutil.DefaultAtomicOps()
@@ -73,7 +86,7 @@ func TestAttachmentFailuresNeverExposeSourceErrors(t *testing.T) {
 			var events []WikiAttachmentDownloadProgress
 			result := s.DownloadWikiAttachment(ctx, 1, 2, 3, func(string) (string, error) { return filepath.Join(t.TempDir(), "sample.txt"), nil }, func(p WikiAttachmentDownloadProgress) { events = append(events, p) })
 			data, _ := json.Marshal([]any{result, events})
-			text := string(data)
+			text := string(data) + logs.String()
 			if result.State != "failed" {
 				t.Fatal(result)
 			}
@@ -84,6 +97,59 @@ func TestAttachmentFailuresNeverExposeSourceErrors(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestAttachmentCancelAndProfileChangeWaitForCleanup(t *testing.T) {
+	for _, transition := range []string{"cancel", "profile", "close"} {
+		t.Run(transition, func(t *testing.T) {
+			s, c, _ := attachmentService(t)
+			c.started = make(chan struct{})
+			ctx := context.Background()
+			dir := t.TempDir()
+			target := filepath.Join(dir, "sample.txt")
+			s.BeginWikiAttachmentDownload(ctx, 1, 2, 3)
+			result := make(chan *WikiAttachmentDownloadResult, 1)
+			go func() {
+				result <- s.DownloadWikiAttachment(ctx, 1, 2, 3, func(string) (string, error) { return target, nil }, nil)
+			}()
+			<-c.started
+			if _, err := s.SyncWikis(ctx, cfgActive(t, s), 1, "run"); err == nil {
+				t.Fatal("sync accepted during download")
+			}
+			switch transition {
+			case "cancel":
+				s.CancelWikiAttachmentDownload(1, 2, 3)
+			case "profile":
+				if err := s.SetActiveProfile(""); err != nil {
+					t.Fatal(err)
+				}
+			case "close":
+				if err := s.Close(); err != nil {
+					t.Fatal(err)
+				}
+			}
+			select {
+			case out := <-result:
+				if out.State != "cancelled" {
+					t.Fatal(out)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("cleanup did not finish")
+			}
+			entries, _ := os.ReadDir(dir)
+			if len(entries) != 0 || s.AttachmentDownloadActive() {
+				t.Fatal(entries)
+			}
+		})
+	}
+}
+func cfgActive(t *testing.T, s *ProfileService) string {
+	t.Helper()
+	id, err := s.GetActiveProfile()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return id
 }
 func attachmentService(t *testing.T) (*ProfileService, *attachmentConnector, *store.Store) {
 	t.Helper()

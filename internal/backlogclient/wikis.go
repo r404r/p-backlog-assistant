@@ -6,11 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net"
-	"net/http"
 	"net/url"
 	"strconv"
-	"time"
 )
 
 // Wiki は一覧・詳細の共通メタデータ。本文は詳細応答のみが持つ。
@@ -120,48 +117,13 @@ func (c *Client) GetWiki(ctx context.Context, id int64) (*Wiki, error) {
 // 接続・ヘッダには上限を設け、本文は呼び出し側の context で中断する。
 // エラー応答本文と URL は返さない。書きかけファイルの破棄は呼び出し側が行う。
 func (c *Client) DownloadWikiAttachment(ctx context.Context, wikiID, attachmentID int64, dst io.Writer) error {
-	if wikiID <= 0 || attachmentID <= 0 {
-		return errors.New("Wiki または添付が指定されていません")
+	_, err := c.DownloadWikiAttachmentWithProgress(ctx, wikiID, attachmentID, dst, nil)
+	switch {
+	case errors.Is(err, ErrUnauthorized):
+		return fmt.Errorf("添付の取得に失敗しました(HTTP 401): %w", ErrUnauthorized)
+	case errors.Is(err, ErrPermissionDenied):
+		return fmt.Errorf("添付の取得に失敗しました(HTTP 403): %w", ErrPermissionDenied)
+	default:
+		return err
 	}
-	ic := newInterceptor(c.limiter)
-	transport := http.DefaultTransport.(*http.Transport).Clone()
-	transport.DialContext = (&net.Dialer{Timeout: 15 * time.Second, KeepAlive: 30 * time.Second}).DialContext
-	transport.TLSHandshakeTimeout = 15 * time.Second
-	transport.ResponseHeaderTimeout = 30 * time.Second
-	defer transport.CloseIdleConnections()
-	ic.base.Transport = transport
-	ic.base.Timeout = 0
-	q := url.Values{"apiKey": {c.apiKey}}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fmt.Sprintf("%s/api/v2/wikis/%d/attachments/%d?%s", c.spaceURL, wikiID, attachmentID, q.Encode()), nil)
-	if err != nil {
-		return errors.New("添付リクエストを作成できません")
-	}
-	resp, err := ic.Do(req)
-	if err != nil {
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-		// transport のエラー文には URL が含まれるため、分類だけを引き継ぐ。
-		switch {
-		case errors.Is(err, ErrUnauthorized):
-			return fmt.Errorf("添付の取得に失敗しました(HTTP 401): %w", ErrUnauthorized)
-		case errors.Is(err, ErrPermissionDenied):
-			return fmt.Errorf("添付の取得に失敗しました(HTTP 403): %w", ErrPermissionDenied)
-		}
-		return errors.New("添付の通信に失敗しました")
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode == http.StatusNotFound {
-		return ErrNotFound
-	}
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("添付の取得に失敗しました(HTTP %d)", resp.StatusCode)
-	}
-	if _, err := io.Copy(dst, resp.Body); err != nil {
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-		return errors.New("添付の読み書きが中断されました")
-	}
-	return ctx.Err()
 }

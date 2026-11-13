@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestAttachmentTransferLengthAndIdentity(t *testing.T) {
@@ -32,5 +33,43 @@ func TestAttachmentTransferLengthAndIdentity(t *testing.T) {
 		} else if err != nil || transfer.ReceivedBytes != 4 || dst.String() != "data" {
 			t.Fatal(transfer, err)
 		}
+	}
+}
+
+func TestAttachmentUnknownLengthEmptyAndIdle(t *testing.T) {
+	for _, scenario := range []string{"chunked", "empty", "idle"} {
+		t.Run(scenario, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if scenario == "empty" {
+					w.Header().Set("Content-Length", "0")
+					return
+				}
+				w.(http.Flusher).Flush()
+				if scenario == "idle" {
+					<-r.Context().Done()
+					return
+				}
+				_, _ = io.WriteString(w, "data")
+			}))
+			defer srv.Close()
+			var dst strings.Builder
+			out, err := newFakeClient(srv.URL).downloadWikiAttachmentWithProgress(context.Background(), 1, 2, &dst, nil, 20*time.Millisecond)
+			if scenario == "idle" {
+				var failure *AttachmentError
+				if !errors.As(err, &failure) || failure.Code != "timeout" {
+					t.Fatal(err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if scenario == "empty" && (out.ReceivedBytes != 0 || out.ContentLength != 0) {
+				t.Fatal(out)
+			}
+			if scenario == "chunked" && (out.ContentLength != -1 || dst.String() != "data") {
+				t.Fatal(out, dst.String())
+			}
+		})
 	}
 }

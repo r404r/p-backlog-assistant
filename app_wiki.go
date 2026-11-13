@@ -63,11 +63,20 @@ func (a *App) beforeClose(ctx context.Context) bool {
 func (a *App) closeAfterAttachmentCleanup() bool {
 	a.wikiWindowMu.Lock()
 	defer a.wikiWindowMu.Unlock()
-	if a.wikiClosing || a.profiles == nil || !a.profiles.AttachmentDownloadActive() {
+	if a.wikiClosing {
+		return !a.wikiCloseReady
+	}
+	if a.profiles == nil || !a.profiles.AttachmentDownloadActive() {
 		return false
 	}
 	a.wikiClosing = true
-	go func() { a.profiles.CancelAllWikiAttachmentDownloads(); wailsruntime.Quit(a.ctx) }()
+	go func() {
+		a.profiles.CancelAllWikiAttachmentDownloads()
+		a.wikiWindowMu.Lock()
+		a.wikiCloseReady = true
+		a.wikiWindowMu.Unlock()
+		wailsruntime.Quit(a.ctx)
+	}()
 	return true
 }
 
