@@ -47,14 +47,62 @@ func (a *App) beforeClose(ctx context.Context) bool {
 		return true
 	}
 	if !dirty {
-		return false
+		return a.closeAfterAttachmentCleanup()
 	}
 	title, message, discard, cancel := "Wiki の未保存の変更", "Wiki の未保存の変更を破棄して終了しますか？", "破棄して終了", "キャンセル"
 	if language == "en" {
 		title, message, discard, cancel = "Unsaved Wiki changes", "Discard unsaved Wiki changes and quit?", "Discard and quit", "Cancel"
 	}
 	answer, err := wailsruntime.MessageDialog(ctx, wailsruntime.MessageDialogOptions{Type: wailsruntime.WarningDialog, Title: title, Message: message, Buttons: []string{discard, cancel}, DefaultButton: cancel, CancelButton: cancel})
-	return err != nil || answer != discard
+	if err != nil || answer != discard {
+		return true
+	}
+	return a.closeAfterAttachmentCleanup()
+}
+
+func (a *App) closeAfterAttachmentCleanup() bool {
+	a.wikiWindowMu.Lock()
+	defer a.wikiWindowMu.Unlock()
+	if a.wikiClosing || a.profiles == nil || !a.profiles.AttachmentDownloadActive() {
+		return false
+	}
+	a.wikiClosing = true
+	go func() { a.profiles.CancelAllWikiAttachmentDownloads(); wailsruntime.Quit(a.ctx) }()
+	return true
+}
+
+func (a *App) BeginWikiAttachmentDownload(projectID, wikiID, attachmentID int64) (*service.WikiAttachmentDownloadTicket, error) {
+	s, err := a.svc()
+	if err != nil {
+		return &service.WikiAttachmentDownloadTicket{Code: "local_data"}, nil
+	}
+	return s.BeginWikiAttachmentDownload(a.ctx, projectID, wikiID, attachmentID), nil
+}
+func (a *App) DownloadWikiAttachment(projectID, wikiID, attachmentID int64) (*service.WikiAttachmentDownloadResult, error) {
+	s, err := a.svc()
+	if err != nil {
+		return &service.WikiAttachmentDownloadResult{State: "failed", Code: "local_data"}, nil
+	}
+	result := s.DownloadWikiAttachment(a.ctx, projectID, wikiID, attachmentID, func(name string) (string, error) {
+		a.wikiWindowMu.Lock()
+		language := a.wikiLanguage
+		a.wikiWindowMu.Unlock()
+		title := "添付ファイルを保存"
+		if language == "en" {
+			title = "Save attachment"
+		}
+		return wailsruntime.SaveFileDialog(a.ctx, wailsruntime.SaveDialogOptions{Title: title, DefaultFilename: name, Filters: []wailsruntime.FileFilter{{DisplayName: "*", Pattern: "*"}}})
+	}, func(progress service.WikiAttachmentDownloadProgress) {
+		wailsruntime.EventsEmit(a.ctx, "wiki:attachment-download-progress", progress)
+	})
+	return result, nil
+}
+func (a *App) CancelWikiAttachmentDownload(projectID, wikiID, attachmentID int64) error {
+	s, err := a.svc()
+	if err == nil {
+		s.CancelWikiAttachmentDownload(projectID, wikiID, attachmentID)
+	}
+	return nil
 }
 
 // Wiki バインディングはページ名・本文・出力先を動作ログに渡さない。

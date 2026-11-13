@@ -99,6 +99,8 @@ func (s *ProfileService) closeStore(profileID string) {
 
 // Close は開いているすべてのローカル DB 接続を閉じる(アプリ終了時)。
 func (s *ProfileService) Close() error {
+	releaseAttachment := s.transitionAttachment(true)
+	defer releaseAttachment()
 	s.wikiMu.Lock()
 	for key, run := range s.wikiExports {
 		run.cancel()
