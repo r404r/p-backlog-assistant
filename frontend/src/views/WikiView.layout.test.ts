@@ -50,3 +50,41 @@ it.each([759, 760])('uses actual layout width %i and separates drawer state from
  expect(panel().getAttribute('role')).toBe(value < 760 ? 'dialog' : null)
  expect(localStorage.getItem('ba.wikiPanelCollapsed')).toBe(value < 760 ? '0' : '1')
 })
+it('traps focus without inert support, ignores IME Escape, restores focus and cleans up', async () => {
+ width = 759
+ const inert = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'inert')
+ delete (HTMLElement.prototype as { inert?: boolean }).inert
+ try {
+  await open(); toggle().focus(); toggle().click(); await flush()
+  const drawer = panel(), close = drawer.querySelector<HTMLButtonElement>('.wiki-drawer-close')!
+  expect(close).not.toBeNull(); expect(document.activeElement).toBe(close)
+  expect(mounted!.host.getAttribute('aria-hidden')).toBe('true')
+  toggle().focus(); expect(document.activeElement).toBe(close)
+  const last = [...drawer.querySelectorAll<HTMLElement>('button, [tabindex="0"]')].filter(el => !el.hasAttribute('disabled')).at(-1)!
+  last.focus(); last.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true }))
+  expect(document.activeElement).toBe(close)
+  close.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', isComposing: true, bubbles: true }))
+  expect(drawer.hidden).toBe(false)
+  close.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); await flush()
+  expect(drawer.hidden).toBe(true); expect(document.activeElement).toBe(toggle())
+  expect(mounted!.host.hasAttribute('aria-hidden')).toBe(false)
+  expect(localStorage.getItem('ba.wikiPanelCollapsed')).toBeNull()
+  toggle().click(); await flush(); mounted!.unmount(); mounted = undefined
+  expect(document.querySelector('.wiki-drawer-host')).toBeNull()
+ } finally { if (inert) Object.defineProperty(HTMLElement.prototype, 'inert', inert) }
+})
+it('keeps the drawer for folder and fold actions, closes only after page selection', async () => {
+ width = 759; await open(); toggle().click(); await flush()
+ panel().querySelector<HTMLElement>('.folder .wiki-node-name')!.click(); await flush()
+ expect(panel().hidden).toBe(false)
+ panel().querySelector<HTMLElement>('.folder .wiki-node-name')!.click(); await flush()
+ panel().querySelector<HTMLElement>('[data-row-key="p:1"] .wiki-node-name')!.click(); await flush()
+ expect(panel().hidden).toBe(true)
+ expect(document.activeElement).toBe(mounted!.host.querySelector('.wiki-detail h2'))
+})
+it('closes through the mask and restores the opener without writing preference', async () => {
+ width = 759; await open(); toggle().click(); await flush()
+ document.querySelector<HTMLElement>('.wiki-drawer-mask')!.click(); await flush()
+ expect(panel().hidden).toBe(true); expect(document.activeElement).toBe(toggle())
+ expect(localStorage.getItem('ba.wikiPanelCollapsed')).toBeNull()
+})
