@@ -166,17 +166,26 @@ it('Wiki の外での余白変数の参照を拒否する', () => {
   expect(() => validateWikiPadding(wikiFilename, wikiSource.replace('<section', '<section :style="{ padding: \'var(--wiki-frame-padding)\' }"'))).toThrow()
 })
 
+function assertDefinedTokens(name: string, source: string): void {
+  const localPadding = validateWikiPadding(name, source)
+  const referenced = new Set<string>()
+  for (const m of stripCssComments(source).matchAll(/var\(\s*(--[\w-]+)/g)) {
+    referenced.add(m[1])
+  }
+  const undefinedTokens = [...referenced].filter((t) => !lightTokens.has(t) && !(localPadding && t === wikiPadding)).sort()
+  expect(undefinedTokens, `${name} が未定義のトークンを参照しています`).toEqual([])
+}
+
 describe('トークンの参照', () => {
   it('未定義の var(--…) を参照していない', () => {
-    for (const { name, source } of STYLE_SOURCES) {
-      const localPadding = validateWikiPadding(name, source)
-      const referenced = new Set<string>()
-      for (const m of stripCssComments(source).matchAll(/var\(\s*(--[\w-]+)/g)) {
-        referenced.add(m[1])
-      }
-      const undefinedTokens = [...referenced].filter((t) => !lightTokens.has(t) && !(localPadding && t === wikiPadding)).sort()
-      expect(undefinedTokens, `${name} が未定義のトークンを参照しています`).toEqual([])
-    }
+    for (const { name, source } of STYLE_SOURCES) assertDefinedTokens(name, source)
+  })
+
+  it('Wiki の余白変数の参照だけを誤記すると未定義トークン検査で拒否する', () => {
+    const source = wikiSource.replace('var(--wiki-frame-padding)', 'var(--wiki-frame-paddding)')
+    expect(() => assertDefinedTokens(wikiFilename, wikiSource)).not.toThrow()
+    expect(validateWikiPadding(wikiFilename, source)).toBe(true)
+    expect(() => assertDefinedTokens(wikiFilename, source)).toThrow('--wiki-frame-paddding')
   })
 })
 
@@ -364,11 +373,14 @@ describe('共通フォームと画面固有スタイルのカスケード', () =
           if (!element.matches(selector.toString())) continue
           const score = specificity(selector.toString())
           rule.walkDecls((decl) => {
-            if (decl.prop !== property && !(property === 'background' && decl.prop === 'background-color')) return
+            const overflowAxis = decl.prop === 'overflow' && ['overflow-x', 'overflow-y'].includes(property)
+            if (decl.prop !== property && !(property === 'background' && decl.prop === 'background-color') && !overflowAxis) return
+            const overflowValues = decl.value.split(/\s+/)
+            const value = overflowAxis ? overflowValues[property === 'overflow-y' && overflowValues.length > 1 ? 1 : 0] : decl.value
             const important = Boolean(decl.important)
             if (!winner || (important && !winner.important)
               || (important === winner.important && compareSpecificity(score, winner.specificity) >= 0)) {
-              winner = { value: decl.value, specificity: score, important }
+              winner = { value, specificity: score, important }
             }
           })
         }
@@ -384,6 +396,32 @@ describe('共通フォームと画面固有スタイルのカスケード', () =
     host.querySelectorAll('*').forEach((element) => element.setAttribute(scopeId, ''))
     return host.querySelector(selector)!
   }
+
+  it('Wiki の外枠は非スクロールで本文だけがスクロールを担う', () => {
+    const styles = formStyles('views/WikiView.vue')
+    const frame = fixture('<section class="wiki-view"><div class="wiki-content-frame"><div class="wiki-content"></div></div></section>', '.wiki-content-frame')
+    const body = frame.querySelector('.wiki-content')!
+    for (const property of ['overflow-x', 'overflow-y']) {
+      expect(winningValue(styles, frame, property), `外枠の ${property}`).toBe('hidden')
+      expect(winningValue(styles, body, property), `本文の ${property}`).toBe('auto')
+    }
+  })
+
+  it('Wiki の角丸は実際のルート文字サイズで換算した枠の内余白を超えない', () => {
+    const styles = formStyles('views/WikiView.vue')
+    const section = fixture('<section class="wiki-view"></section>', '.wiki-view')
+    const padding = winningValue(styles, section, wikiPadding)
+    const fontSize = winningValue(styles, document.documentElement, 'font-size')
+    expect(padding).toMatch(/^\d+(?:\.\d+)?rem$/)
+    expect(fontSize).toMatch(/^\d+(?:\.\d+)?px$/)
+    const paddingPx = parseFloat(padding!) * parseFloat(fontSize!)
+    expect(paddingPx).toBeGreaterThan(0)
+    for (const tokens of [lightTokens, darkTokens]) {
+      const radius = tokens.get('--radius-ui')
+      expect(radius).toMatch(/^\d+(?:\.\d+)?px$/)
+      expect(parseFloat(radius!)).toBeLessThanOrEqual(paddingPx)
+    }
+  })
 
   it('Wiki の枠は本番カスケードでも既存の面・文字・輪郭を使う', () => {
     const styles = formStyles('views/WikiView.vue')

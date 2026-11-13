@@ -919,6 +919,7 @@ async function exportNow() {
 .wiki-view .wiki-content {
   flex: 1;
   box-sizing: border-box;
+  /* --radius-ui が --wiki-frame-padding 以下であることを前提とする。 */
   padding: calc(var(--wiki-frame-padding) - var(--radius-ui));
   min-height: 0;
   overflow-y: auto;

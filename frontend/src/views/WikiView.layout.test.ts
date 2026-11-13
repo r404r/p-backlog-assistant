@@ -40,6 +40,22 @@ beforeEach(() => {
  vi.spyOn(HTMLElement.prototype, 'getClientRects').mockImplementation(function(this: HTMLElement) { return [this.getBoundingClientRect()] as unknown as DOMRectList })
 })
 afterEach(() => { mounted?.unmount(); mounted = undefined; vi.restoreAllMocks(); localStorage.clear() })
+it('Wiki の外枠を ResizeObserver の監視対象に含める', async () => {
+ const observe = vi.fn(), disconnect = vi.fn()
+ vi.stubGlobal('ResizeObserver', class {
+  observe = observe
+  disconnect = disconnect
+ })
+ try {
+  await open()
+  const frame = mounted!.host.querySelector('.wiki-content-frame')!
+  expect(frame).not.toBeNull()
+  expect(observe).toHaveBeenCalledWith(frame)
+ } finally {
+  mounted?.unmount(); mounted = undefined
+  vi.unstubAllGlobals()
+ }
+})
 it('keeps the right panel and the same body root at height 600 before any frame', async () => {
  vi.spyOn(window, 'requestAnimationFrame').mockImplementation(() => 1)
  await open()
