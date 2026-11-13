@@ -88,3 +88,14 @@ it('closes through the mask and restores the opener without writing preference',
  expect(panel().hidden).toBe(true); expect(document.activeElement).toBe(toggle())
  expect(localStorage.getItem('ba.wikiPanelCollapsed')).toBeNull()
 })
+
+it('keeps both text actions together on a dedicated row after the tree title', async () => {
+ await open()
+ const heading = panel().querySelector('.wiki-tree-heading')!
+ const actions = heading.querySelector('.wiki-tree-actions')!
+ expect(actions).not.toBeNull()
+ expect(actions.querySelectorAll('button')).toHaveLength(2)
+ expect(actions.previousElementSibling?.tagName).toBe('H3')
+ expect(actions.textContent).toContain('Expand all')
+ expect(actions.textContent).toContain('Collapse all')
+})

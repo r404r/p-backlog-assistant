@@ -726,8 +726,10 @@ async function exportNow() {
         <p v-if="!formatted || editing" role="status">{{ t('wiki.render.tocUnavailable') }}</p>
         <div class="wiki-tree-heading">
           <h3 class="wiki-tree-title">{{ t('wiki.tree') }}</h3>
+          <div class="wiki-tree-actions">
           <button type="button" :disabled="locked || !hasCollapsed" :title="t('wiki.allTreeScope')" @click="expandAll">{{ t('wiki.expandAll') }}</button>
           <button type="button" :disabled="locked || allCollapsed" :title="t('wiki.allTreeScope')" @click="collapseAll">{{ t('wiki.collapseAll') }}</button>
+          </div>
         </div>
         <WikiTree ref="treeComponent" :nodes="tree" :selected-id="selectedId" :selected-row-key="selectedRowKey" :focused-row-key="focusedRowKey" :collapsed="collapsedNodeKeys" :outside-id="outsideId" :filtered="appliedFilter" :disabled="locked" :scroll-port="treeScrollPort" @select="select" @toggle="toggleNode" @focus-row="focusedRowKey = $event" />
         <p v-if="!pages.length && !initializing">{{ t('wiki.empty') }}</p>
@@ -944,7 +946,8 @@ async function exportNow() {
 
 .wiki-panel[hidden] { display: none; }
 .wiki-panel > :not(.wiki-tree) { flex: none; }
-.wiki-tree-heading { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; }
+.wiki-tree-heading { display: flex; flex-direction: column; align-items: stretch; gap: .5rem; }
+.wiki-tree-actions { display: flex; flex-wrap: wrap; gap: .5rem; }
 .wiki-selected-path { overflow-wrap: anywhere; }
 .wiki-panel-scroll { overflow-y: auto; overscroll-behavior: contain; overflow-anchor: none; }
 .wiki-panel-scroll :deep(.wiki-tree) { overflow-y: visible; flex: none; }
