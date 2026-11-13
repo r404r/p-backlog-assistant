@@ -11,14 +11,14 @@ const props = withDefaults(defineProps<{
   outsideId?: number
   filtered?: boolean
   disabled: boolean
-  flow?: boolean
-}>(), { selectedRowKey: '', focusedRowKey: '', collapsed: () => new Set<string>(), outsideId: 0 })
+  scrollPort?: HTMLElement | null
+}>(), { selectedRowKey: '', focusedRowKey: '', collapsed: () => new Set<string>(), outsideId: 0, scrollPort: null })
 const emit = defineEmits<{
   select: [path: string, id: number, rowKey: string]
   toggle: [nodeKey: string]
   focusRow: [rowKey: string]
 }>()
-const { t } = useI18n()
+const { t, locale } = useI18n()
 const port = ref<HTMLElement | null>(null), focusKey = ref('')
 const rows = computed(() => flattenWikiTree(props.nodes, props.collapsed))
 const rowElements = new Map<string, HTMLElement>()
@@ -37,7 +37,8 @@ watch(rows, (current, old) => {
 }, { immediate: true })
 function reveal(key: string) {
   const el = rowElements.get(key)
-  if (port.value && el && !props.flow) revealWikiRow(port.value, el)
+  const owner = props.scrollPort ?? port.value
+  if (owner && el) revealWikiRow(owner, el)
 }
 async function focus(row: WikiTreeRow) {
   focusKey.value = row.rowKey
@@ -96,6 +97,7 @@ defineExpose({ reveal, port })
     <div
       v-for="row in rows" :key="row.rowKey"
       :ref="el => { if (el) rowElements.set(row.rowKey, el as HTMLElement); else rowElements.delete(row.rowKey) }"
+      v-memo="[row, focusKey === row.rowKey, selectedId === row.pageId, selectedRowKey === row.rowKey, collapsed.has(row.node.key), disabled, outsideId === row.pageId, filtered, locale]"
       class="wiki-tree-row" :class="{ current: selectedId === row.pageId && row.pageId !== 0, selected: selectedRowKey === row.rowKey, folder: !row.pageId }"
       role="treeitem" :data-row-key="row.rowKey" :tabindex="focusKey === row.rowKey ? 0 : -1"
       :aria-level="row.level" :aria-posinset="row.posinset" :aria-setsize="row.setsize"

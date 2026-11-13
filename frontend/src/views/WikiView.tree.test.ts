@@ -13,6 +13,8 @@ function row(key: string) { return Array.from(mounted!.host.querySelectorAll<HTM
 function name(text: string) { return Array.from(mounted!.host.querySelectorAll<HTMLElement>('.wiki-node-name')).find(r => r.textContent === text)! }
 function button(text: string) { return Array.from(mounted!.host.querySelectorAll<HTMLButtonElement>('button')).find(r => r.textContent?.trim() === text)! }
 beforeEach(async () => {
+ // この既存回帰群は横並び条件で実行する。狭幅はlayout試験で扱う。
+ vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockImplementation(function(this: HTMLElement) { return this.classList.contains('wiki-layout') ? 1000 : 0 })
  localStorage.clear()
  backend = createMockBackend()
  backend.getActiveProfile = async () => 'p'; backend.listProfiles = async () => []; backend.syncProjects = async () => {}
@@ -119,6 +121,8 @@ it('measures the initial layout before the first animation frame', async () => {
  const width = vi.spyOn(window, 'innerWidth', 'get').mockReturnValue(1280)
  const height = vi.spyOn(window, 'innerHeight', 'get').mockReturnValue(800)
  mounted = mountWithI18n(WikiView, { locale: 'en' }); await flush()
- expect(mounted.host.querySelector('.wiki-layout')!.classList.contains('wiki-flow')).toBe(false)
+ expect(mounted.host.querySelector<HTMLElement>('.wiki-layout')!.style.height).toBe('784px')
+ expect(mounted.host.querySelector<HTMLElement>('.wiki-content')).not.toBeNull()
+ expect(mounted.host.querySelector<HTMLElement>('.wiki-panel')!.hidden).toBe(false)
  frame.mockRestore(); width.mockRestore(); height.mockRestore()
 })

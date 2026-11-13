@@ -127,5 +127,6 @@
   "outsideSearch": "検索対象外の現在ページ",
   "allTreeScope": "検索で非表示の階層にも適用",
   "duplicatePage": "同名ページ ID: {id}",
-  "treeKeyboardHelp": "上下で移動、左右で開閉、Enter または Space で選択"
+  "treeKeyboardHelp": "上下で移動、左右で開閉、Enter または Space で選択",
+  "closePanel": "閉じる"
 }
