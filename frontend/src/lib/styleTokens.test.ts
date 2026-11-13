@@ -588,6 +588,8 @@ const SHAPE_TOKENS: Record<string, string> = {
   '--border-width': '1px', '--divider-width': '2px', '--quote-border-width': '4px',
   '--focus-width': '3px', '--focus-offset': '3px', '--button-lift': '-2px',
   '--motion-duration': '120ms',
+  '--control-height':'2.25rem', '--control-font-size':'.9rem', '--control-line-height':'1.4',
+  '--control-padding-block':'.4rem','--control-padding-inline':'.5rem','--control-button-padding-inline':'.9rem',
 }
 
 describe('Pop の形状と配色', () => {

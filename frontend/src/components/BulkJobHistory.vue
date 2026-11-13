@@ -189,8 +189,6 @@ function jobRowIssueLabel(row: BulkJobRowDetail): string {
 }
 
 button.inline {
-  padding: 0.2rem 0.6rem;
-  font-size: 0.8rem;
   margin-left: 0.4rem;
 }
 
@@ -284,10 +282,7 @@ td.actions {
   gap: 0.3rem;
 }
 
-td.actions button {
-  padding: 0.2rem 0.5rem;
-  font-size: 0.78rem;
-}
+
 
 .detail-cell {
   background: var(--bg-muted);

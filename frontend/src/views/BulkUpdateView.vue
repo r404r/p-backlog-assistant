@@ -1174,9 +1174,7 @@ h3 {
   min-width: auto;
 }
 
-input[type='text'],
-input[type='date'],
-select {
+input[type='date'] {
   padding: 0.4rem 0.5rem;
   border: var(--border-width) solid var(--border);
   border-radius: var(--radius-ui);
@@ -1212,8 +1210,6 @@ select:disabled {
 }
 
 button.inline {
-  padding: 0.2rem 0.6rem;
-  font-size: 0.8rem;
   margin-left: 0.4rem;
 }
 

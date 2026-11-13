@@ -165,7 +165,6 @@ function toggleItem(definitionId: number, itemId: number, event: Event) {
   font-size: 0.85rem;
 }
 
-input[type='text'],
 input[type='date'] {
   padding: 0.4rem 0.5rem;
   border: var(--border-width) solid var(--border);
