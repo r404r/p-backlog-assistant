@@ -54,6 +54,8 @@ it('traps focus without inert support, ignores IME Escape, restores focus and cl
  width = 759
  const inert = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'inert')
  delete (HTMLElement.prototype as { inert?: boolean }).inert
+ const setAttribute = Element.prototype.setAttribute
+ vi.spyOn(Element.prototype, 'setAttribute').mockImplementation(function(this: Element, name, value) { if (name !== 'inert') setAttribute.call(this, name, value) })
  try {
   await open(); toggle().focus(); toggle().click(); await flush()
   const drawer = panel(), close = drawer.querySelector<HTMLButtonElement>('.wiki-drawer-close')!

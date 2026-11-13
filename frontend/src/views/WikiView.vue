@@ -575,8 +575,8 @@ async function exportNow() {
     </div>
     <div class="wiki-panel-toolbar">
       <button
-        type="button"
         ref="panelToggle"
+        type="button"
         :aria-expanded="!panelHidden"
         aria-controls="wiki-search-panel"
         @click="togglePanel"
@@ -664,77 +664,77 @@ async function exportNow() {
       </div>
       <Teleport to="body"><div ref="drawerHost" class="wiki-drawer-host"><div v-if="narrow && drawerOpen" class="wiki-drawer-mask" aria-hidden="true" @click.self="closeDrawer()" /></div></Teleport>
       <Teleport :to="drawerHost ?? 'body'" :disabled="!narrow">
-      <aside id="wiki-search-panel" ref="panelPort" class="wiki-panel" :class="{ 'wiki-panel-scroll': wholePanel, 'wiki-drawer': narrow }" :hidden="panelHidden" :role="narrow ? 'dialog' : undefined" :aria-modal="narrow && drawerOpen ? true : undefined" :tabindex="narrow ? -1 : undefined" :aria-label="t('wiki.panel')">
-        <button v-if="narrow" type="button" class="wiki-drawer-close" :title="t('wiki.closePanel')" :aria-label="t('wiki.closePanel')" @click="closeDrawer()">{{ t('wiki.closePanel') }}</button>
-        <details
-          :open="searchOpen"
-          @toggle="searchOpen = ($event.target as HTMLDetailsElement).open"
-        >
-          <summary>{{ t('wiki.panel') }}</summary>
-          <form class="wiki-search" @submit.prevent="search">
-            <label class="wiki-keyword">{{ t('wiki.keyword')
-            }}<input
-              v-model="keyword"
-              data-testid="wiki-keyword"
-              :disabled="locked"
-              @keydown.enter="keywordEnter"
-            /></label>
-            <fieldset class="wiki-search-modes">
-              <legend>{{ t('wiki.searchMode') }}</legend>
-              <label><input
-                v-model="keywordMode"
-                type="radio"
-                name="wiki-keyword-mode"
-                value="and"
+        <aside id="wiki-search-panel" ref="panelPort" class="wiki-panel" :class="{ 'wiki-panel-scroll': wholePanel, 'wiki-drawer': narrow }" :hidden="panelHidden" :role="narrow ? 'dialog' : undefined" :aria-modal="narrow && drawerOpen ? true : undefined" :tabindex="narrow ? -1 : undefined" :aria-label="t('wiki.panel')">
+          <button v-if="narrow" type="button" class="wiki-drawer-close" :title="t('wiki.closePanel')" :aria-label="t('wiki.closePanel')" @click="closeDrawer()">{{ t('wiki.closePanel') }}</button>
+          <details
+            :open="searchOpen"
+            @toggle="searchOpen = ($event.target as HTMLDetailsElement).open"
+          >
+            <summary>{{ t('wiki.panel') }}</summary>
+            <form class="wiki-search" @submit.prevent="search">
+              <label class="wiki-keyword">{{ t('wiki.keyword')
+              }}<input
+                v-model="keyword"
+                data-testid="wiki-keyword"
                 :disabled="locked"
-              />{{ t('wiki.and') }}</label>
-              <label><input
-                v-model="keywordMode"
-                type="radio"
-                name="wiki-keyword-mode"
-                value="or"
-                :disabled="locked"
-              />{{ t('wiki.or') }}</label>
-            </fieldset>
-            <button type="submit" :disabled="locked">{{ t('wiki.search') }}</button>
-          </form>
-        </details>
-        <details
-          v-if="selected && formatted && !editing && isMarkdownRule(selected.textFormattingRule)"
-          class="wiki-toc-section"
-          :open="tocOpen"
-          @toggle="tocOpen = ($event.target as HTMLDetailsElement).open"
-        >
-          <summary>{{ t('wiki.render.toc') }}</summary>
-          <nav :style="{ maxHeight: wholePanel ? 'none' : `${tocHeight}px` }" class="wiki-toc" :aria-label="t('wiki.render.toc')">
-            <button
-              v-for="h in headings.slice(0, tocLimit)"
-              :key="h.id"
-              type="button"
-              :class="[`toc-level-${h.level}`, { current: activeHeading === h.id }]"
-              :aria-current="activeHeading === h.id ? 'location' : undefined"
-              @click="goToHeading(h.id)"
-            >
-              {{ h.text }}
-            </button>
-            <p v-if="!headings.length">{{ t('wiki.render.noHeadings') }}</p>
-            <button v-if="headings.length > tocLimit" type="button" @click="tocLimit += 500">
-              {{ t('wiki.render.more') }}
-            </button>
-          </nav>
-        </details>
-        <p v-if="!formatted || editing" role="status">{{ t('wiki.render.tocUnavailable') }}</p>
-        <div class="wiki-tree-heading">
-          <h3 class="wiki-tree-title">{{ t('wiki.tree') }}</h3>
-          <div class="wiki-tree-actions">
-          <button type="button" :disabled="locked || !hasCollapsed" :title="t('wiki.allTreeScope')" @click="expandAll">{{ t('wiki.expandAll') }}</button>
-          <button type="button" :disabled="locked || allCollapsed" :title="t('wiki.allTreeScope')" @click="collapseAll">{{ t('wiki.collapseAll') }}</button>
+                @keydown.enter="keywordEnter"
+              /></label>
+              <fieldset class="wiki-search-modes">
+                <legend>{{ t('wiki.searchMode') }}</legend>
+                <label><input
+                  v-model="keywordMode"
+                  type="radio"
+                  name="wiki-keyword-mode"
+                  value="and"
+                  :disabled="locked"
+                />{{ t('wiki.and') }}</label>
+                <label><input
+                  v-model="keywordMode"
+                  type="radio"
+                  name="wiki-keyword-mode"
+                  value="or"
+                  :disabled="locked"
+                />{{ t('wiki.or') }}</label>
+              </fieldset>
+              <button type="submit" :disabled="locked">{{ t('wiki.search') }}</button>
+            </form>
+          </details>
+          <details
+            v-if="selected && formatted && !editing && isMarkdownRule(selected.textFormattingRule)"
+            class="wiki-toc-section"
+            :open="tocOpen"
+            @toggle="tocOpen = ($event.target as HTMLDetailsElement).open"
+          >
+            <summary>{{ t('wiki.render.toc') }}</summary>
+            <nav :style="{ maxHeight: wholePanel ? 'none' : `${tocHeight}px` }" class="wiki-toc" :aria-label="t('wiki.render.toc')">
+              <button
+                v-for="h in headings.slice(0, tocLimit)"
+                :key="h.id"
+                type="button"
+                :class="[`toc-level-${h.level}`, { current: activeHeading === h.id }]"
+                :aria-current="activeHeading === h.id ? 'location' : undefined"
+                @click="goToHeading(h.id)"
+              >
+                {{ h.text }}
+              </button>
+              <p v-if="!headings.length">{{ t('wiki.render.noHeadings') }}</p>
+              <button v-if="headings.length > tocLimit" type="button" @click="tocLimit += 500">
+                {{ t('wiki.render.more') }}
+              </button>
+            </nav>
+          </details>
+          <p v-if="!formatted || editing" role="status">{{ t('wiki.render.tocUnavailable') }}</p>
+          <div class="wiki-tree-heading">
+            <h3 class="wiki-tree-title">{{ t('wiki.tree') }}</h3>
+            <div class="wiki-tree-actions">
+              <button type="button" :disabled="locked || !hasCollapsed" :title="t('wiki.allTreeScope')" @click="expandAll">{{ t('wiki.expandAll') }}</button>
+              <button type="button" :disabled="locked || allCollapsed" :title="t('wiki.allTreeScope')" @click="collapseAll">{{ t('wiki.collapseAll') }}</button>
+            </div>
           </div>
-        </div>
-        <WikiTree ref="treeComponent" :nodes="tree" :selected-id="selectedId" :selected-row-key="selectedRowKey" :focused-row-key="focusedRowKey" :collapsed="collapsedNodeKeys" :outside-id="outsideId" :filtered="appliedFilter" :disabled="locked" :scroll-port="treeScrollPort" @select="select" @toggle="toggleNode" @focus-row="focusedRowKey = $event" />
-        <p v-if="!pages.length && !initializing">{{ t('wiki.empty') }}</p>
-        <p v-if="selectedPath" class="wiki-selected-path">{{ t('wiki.subtree', { path: selectedPath }) }}</p>
-      </aside>
+          <WikiTree ref="treeComponent" :nodes="tree" :selected-id="selectedId" :selected-row-key="selectedRowKey" :focused-row-key="focusedRowKey" :collapsed="collapsedNodeKeys" :outside-id="outsideId" :filtered="appliedFilter" :disabled="locked" :scroll-port="treeScrollPort" @select="select" @toggle="toggleNode" @focus-row="focusedRowKey = $event" />
+          <p v-if="!pages.length && !initializing">{{ t('wiki.empty') }}</p>
+          <p v-if="selectedPath" class="wiki-selected-path">{{ t('wiki.subtree', { path: selectedPath }) }}</p>
+        </aside>
       </Teleport>
     </div>
     <div v-if="estimate" class="wiki-modal-backdrop">
@@ -955,7 +955,7 @@ async function exportNow() {
 .wiki-panel-scroll :deep(.wiki-focus-path) { position: static; }
 .wiki-drawer-host { position: fixed; inset: 0; z-index: 90; pointer-events: none; }
 .wiki-drawer-mask { position: absolute; inset: 0; background: var(--overlay); pointer-events: auto; touch-action: none; }
-.wiki-panel.wiki-drawer { position: fixed; top: 0; right: 0; width: min(20rem, 100vw); height: 100vh; height: 100dvh; padding: 1rem; background: var(--surface); box-shadow: var(--shadow-dialog); pointer-events: auto; animation: wiki-drawer-enter .15s ease-out; }
+.wiki-panel.wiki-drawer { z-index: 1; position: fixed; top: 0; right: 0; width: min(20rem, 100vw); height: 100vh; height: 100dvh; padding: 1rem; background: var(--surface); box-shadow: var(--shadow-dialog); pointer-events: auto; animation: wiki-drawer-enter .15s ease-out; }
 .wiki-drawer-close { align-self: flex-end; margin-bottom: .75rem; }
 @keyframes wiki-drawer-enter { from { transform: translateX(100%); } to { transform: translateX(0); } }
 @media (prefers-reduced-motion: reduce) { .wiki-panel.wiki-drawer { animation: none; } }

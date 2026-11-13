@@ -12,7 +12,7 @@ const props = withDefaults(defineProps<{
   filtered?: boolean
   disabled: boolean
   scrollPort?: HTMLElement | null
-}>(), { selectedRowKey: '', focusedRowKey: '', collapsed: () => new Set<string>(), outsideId: 0 })
+}>(), { selectedRowKey: '', focusedRowKey: '', collapsed: () => new Set<string>(), outsideId: 0, scrollPort: null })
 const emit = defineEmits<{
   select: [path: string, id: number, rowKey: string]
   toggle: [nodeKey: string]
