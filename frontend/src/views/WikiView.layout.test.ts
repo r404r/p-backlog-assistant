@@ -30,8 +30,6 @@ it('keeps the right panel and the same body root at height 600 before any frame'
  vi.spyOn(window, 'requestAnimationFrame').mockImplementation(() => 1)
  await open()
  const layout = mounted!.host.querySelector<HTMLElement>('.wiki-layout')!
- expect(layout.classList.contains('panel-scroll')).toBe(true)
- expect(layout.style.height).toBe('584px')
  mounted!.host.querySelectorAll<HTMLElement>('.wiki-node-name')[1]!.click(); await flush()
  expect(panel().previousElementSibling?.classList.contains('wiki-content')).toBe(true)
  // 共通MarkdownBodyのroot参照を検査し、低高時の外側rootへの退避を検知する。
@@ -41,6 +39,8 @@ it('keeps the right panel and the same body root at height 600 before any frame'
   if (Array.isArray(node?.children)) for (const child of node.children) if (typeof child === 'object' && child && 'type' in child) { const result = find(child as VNode); if (result) return result }
  }
  expect(find(mounted!.app._instance?.subTree)).toBe(mounted!.host.querySelector('.wiki-content'))
+ expect(layout.classList.contains('panel-scroll')).toBe(true)
+ expect(layout.style.height).toBe('584px')
 })
 it.each([759, 760])('uses actual layout width %i and separates drawer state from saved preference', async value => {
  width = value; localStorage.setItem('ba.wikiPanelCollapsed', '0'); await open()
