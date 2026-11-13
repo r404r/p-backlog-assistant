@@ -36,7 +36,7 @@ See the [User Guide](docs/USER_GUIDE.en.md) for installation steps, how to use e
 - **Excel export** (selectable columns, up to 1,000,000 matching rows; above that the export fails with an error instead of producing a file). Custom field columns and the parent issue key column can also be selected
 
 ### Wiki
-- Wiki tree expansion/collapse, distinct folders and pages, Unicode code point ordering, keyboard navigation, and separate body/tree scrolling with a stacked layout for small windows
+- Wiki tree expansion/collapse, distinct folders and pages, Unicode code point ordering, keyboard navigation, and separate body/tree scrolling with whole-panel scrolling in short windows and a drawer in narrow windows
 - Sync each project with a dedicated Sync Wiki button, separately from issues. Only new or changed page content is fetched; projects without Wiki show Wiki disabled
 - Browse a hierarchy based on `/`, search page names and content locally (Japanese and multiple words with AND/OR), and view tags, authors, attachments, and the last Wiki sync time
 - Search and the tree appear in a collapsible panel on the far right; collapse it to give the page content the full width
