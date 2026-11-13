@@ -59,7 +59,7 @@ it('places the search panel after the content with an accessible native toggle',
   const host = await open()
   const panel = host.querySelector<HTMLElement>('#wiki-search-panel')
   expect(panel).not.toBeNull()
-  expect(panel?.previousElementSibling?.classList.contains('wiki-content')).toBe(true)
+  expect(panel?.previousElementSibling?.querySelector('.wiki-content')).toBe(host.querySelector('.wiki-content'))
   expect(toggle().type).toBe('button')
   expect(toggle().getAttribute('aria-expanded')).toBe('true')
   expect(toggle().textContent).toContain('Hide search and tree')

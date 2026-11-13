@@ -42,7 +42,8 @@ const collapsedNodeKeys = shallowRef(new Set<string>())
 const selectedRowKey = ref(''), focusedRowKey = ref('')
 const treeComponent = ref<InstanceType<typeof WikiTree> | null>(null)
 const layout = ref<HTMLElement | null>(null), bodyPort = ref<HTMLElement | null>(null)
-const outerPort = ref<HTMLElement | null>(null)
+const outerPort = ref<HTMLElement | null>(null), contentFrame = ref<HTMLElement | null>(null)
+const atMinimum = ref(true)
 const panelPort = ref<HTMLElement | null>(null), tocPort = ref<HTMLElement | null>(null)
 const panelScroll = ref(false), layoutHeight = ref(160), tocHeight = ref(0)
 const markdownScrollRoot = computed(() => bodyPort.value)
@@ -82,9 +83,19 @@ function measureLayout() {
   const el = layout.value
   if (!el) return
   const outer = outerPort.value
-  const bottom = Math.min(window.innerHeight, outer?.getBoundingClientRect().bottom ?? window.innerHeight)
+  const clientBottom = outer ? outer.getBoundingClientRect().top + outer.clientTop + outer.clientHeight : window.innerHeight
+  const bottom = Math.min(window.innerHeight, clientBottom)
   const top = el.getBoundingClientRect().top + (outer?.scrollTop ?? 0)
-  const available = Math.max(160, bottom - top - 16)
+  const section = el.closest('.wiki-view')
+  const tail = (outer ? parseFloat(getComputedStyle(outer).paddingBottom) || 0 : 0)
+    + (section ? parseFloat(getComputedStyle(section).paddingBottom) || 0 : 0)
+  const frameStyle = contentFrame.value ? getComputedStyle(contentFrame.value) : undefined
+  const chrome = frameStyle ? ['borderTopWidth', 'borderBottomWidth', 'paddingTop', 'paddingBottom']
+    .reduce((sum, key) => sum + (parseFloat(frameStyle[key as keyof CSSStyleDeclaration] as string) || 0), 0) : 0
+  const minimum = 160 + chrome
+  const rawHeight = bottom - top - tail
+  const available = Math.max(minimum, rawHeight)
+  atMinimum.value = rawHeight <= minimum
   layoutHeight.value = available
   // clientWidthが未計算の初回だけviewportを仮値にし、実寸確定後observerで再測定する。
   const nextNarrow = (el.clientWidth || window.innerWidth) < 760
@@ -383,7 +394,7 @@ async function select(path: string, id: number, rowKey = '') {
   await nextTick()
   if (!alive || pid !== selectedProjectId.value || id !== selectedId.value) return
   if (bodyPort.value) { bodyPort.value.scrollTop = 0; bodyPort.value.scrollLeft = 0 }
-  if (outerPort.value && bodyPort.value && layoutHeight.value === 160) {
+  if (outerPort.value && bodyPort.value && atMinimum.value) {
     const delta = bodyPort.value.getBoundingClientRect().top - outerPort.value.getBoundingClientRect().top
     if (delta > 0) outerPort.value.scrollTop += delta
   }
@@ -418,6 +429,7 @@ onMounted(async () => {
     layoutObserver = new ResizeObserver(scheduleLayout)
     if (outerPort.value) layoutObserver.observe(outerPort.value)
     if (layout.value) layoutObserver.observe(layout.value)
+    if (contentFrame.value) layoutObserver.observe(contentFrame.value)
     const section = layout.value?.closest('.wiki-view')
     if (section) for (const child of section.children) if (child !== layout.value) layoutObserver.observe(child)
     const panel = layout.value?.querySelector('aside')
@@ -617,82 +629,85 @@ async function exportNow() {
       </button>
     </div>
     <div ref="layout" class="wiki-layout" :class="{ 'panel-collapsed': panelCollapsed || narrow, 'panel-scroll': panelScroll }" :style="{ height: `${layoutHeight}px` }">
-      <div ref="bodyPort" class="wiki-content">
-        <WikiEditor
-          v-if="editing"
-          :key="editorGeneration"
-          ref="editor"
-          :profile="profile"
-          :project-id="selectedProjectId"
-          :page-id="editingId"
-          :parent-path="selectedPath"
-          :parents="editorParents"
-          :text-formatting-rule="projectFormatting"
-          @saved="wikiSaved"
-          @cancel="cancelEditor"
-          @error="error = $event"
-          @busy="writingBusy = $event"
-        />
-        <article v-else-if="selected" class="wiki-detail">
-          <h2 ref="pageHeading" tabindex="-1">{{ selected.name }}</h2>
-          <div class="toolbar">
-            <button :disabled="locked || disabled" @click="openEditor(false)">
-              {{ t('wiki.edit') }}
-            </button>
-            <button :disabled="locked" @click="refresh">
-              {{ t('wiki.refresh') }}
-            </button><button :disabled="!spaceURL" @click="copy">
-              {{ t('wiki.copy') }}
-            </button>
-            <label v-if="isMarkdownRule(selected.textFormattingRule)"><input v-model="formatted" type="checkbox" />{{ t('wiki.formatted') }}</label>
-          </div>
-          <dl>
-            <dt>{{ t('wiki.tags') }}</dt>
-            <dd>{{ selected.tags.join(', ') }}</dd>
-            <dt>{{ t('wiki.created') }}</dt>
-            <dd>{{ selected.createdUser }} {{ formatDateTime(selected.created) }}</dd>
-            <dt>{{ t('wiki.updated') }}</dt>
-            <dd>{{ selected.updatedUser }} {{ formatDateTime(selected.updated) }}</dd>
-          </dl>
-          <p v-if="!selected.contentFetchedAt">{{ t('wiki.missingBody') }}</p>
-          <p v-else-if="selected.contentUpdated !== selected.updated">
-            {{ t('wiki.staleBody') }}
-          </p>
-          <button
-            v-if="formatted && isMarkdownRule(selected.textFormattingRule)"
-            type="button"
-            @click="openToc"
-          >
-            {{ t('wiki.render.toc') }}
-          </button>
-          <button v-if="wikiLarge && !allowLarge" type="button" @click="allowLarge = true">
-            {{ t('wiki.render.renderLarge') }}
-          </button>
-          <MarkdownBody
-            v-if="formatted && isMarkdownRule(selected.textFormattingRule)"
-            :key="`${profile}:${selectedProjectId}:${selected.id}:${selected.contentUpdated}`"
-            ref="markdown"
-            class="wiki-preview markdown-body"
-            variant="wiki"
-            :source="selected.content"
-            :wiki="wikiContext"
+      <div ref="contentFrame" class="wiki-content-frame">
+        <div ref="bodyPort" class="wiki-content" :aria-busy="initializing">
+          <WikiEditor
+            v-if="editing"
+            :key="editorGeneration"
+            ref="editor"
             :profile="profile"
-            :disabled="locked"
-            :allow-large="allowLarge"
-            :scroll-container="markdownScrollRoot"
-            @headings="headings = $event"
-            @active="activeHeading = $event"
-            @navigate="navigateWiki"
+            :project-id="selectedProjectId"
+            :page-id="editingId"
+            :parent-path="selectedPath"
+            :parents="editorParents"
+            :text-formatting-rule="projectFormatting"
+            @saved="wikiSaved"
+            @cancel="cancelEditor"
+            @error="error = $event"
+            @busy="writingBusy = $event"
           />
-          <pre v-else class="wiki-preview">{{ selected.content }}</pre>
-          <h3>{{ t('wiki.attachments') }}</h3>
-          <ul>
-            <li v-for="a in selected.attachments" :key="a.id">
-              {{ a.name }} ({{ a.size }} {{ t('wiki.bytes') }})
-            </li>
-          </ul>
-        </article>
-        <p v-else>{{ t('wiki.choosePage') }}</p>
+          <article v-else-if="selected" class="wiki-detail">
+            <h2 ref="pageHeading" tabindex="-1">{{ selected.name }}</h2>
+            <div class="toolbar">
+              <button :disabled="locked || disabled" @click="openEditor(false)">
+                {{ t('wiki.edit') }}
+              </button>
+              <button :disabled="locked" @click="refresh">
+                {{ t('wiki.refresh') }}
+              </button><button :disabled="!spaceURL" @click="copy">
+                {{ t('wiki.copy') }}
+              </button>
+              <label v-if="isMarkdownRule(selected.textFormattingRule)"><input v-model="formatted" type="checkbox" />{{ t('wiki.formatted') }}</label>
+            </div>
+            <dl>
+              <dt>{{ t('wiki.tags') }}</dt>
+              <dd>{{ selected.tags.join(', ') }}</dd>
+              <dt>{{ t('wiki.created') }}</dt>
+              <dd>{{ selected.createdUser }} {{ formatDateTime(selected.created) }}</dd>
+              <dt>{{ t('wiki.updated') }}</dt>
+              <dd>{{ selected.updatedUser }} {{ formatDateTime(selected.updated) }}</dd>
+            </dl>
+            <p v-if="!selected.contentFetchedAt">{{ t('wiki.missingBody') }}</p>
+            <p v-else-if="selected.contentUpdated !== selected.updated">
+              {{ t('wiki.staleBody') }}
+            </p>
+            <button
+              v-if="formatted && isMarkdownRule(selected.textFormattingRule)"
+              type="button"
+              @click="openToc"
+            >
+              {{ t('wiki.render.toc') }}
+            </button>
+            <button v-if="wikiLarge && !allowLarge" type="button" @click="allowLarge = true">
+              {{ t('wiki.render.renderLarge') }}
+            </button>
+            <MarkdownBody
+              v-if="formatted && isMarkdownRule(selected.textFormattingRule)"
+              :key="`${profile}:${selectedProjectId}:${selected.id}:${selected.contentUpdated}`"
+              ref="markdown"
+              class="wiki-preview markdown-body"
+              variant="wiki"
+              :source="selected.content"
+              :wiki="wikiContext"
+              :profile="profile"
+              :disabled="locked"
+              :allow-large="allowLarge"
+              :scroll-container="markdownScrollRoot"
+              @headings="headings = $event"
+              @active="activeHeading = $event"
+              @navigate="navigateWiki"
+            />
+            <pre v-else class="wiki-preview">{{ selected.content }}</pre>
+            <h3>{{ t('wiki.attachments') }}</h3>
+            <ul>
+              <li v-for="a in selected.attachments" :key="a.id">
+                {{ a.name }} ({{ a.size }} {{ t('wiki.bytes') }})
+              </li>
+            </ul>
+          </article>
+          <p v-else-if="initializing" role="status">{{ t('wiki.working') }}</p>
+          <p v-else>{{ t('wiki.choosePage') }}</p>
+        </div>
       </div>
       <Teleport to="body"><div ref="drawerHost" class="wiki-drawer-host content"><div v-if="narrow && drawerOpen" class="wiki-drawer-mask" aria-hidden="true" @click.self="closeDrawer()" /></div></Teleport>
       <Teleport :to="drawerHost ?? 'body'" :disabled="!narrow">
@@ -807,6 +822,7 @@ async function exportNow() {
 </template>
 <style scoped>
 .wiki-view {
+  --wiki-frame-padding: 1rem;
   padding: 1.25rem;
 }
 .toolbar {
@@ -886,7 +902,24 @@ async function exportNow() {
   flex: 0 0 auto;
   margin: 0;
 }
-.wiki-content {
+.wiki-view .wiki-content-frame {
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  border: var(--border-width) solid var(--border);
+  border-radius: var(--radius-ui);
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: var(--shadow-none);
+  padding: var(--radius-ui);
+}
+.wiki-view .wiki-content {
+  flex: 1;
+  box-sizing: border-box;
+  padding: calc(var(--wiki-frame-padding) - var(--radius-ui));
   min-height: 0;
   overflow-y: auto;
   overflow-anchor: none;

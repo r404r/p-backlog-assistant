@@ -45,7 +45,7 @@ it('keeps the right panel and the same body root at height 600 before any frame'
  await open()
  const layout = mounted!.host.querySelector<HTMLElement>('.wiki-layout')!
  mounted!.host.querySelectorAll<HTMLElement>('.wiki-node-name')[1]!.click(); await flush()
- expect(panel().previousElementSibling?.classList.contains('wiki-content')).toBe(true)
+ expect(panel().previousElementSibling?.querySelector('.wiki-content')).toBe(mounted!.host.querySelector('.wiki-content'))
  // 共通MarkdownBodyのroot参照を検査し、低高時の外側rootへの退避を検知する。
  function find(node: VNode | undefined): unknown {
   if (node?.component?.type === MarkdownBody) return node.component.props.scrollContainer
@@ -54,7 +54,7 @@ it('keeps the right panel and the same body root at height 600 before any frame'
  }
  expect(find(mounted!.app._instance?.subTree)).toBe(mounted!.host.querySelector('.wiki-content'))
  expect(layout.classList.contains('panel-scroll')).toBe(true)
- expect(layout.style.height).toBe('584px')
+ expect(layout.style.height).toBe('600px')
 })
 it.each([759, 760])('uses actual layout width %i and separates drawer state from saved preference', async value => {
  width = value; localStorage.setItem('ba.wikiPanelCollapsed', '0'); await open()
@@ -123,7 +123,7 @@ it.each([1000, 759])('caps contents in a scrolling panel at layout width %i', as
  await selectPage()
  const nav = panel().querySelector<HTMLElement>('.wiki-toc')!
  expect(panel().classList.contains('wiki-panel-scroll')).toBe(true)
- expect(nav.style.maxHeight).toBe(value < 760 ? '120px' : '146px')
+ expect(nav.style.maxHeight).toBe(value < 760 ? '120px' : '150px')
  expect(nav.parentElement!.nextElementSibling?.classList.contains('wiki-tree-heading')).toBe(true)
 })
 
