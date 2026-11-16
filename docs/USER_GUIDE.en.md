@@ -360,7 +360,7 @@ The Wiki header has two logical rows: project, sync, timestamp and panel toggle;
 - Attachments cancelled by navigation show “Cancelled” when you return to their page until the app exits. Retrying clears the message.
 - On POSIX systems such as macOS, saved files have mode 0600 (read and write for the owner only). Overwriting an existing 0644 file also changes its mode to 0600.
 
-On older WKWebView versions equivalent to Safari before 14, which do not support `:where()`, controls retain their previous heights.
+On older WKWebView versions without `:where()` support, some inputs and buttons may fall back to default dimensions and colors. Display on these older versions has not been verified on actual devices.
 
 #### Export with attachments
 

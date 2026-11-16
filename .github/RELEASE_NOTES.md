@@ -1,22 +1,28 @@
-# backlog-assistant v1.8.0
+# backlog-assistant v1.9.0
 
-Wiki ページツリーの操作性と、小さいウィンドウでの使いやすさを改善するリリースです。v1.7.0 以降の変更を含みます。ページツリーの表示順は、従来のページ ID 順から名前の Unicode コードポイント順に変わります。
+Wiki 添付ファイルの個別ダウンロードを追加し、本文の枠と画面上部の配置、アプリ全体のボタンや入力欄を改善するリリースです。v1.8.0 以降の変更を含みます。
 
-**English summary**: This release includes all changes since v1.7.0. The Wiki tree gains folding, Expand all / Collapse all, distinct directory and page icons, and descendant page counts. The current page and the hierarchy selected for export or new pages have separate indicators; selecting a pure directory keeps the body unchanged. Keyboard support includes Up/Down, Left/Right, Home/End, Enter/Space, and typing a name prefix. Tree display changes from page ID order to unnormalized Unicode code point order: `10` precedes `2`, and uppercase precedes lowercase. The body, contents, and tree scroll separately when space permits. At low heights, the panel stays on the right and scrolls as a whole; below 760 CSS px of actual Wiki layout width, it becomes an initially closed drawer opening from the right. Close it with Close, Escape (except during IME composition), or the backdrop; successfully opening a page or choosing a contents entry also closes it. In both compact modes, contents remain independently scrollable, capped at 25% of visible panel height (up to 192px). Data, synchronization, export content and order, and Wiki write behavior remain unchanged.
+**English summary**: This release includes all changes since v1.8.0. Wiki attachments can be downloaded individually from a counted list after the body, hidden when empty. Each download opens a system save dialog with a sanitized filename, shows progress, and supports cancellation. Original files, including animated GIFs, are saved without opening automatically. Only one download runs across the app, blocking new sync, export or editing operations. Navigation cancels it without extra confirmation and waits for cleanup; normal quit also cancels and waits. Cancellation, interruption or size mismatch preserves existing files without saving incomplete ones. Size mismatches ask you to refresh the page; failures have distinct guidance. Force quit may leave temporary files without automatic recovery. POSIX files have owner-only permissions (0600), including replacements.
+
+Ordinary buttons, single-select dropdowns and single-line inputs share a height across screens. Bulk job history rows are taller, with horizontal table scrolling for actions. The Wiki header changes from three rows to two, with progress and cancellation below while processing, a fixed-width project selector with ellipsis and hover text, and grouped wrapping in narrow windows. Wiki content has a bordered frame; excess whole-screen scrolling after the body end is fixed at normal text sizes. Wiki export appends `_` before the extension of reserved names containing superscript digits, such as `COM¹.pdf` → `COM¹_.pdf`. Database schema, synchronization data and Wiki write payloads are unchanged.
+
+Known limitations: at 200% zoom with the navigation sidebar expanded, extra vertical scrolling may occur; at 320px window width and 200% zoom, the Wiki header may overflow horizontally.
 
 ## 新機能
 
-- **ページツリーの折りたたみ**: 下位のある行の矢印で展開・折りたたみができます。既定はすべて展開で、「すべて展開」「すべて折りたたむ」は検索で非表示の枝にも適用します。ページ切替・検索・一覧更新・パネルの開閉では状態を維持し、プロジェクト切替・画面への再入場では全展開に戻ります。
-- **ディレクトリとページの区別**: ページを持たないディレクトリはフォルダアイコンと太字、ページは文書アイコン、下位を持つページは文書アイコンと矢印で表示します。ディレクトリと下位を持つページには下位の全ページ数を表示します。検索中の数は表示範囲内のページ数で、出力件数ではありません。
-- **現在ページと選択階層の表示**: 表示中のページは背景色と左線、出力・新規作成の対象階層は破線とチェックで区別します。ディレクトリを選んでも本文は変わらず、矢印は枝の開閉だけを行います。
-- **キーボード操作**: 上下で行移動、右で展開・最初の子へ移動、左で折りたたみ・親へ移動、Home / End で先頭・末尾へ移動、Enter / Space でページや階層を選択できます。文字入力で名前の先頭が一致する行へ移動します。焦点を動かすだけでは本文や出力対象は変わりません。
+- **添付ファイルの個別ダウンロード**: 添付があるページでは本文末尾に件数付きの一覧を表示し、各行の「ダウンロード」から保存できます。添付がなければ一覧全体を表示しません。毎回システムの保存ダイアログを開き、取得済みの添付名を安全なファイル名に変換して既定名にします。保存先の選択を取り消すと通信を開始しません。取得中は進捗と「キャンセル」を表示します。
+- **元のファイルを保存**: 本文内に表示した画像も対象で、GIF を含め元のファイルをそのまま保存します。保存後に自動で開いたり実行したりしません。ページ全体のバックアップには従来の添付込みエクスポートを利用できます。
+- **キャンセルと失敗時の保護**: キャンセル、通信中断、一覧の記録とのサイズ不一致ではファイルを保存せず、既存の同名ファイルを変更しません。サイズが一致しない場合は「最新の状態を取得」後に再試行するよう案内します。添付の消失、認証、権限、通信、保存先の問題は原因ごとに案内し、一時ファイルの削除に失敗した場合も成功とは表示しません。
+- **同時実行と画面移動**: アプリ全体で同時にダウンロードできるのは一件です。取得中は他の添付や同期・出力・編集の開始を無効にします。別ページ、プロジェクト、画面、接続設定への移動では、追加の確認を出さずにダウンロードをキャンセルし、一時ファイルの削除を待ってから移動します。既存の未保存編集の確認は引き続き行います。通常終了時もキャンセルと後片付けを待ちます。移動によるキャンセルは元のページに戻ると「キャンセルしました」と表示します。
+- **保存時の注意**: 強制終了、クラッシュ、停電では保存先に `.wiki-attachment-*.tmp` が残ることがあり、起動時の自動回収は行いません。macOS などの POSIX 環境では保存ファイルの権限は 0600（所有者のみ読み書き可能）で、既存の 0644 ファイルを上書きした場合も 0600 になります。
 
 ## 改善・修正
 
-- **名前順への変更**: ページツリーを、v1.7.0 のページ ID 順から名前の Unicode コードポイント順へ変更しました。名前の正規化は行わず、`10` は `2` より前、英字の大文字は小文字より前に並びます。ディレクトリとページを混在して並べ、同名ページは ID 付きの別行で表示します。この変更はツリー表示だけに適用します。
-- **独立スクロール**: 高さに余裕がある時は検索を固定し、本文・目次・ページツリーをそれぞれスクロールできます。ツリーの下の方からページを開いても、本文だけが先頭に戻り、すでに見えている行の位置は維持します。検索結果や内部リンクから深いページを開くと、その祖先だけを展開して行を見える位置へ移します。
-- **小さいウィンドウの配置**: 高さが足りない時もパネルは本文の右側に残り、検索とページツリーを含むパネル全体をスクロールできます。Wiki 領域の実際の幅が 760 CSS px 未満になると、右側から開くドロワーに変わり、初めは閉じています。「検索・ツリーを表示」で開き、「閉じる」、Esc（日本語変換中を除く）、背景のオーバーレイのクリックで閉じます。ページを正常に開いた時や目次の項目を選んだ時も閉じます。どちらの状態でも目次は可視パネル高の 25% 以下（最大 192px）に収まり、超えた項目は目次内でスクロールでき、直後にページツリーが続きます。パネルが本文の下に移ることはありません。
-- **既存データと処理の維持**: データ、同期、エクスポートの内容と順序、Wiki の書き込み処理は変更していません。
+- **全画面のコントロールの高さ**: 通常のボタン、単一選択のドロップダウン、1 行の入力欄を同じ高さに統一しました。一括更新の履歴表も行が高くなり、操作列は折り返さず表の横スクロールで操作できます。アイコンボタン、日付、複数行入力などは従来の寸法を維持します。
+- **Wiki 上部の二行配置**: 従来の三行から二行へ変更し、プロジェクト・同期・最終同期時刻・検索パネルの開閉を一行目、新規ページ・エクスポート・「同期してから出力」を二行目にまとめました。出力の進捗とキャンセルは二行の下へ移し、処理中だけ表示します。プロジェクト選択は固定幅とし、長い名前は省略して、ポインターを重ねると名前全体を表示します。狭いウィンドウではグループごとに折り返します。
+- **Wiki 本文の枠とスクロール**: ライト / ダークに対応した輪郭と余白のある枠内に、ページ名・本文・添付一覧を表示します。整形表示、原文、編集でも同じ枠を使い、本文・目次・ツリーの独立スクロールを維持します。通常の文字サイズで本文末尾の後に画面全体が余分にスクロールする問題を修正しました。
+- **Wiki 出力のファイル名**: ページ名・添付名・プロジェクトキーのフォルダ名について、上付き数字を含む Windows の予約名も安全な名前に変換します。名前の後（拡張子があればその前）に `_` を付けます（例: `COM¹.pdf` → `COM¹_.pdf`）。
+- **既存データと処理の維持**: データベースの構造、同期するデータ、Wiki の書き込み内容は変更していません。
 
 ## 動作環境
 
@@ -34,6 +40,7 @@ zip を展開し、`backlog-assistant.exe`(Windows)または `Backlog Assistant.
 
 ## 既知の制限
 
+- **拡大表示時の制限**: 200% 拡大時・左ナビゲーション展開時には、Wiki 画面の外側に縦スクロールが増える場合があります。ウィンドウ幅 320px・200% 拡大時では、Wiki 上部が横にはみ出す場合があります。
 - Wiki 添付画像は PNG / JPEG / GIF のみ対応し、GIF は先頭フレームだけを表示します。入力・変換後とも 1 枚 8 MiB、1600 万画素、一辺 8192px までです。
 - 外部画像と生 HTML は描画しません。Backlog 記法（非 Markdown）のページは引き続き原文のプレーンテキストで表示し、記法変換は行いません。
 - 2 MiB を超えるページは既定で原文を表示します。Wiki では明示的に整形表示を選べますが、画像とコードの構文ハイライトは無効になります。
