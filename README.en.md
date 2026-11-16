@@ -46,7 +46,7 @@ See the [User Guide](docs/USER_GUIDE.en.md) for installation steps, how to use e
 - Display PNG / JPEG / GIF attachments belonging to the current Wiki inline (the first GIF frame only). External images are not loaded; failures keep the source and a reason
 - Export a project or selected subtree with page content, attachments, `index.xlsx`, and `manifest.json`. Review counts, size, and estimated time before starting; cancel the export or inspect individual attachment failures in the index
 - Edit a single page name and content, or create a page. Switch between text and preview; confirm before leaving unsaved changes. Conflicts offer reload, copy, or explicitly confirmed overwrite. Email notifications default to off
-- Uncertain saves are checked through reads without resending. Uncertain creation attempts remain recorded across restarts to prevent duplicates. Attachment bodies are downloaded during export and are not stored in the database
+- Uncertain saves are checked through reads without resending. Uncertain creation attempts remain recorded across restarts to prevent duplicates. Attachment bodies fetched for individual downloads or export are not stored in the database
 
 ### Bulk Update & Add
 
